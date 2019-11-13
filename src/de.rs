@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 // use crate::prelude::*;
 use std::fmt;
-use std::collections::VecDeque;
+//use std::collections::VecDeque;
 
 #[derive(Debug)]
 pub enum DeserializeError {
@@ -106,15 +106,12 @@ impl<'de> Deserializer<'de> {
     }
 
     fn peek(&self) -> Option<u8> {
-        println!("PEEK {:?}", self.input.get(0..1));
-        //self.input[..1].chars().next()
-        //self.input.get(..1)?.chars().next()
-        self.input.get(0).map(|p| *p)
+        self.input.get(0).copied()
     }
 
     fn next(&mut self) -> Result<u8> {
         if let Some(c) = self.peek() {
-            self.consume();
+            let _ = self.consume();
             return Ok(c);
         }
         Err(DeserializeError::UnexpectedEOF)
@@ -139,7 +136,7 @@ impl<'de> Deserializer<'de> {
         
         loop {
             match self.next()? {
-                c @ b'0'...b'9' => n = (n * 10) + (c as i64 - b'0' as i64),
+                c @ b'0'..=b'9' => n = (n * 10) + (c - b'0') as i64,
                 c if c == stop => break,
                 c => return Err(DeserializeError::WrongCharacter(c))
             }
@@ -182,7 +179,7 @@ impl<'de> Deserializer<'de> {
 impl<'a, 'de> serde::de::Deserializer<'de> for &'a mut Deserializer<'de> {
     type Error = DeserializeError;
 
-    fn deserialize_any<V>(mut self, visitor: V) -> Result<V::Value>
+    fn deserialize_any<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
@@ -202,8 +199,7 @@ impl<'a, 'de> serde::de::Deserializer<'de> for &'a mut Deserializer<'de> {
                 self.consume()?;
                 visitor.visit_map(BencAccess::new(self))
             },
-//            'e' => Err(DeserializeError::End),
-            n @ b'0'...b'9' => {
+            _n @ b'0'..=b'9' => {
                 println!("FOUND STRING", );                
                 visitor.visit_borrowed_bytes(self.read_string()?)
             }
@@ -215,47 +211,7 @@ impl<'a, 'de> serde::de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        println!("VISIT OPTION", );
         visitor.visit_some(self)
-            // match self.input {
-            //     JsAny::Undefined(_) | JsAny::Null(_) => visitor.visit_none(),
-            //     _ => visitor.visit_some(self)
-            // }
-    }
-
-    fn deserialize_enum<V>(
-        self,
-        _name: &'static str,
-        _variants: &'static [&'static str],
-        visitor: V,
-    ) -> Result<V::Value>
-    where
-        V: Visitor<'de>,
-    {
-        unimplemented!();
-        // match self.input {
-        //     JsAny::String(s) => {
-        //         visitor.visit_enum(JsEnumAccess::new(self.env, s.to_rust().unwrap(), None))
-        //     },
-        //     JsAny::Object(o) => {
-        //         let props = o.get_property_names()
-        //                      .map_err(|e| DeserializeError::new(format!("{:?}", e)))?;
-
-        //         if props.len() != 1 {
-        //             return Err(DeserializeError::new(
-        //                 format!("object with {} properties, expected 1", props.len())
-        //             ));
-        //         }
-        //         let key = &props[0];
-        //         let value = o.get(key.as_str())
-        //                      .map_err(|e| DeserializeError::new(format!("{:?}", e)))?;
-
-        //         visitor.visit_enum(JsEnumAccess::new(self.env, key.to_string(), Some(value)))
-        //     },
-        //     _ => {
-        //         unimplemented!()
-        //     }
-        // }
     }
 
     fn deserialize_bytes<V>(self, _visitor: V) -> Result<V::Value>
@@ -272,20 +228,10 @@ impl<'a, 'de> serde::de::Deserializer<'de> for &'a mut Deserializer<'de> {
         unimplemented!()
     }
 
-    // fn deserialize_ignored_any<V>(self, visitor: V) -> Result<V::Value>
-    // where
-    //     V: Visitor<'de>,
-    // {
-    //     //unimplemented!()
-    //     self.deserialize_any(visitor)
-    //     // println!("IGNORED {:?}", &self.input[..5]);
-    //     // visitor.visit_unit()
-    // }
-
     forward_to_deserialize_any! {
         bool i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 char str string
         unit unit_struct seq tuple tuple_struct map struct identifier
-        newtype_struct ignored_any
+        newtype_struct ignored_any enum
     }
 }
 
@@ -307,7 +253,7 @@ impl<'a, 'de> MapAccess<'de> for BencAccess<'a, 'de> {
         K: DeserializeSeed<'de>,
     {
         if self.de.peek() == Some(b'e') {
-            self.de.consume();
+            let _ = self.de.consume();
             return Ok(None)
         }
         
@@ -332,7 +278,7 @@ impl<'a, 'de> SeqAccess<'de> for BencAccess<'a, 'de> {
         // println!("LAAA {:?}", &self.de.input[..5]);
         
         if self.de.peek() == Some(b'e') {
-            self.de.consume();
+            let _ = self.de.consume();
             return Ok(None);
         }
         
