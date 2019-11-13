@@ -7,46 +7,15 @@ use serde::forward_to_deserialize_any;
 
 use serde::Deserialize;
 
-// use crate::prelude::*;
 use std::fmt;
-//use std::collections::VecDeque;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum DeserializeError {
     UnexpectedEOF,
     WrongCharacter(u8),
     End,
     Message(String)
 }
-
-// impl crate::error::JsError for DeserializeError {
-//     fn get_msg(&self) -> String {
-//         format!("DeserializeError {}", self.msg)
-//     }
-// }
-
-// impl DeserializeError {
-//     fn new() -> DeserializeError {
-//         let msg = msg.as_ref();
-//         DeserializeError { msg: msg.to_string() }
-//     }
-// }
-
-// impl From<crate::Error> for DeserializeError {
-//     fn from(o: crate::Error) -> DeserializeError {
-//         DeserializeError {
-//             msg: format!("{:?}", o)
-//         }
-//     }
-// }
-
-// impl From<Status> for DeserializeError {
-//     fn from(o: Status) -> DeserializeError {
-//         DeserializeError {
-//             msg: format!("{:?}", o)
-//         }
-//     }
-// }
 
 type Result<T> = std::result::Result<T, DeserializeError>;
 
@@ -77,22 +46,6 @@ where
     let mut de: Deserializer = Deserializer::new(s);
     T::deserialize(&mut de)
 }
-
-// pub fn from_any<T>(env: Env, any: JsAny) -> Result<T>
-// where
-//     T: DeserializeOwned + ?Sized,
-// {
-//     let de: Deserializer = Deserializer::new(env, any);
-//     T::deserialize(de)
-// }
-
-// pub fn from_value<T>(env: Env, value: Value) -> Result<T>
-// where
-//     T: DeserializeOwned + ?Sized,
-// {
-//     let de: Deserializer = Deserializer::new(env, JsAny::from(value)?);
-//     T::deserialize(de)
-// }
 
 #[doc(hidden)]
 pub struct Deserializer<'de> {
@@ -287,232 +240,59 @@ impl<'a, 'de> SeqAccess<'de> for BencAccess<'a, 'de> {
 }
 
 
-// #[doc(hidden)]
-// struct JsArrayAccess<'de> {
-//     // env: Env,
-//     // array: JsArray<'de>,
-//     index: u32,
-//     length: u32,
-// }
+#[allow(non_snake_case)]
+#[cfg(test)]
+mod tests {
 
-// #[doc(hidden)]
-// impl<'de> JsArrayAccess<'de> {
-//     fn new(env: Env, array: JsArray<'de>) -> Self {
-//         let length = array.len().unwrap() as u32;
-//         JsArrayAccess {
-//             // env,
-//             // array,
-//             index: 0,
-//             length
-//         }
-//     }
-// }
+    use super::{Deserializer, DeserializeError, from_bytes, Result};
+    use serde::Deserialize;
 
-// #[doc(hidden)]
-// impl<'de, 'de> SeqAccess<'de> for JsArrayAccess<'de> {
-//     type Error = DeserializeError;
+    #[test]
+    fn test_dict() {
+        #[derive(Deserialize, PartialEq, Debug)]
+        struct Dict<'b> {
+            a: i64,
+            b: &'b str,
+            c: &'b str,
+            X: &'b str,
+        }
+        
+        let bc: Dict = from_bytes(b"d1:ai12453e1:b3:aaa1:c3:bbb1:X10:0123456789e").unwrap();
+        
+        assert_eq!(bc, Dict {
+            a: 12453,
+            b: "aaa",
+            c: "bbb",
+            X: "0123456789",
+        });
+    }
 
-//     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>>
-//     where
-//         T: DeserializeSeed<'de>,
-//     {
-//         if self.index >= self.length {
-//             return Ok(None);
-//         }
-//         let value = self.array.get(self.index)?;
-//         self.index += 1;
+    #[test]
+    fn test_key_no_value() {
+        #[derive(Deserialize, PartialEq, Debug)]
+        struct Dict<'b> {
+            a: i64,
+            b: &'b str,
+        }
+        
+        let res: Result<Dict> = from_bytes(b"d1:ai1e1:be");
+        
+        assert_eq!(res, Err(DeserializeError::WrongCharacter(101)));
+    }
 
-//         let de = Deserializer::new(self.env, value);
-//         seed.deserialize(de).map(Some)
-//     }
+    #[test]
+    fn test_key_not_string() {
+        #[derive(Deserialize, PartialEq, Debug)]
+        struct Dict<'b> {
+            a: i64,
+            b: &'b str,
+        }
+        
+        let res: Result<Dict> = from_bytes(b"di5e1:ae");
 
-//     fn size_hint(&self) -> Option<usize> {
-//         Some((self.length - self.index) as usize)
-//     }
-// }
+        assert!(res.is_err());
+    }
 
-// #[doc(hidden)]
-// struct JsObjectAccess<'de> {
-//     env: Env,
-//     object: JsObject<'de>,
-//     props: VecDeque<JsAny<'de>>,
-// }
-
-// #[doc(hidden)]
-// impl<'de> JsObjectAccess<'de> {
-//     fn new(env: Env, object: JsObject<'de>) -> Result<Self> {
-//         let props = VecDeque::from(object.get_property_names_any().unwrap());
-
-//         Ok(JsObjectAccess {
-//             env,
-//             object,
-//             props,
-//         })
-//     }
-// }
-
-// #[doc(hidden)]
-// impl<'de, 'de> MapAccess<'de> for JsObjectAccess<'de> {
-//     type Error = DeserializeError;
-
-//     fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>>
-//     where
-//         K: DeserializeSeed<'de>,
-//     {
-//         if self.props.is_empty() {
-//             return Ok(None)
-//         }
-
-//         let prop = self.props.front().map(|v| v.clone()).unwrap();
-//         let de = Deserializer::new(self.env, prop);
-//         seed.deserialize(de).map(Some)
-//     }
-
-//     fn next_value_seed<V>(&mut self, seed: V) -> Result<V::Value>
-//     where
-//         V: DeserializeSeed<'de>,
-//     {
-//         if self.props.is_empty() {
-//             panic!("Fetching value with empty props");
-//         }
-//         let key = self.props.pop_front().unwrap();
-//         let value = self.object.get(key.get_value()).unwrap();
-
-//         let de = Deserializer::new(self.env, value);
-//         seed.deserialize(de)
-//     }
-
-//     fn next_entry_seed<K, V>(&mut self, kseed: K, vseed: V) -> Result<Option<(K::Value, V::Value)>>
-//     where
-//         K: DeserializeSeed<'de>,
-//         V: DeserializeSeed<'de>,
-//     {
-//         if self.props.is_empty() {
-//             return Ok(None);
-//         }
-//         let key = self.props.pop_front().unwrap();
-//         let value = self.object.get(key.get_value()).unwrap();
-
-//         let de = Deserializer::new(self.env, key);
-//         let key = kseed.deserialize(de)?;
-
-//         let de = Deserializer::new(self.env, value);
-//         let value = vseed.deserialize(de)?;
-
-//         Ok(Some((key, value)))
-//     }
-
-//     fn size_hint(&self) -> Option<usize> {
-//         Some(self.props.len())
-//     }
-// }
-
-// #[doc(hidden)]
-// struct JsEnumAccess<'de> {
-//     env: Env,
-//     variant: String,
-//     value: Option<JsAny<'de>>,
-// }
-
-// #[doc(hidden)]
-// impl<'de> JsEnumAccess<'de> {
-//     fn new(env: Env, key: String, value: Option<JsAny<'de>>) -> Self {
-//         JsEnumAccess {
-//             env,
-//             variant: key,
-//             value,
-//         }
-//     }
-// }
-
-// #[doc(hidden)]
-// impl<'de, 'de> EnumAccess<'de> for JsEnumAccess<'de> {
-//     type Error = DeserializeError;
-//     type Variant = JsVariantAccess<'de>;
-
-//     fn variant_seed<V>(self, seed: V) -> Result<(V::Value, Self::Variant)>
-//     where
-//         V: DeserializeSeed<'de>,
-//     {
-//         use serde::de::IntoDeserializer;
-//         let variant = self.variant.into_deserializer();
-//         let variant_access = JsVariantAccess::new(self.env, self.value);
-//         seed.deserialize(variant).map(|v| (v, variant_access))
-//     }
-// }
-
-// #[doc(hidden)]
-// struct JsVariantAccess<'de> {
-//     env: Env,
-//     value: Option<JsAny<'de>>,
-// }
-
-// #[doc(hidden)]
-// impl<'de> JsVariantAccess<'de> {
-//     fn new(env: Env, value: Option<JsAny<'de>>) -> Self {
-//         JsVariantAccess { env, value }
-//     }
-// }
-
-// #[doc(hidden)]
-// impl<'de, 'de> VariantAccess<'de> for JsVariantAccess<'de> {
-//     type Error = DeserializeError;
-
-//     fn unit_variant(self) -> Result<()> {
-//         match self.value {
-//             Some(val) => {
-//                 let deserializer = Deserializer::new(self.env, val);
-//                 serde::de::Deserialize::deserialize(deserializer)
-//             }
-//             None => Ok(()),
-//         }
-//     }
-
-//     fn newtype_variant_seed<T>(self, seed: T) -> Result<T::Value>
-//     where
-//         T: DeserializeSeed<'de>,
-//     {
-//         match self.value {
-//             Some(val) => {
-//                 let deserializer = Deserializer::new(self.env, val);
-//                 seed.deserialize(deserializer)
-//             }
-//             None => Err(serde::de::Error::invalid_type(
-//                 Unexpected::UnitVariant,
-//                 &"newtype variant",
-//             )),
-//         }
-//     }
-
-//     fn tuple_variant<V>(self, _len: usize, visitor: V) -> Result<V::Value>
-//     where
-//         V: Visitor<'de>,
-//     {
-//         match self.value {
-//             Some(JsAny::Array(a)) => {
-//                 let mut deserializer = JsArrayAccess::new(self.env, a);
-//                 visitor.visit_seq(&mut deserializer)
-//             },
-//             _ => Err(serde::de::Error::invalid_type(
-//                 Unexpected::UnitVariant,
-//                 &"tuple variant",
-//             )),
-//         }
-//     }
-
-//     fn struct_variant<V>(self, _fields: &'detatic [&'detatic str], visitor: V,) -> Result<V::Value>
-//     where
-//         V: Visitor<'de>,
-//     {
-//         match self.value {
-//             Some(JsAny::Object(o)) => {
-//                 let mut deserializer = JsObjectAccess::new(self.env, o)?;
-//                 visitor.visit_map(&mut deserializer)
-//             },
-//             _ => Err(serde::de::Error::invalid_type(
-//                 Unexpected::UnitVariant,
-//                 &"struct variant",
-//             )),
-//         }
-//     }
-// }
+    // TODO: Add more tests from
+    // https://github.com/arvidn/libtorrent/blob/RC_1_2/test/test_bdecode.cpp
+}
