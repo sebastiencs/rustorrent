@@ -14,6 +14,7 @@ pub enum DeserializeError {
     UnexpectedEOF,
     WrongCharacter(u8),
     End,
+    InfoHashMissing,
     Message(String)
 }
 
@@ -39,23 +40,55 @@ impl std::error::Error for DeserializeError {
     }
 }
 
-pub fn from_bytes<'de, T>(s: &'de [u8]) -> Result<T>
+pub fn from_bytes<'de, T>(s: &'de [u8]) -> Result<(T, Vec<u8>)>
 where
     T: Deserialize<'de>
 {
     let mut de: Deserializer = Deserializer::new(s);
-    T::deserialize(&mut de)
+    let res = T::deserialize(&mut de)?;
+
+    // if let Err(ref e) = res {
+    //     println!("ERROR: {:?}", e);
+    //     //return Err(e);
+    // };
+
+    //println!("REMAINING: {:?} {:?}", res.is_ok(), de.input);
+
+    let info_hash = if !de.start_info.is_null() && de.end_info > de.start_info {
+        let len = de.end_info as usize - de.start_info as usize;
+        let mut slice = unsafe { std::slice::from_raw_parts(de.start_info, len) };
+        sha1::Sha1::from(&slice[..]).digest().bytes().to_vec()
+//        sha1::Sha1::from(&slice[..]).hexdigest()
+    } else {
+        eprintln!("START={:?} END={:?}", de.start_info, de.end_info);
+
+        return Err(DeserializeError::InfoHashMissing);
+    };
+
+    Ok((res, info_hash))
+//    res.map(|r| (r, info_hash))
 }
+
+// 4b3ea6a5b1e62537dceb67230248ff092a723e4d
+// 4b3ea6a5b1e62537dceb67230248ff092a723e4d
 
 #[doc(hidden)]
 pub struct Deserializer<'de> {
-    input: &'de [u8]
+    input: &'de [u8],
+    start_info: *const u8,
+    end_info: *const u8,
+    info_depth: i64
 }
 
 #[doc(hidbn)]
 impl<'de> Deserializer<'de> {
     fn new(input: &'de [u8]) -> Self {
-        Deserializer { input }
+        Deserializer {
+            input,
+            start_info: std::ptr::null(),
+            end_info: std::ptr::null(),
+            info_depth: 0
+        }
     }
 
     fn peek(&self) -> Option<u8> {
@@ -119,10 +152,16 @@ impl<'de> Deserializer<'de> {
 
         let s = self.input.get(..len as usize)
                           .ok_or(DeserializeError::UnexpectedEOF)?;
-
-        println!("S: {:?}", s);
         
         self.skip(len)?;
+
+        if s == b"info" {
+            println!("INFO FOUND: {:?}", String::from_utf8(s.to_vec()));
+            self.start_info = self.input.as_ptr();
+            self.info_depth = 1;
+        }
+
+        println!("STRING={:?}", String::from_utf8((&s[0..std::cmp::min(100, s.len())]).to_vec()));
         
         Ok(s)
     }
@@ -136,10 +175,10 @@ impl<'a, 'de> serde::de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        println!("NEXT: {:?}", self.peek());
+        //println!("NEXT: {:?}", self.peek());
         match self.peek().ok_or(DeserializeError::UnexpectedEOF)? {
             b'i' => {                
-                println!("FOUND NUMBER", );
+                //println!("FOUND NUMBER", );
                 visitor.visit_i64(self.read_number()?)
             }
             b'l' => {
@@ -153,7 +192,7 @@ impl<'a, 'de> serde::de::Deserializer<'de> for &'a mut Deserializer<'de> {
                 visitor.visit_map(BencAccess::new(self))
             },
             _n @ b'0'..=b'9' => {
-                println!("FOUND STRING", );                
+                // println!("FOUND STRING", );                
                 visitor.visit_borrowed_bytes(self.read_string()?)
             }
             c => Err(DeserializeError::WrongCharacter(c))
@@ -167,24 +206,10 @@ impl<'a, 'de> serde::de::Deserializer<'de> for &'a mut Deserializer<'de> {
         visitor.visit_some(self)
     }
 
-    fn deserialize_bytes<V>(self, _visitor: V) -> Result<V::Value>
-    where
-        V: Visitor<'de>,
-    {
-        unimplemented!()
-    }
-
-    fn deserialize_byte_buf<V>(self, _visitor: V) -> Result<V::Value>
-    where
-        V: Visitor<'de>,
-    {
-        unimplemented!()
-    }
-
     forward_to_deserialize_any! {
         bool i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 char str string
         unit unit_struct seq tuple tuple_struct map struct identifier
-        newtype_struct ignored_any enum
+        newtype_struct ignored_any enum bytes byte_buf
     }
 }
 
@@ -194,6 +219,11 @@ struct BencAccess<'a, 'de> {
 
 impl<'a, 'de> BencAccess<'a, 'de> {
     fn new(de: &'a mut Deserializer<'de>) -> BencAccess<'a, 'de> {
+        if de.info_depth >= 1 {
+            de.info_depth += 1;
+            let s = de.input;
+            println!("DEPTH[NEW]={:?} {:?}", de.info_depth, String::from_utf8((&s[0..std::cmp::min(50, s.len())]).to_vec()));
+        }
         BencAccess { de }
     }
 }
@@ -207,6 +237,13 @@ impl<'a, 'de> MapAccess<'de> for BencAccess<'a, 'de> {
     {
         if self.de.peek() == Some(b'e') {
             let _ = self.de.consume();
+            self.de.info_depth -= 1;
+            if self.de.info_depth == 1 {
+                println!("FOUND END !");
+                self.de.end_info = self.de.input.as_ptr();
+            }
+            let s = self.de.input;
+            println!("DEPTH[END_DICT]={:?} {:?}", self.de.info_depth, String::from_utf8((&s[0..std::cmp::min(50, s.len())]).to_vec()));
             return Ok(None)
         }
         
@@ -232,6 +269,12 @@ impl<'a, 'de> SeqAccess<'de> for BencAccess<'a, 'de> {
         
         if self.de.peek() == Some(b'e') {
             let _ = self.de.consume();
+            if self.de.info_depth >= 1 {
+                self.de.info_depth -= 1;
+            }
+            let s = self.de.input;
+            println!("DEPTH[END_LIST]={:?} {:?}", self.de.info_depth, String::from_utf8((&s[0..std::cmp::min(50, s.len())]).to_vec()));
+            // println!("DEPTH={}", self.de.info_depth);
             return Ok(None);
         }
         
