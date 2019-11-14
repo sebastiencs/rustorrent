@@ -40,25 +40,25 @@ impl std::error::Error for DeserializeError {
     }
 }
 
-pub fn from_bytes<'de, T>(s: &'de [u8]) -> Result<(T, Vec<u8>)>
+pub fn from_bytes<'de, T>(s: &'de [u8]) -> Result<T>
+where
+    T: Deserialize<'de>
+{
+    let mut de: Deserializer = Deserializer::new(s);
+    T::deserialize(&mut de)
+}
+
+pub fn from_bytes_with_hash<'de, T>(s: &'de [u8]) -> Result<(T, Vec<u8>)>
 where
     T: Deserialize<'de>
 {
     let mut de: Deserializer = Deserializer::new(s);
     let res = T::deserialize(&mut de)?;
 
-    // if let Err(ref e) = res {
-    //     println!("ERROR: {:?}", e);
-    //     //return Err(e);
-    // };
-
-    //println!("REMAINING: {:?} {:?}", res.is_ok(), de.input);
-
     let info_hash = if !de.start_info.is_null() && de.end_info > de.start_info {
         let len = de.end_info as usize - de.start_info as usize;
         let mut slice = unsafe { std::slice::from_raw_parts(de.start_info, len) };
         sha1::Sha1::from(&slice[..]).digest().bytes().to_vec()
-//        sha1::Sha1::from(&slice[..]).hexdigest()
     } else {
         eprintln!("START={:?} END={:?}", de.start_info, de.end_info);
 
@@ -66,7 +66,14 @@ where
     };
 
     Ok((res, info_hash))
-//    res.map(|r| (r, info_hash))
+}
+
+use crate::metadata::Torrent;
+
+pub fn read_meta<'de>(s: &'de [u8]) -> Result<Torrent> {
+    let (meta, info_hash) = from_bytes_with_hash(s)?;
+
+    Ok(Torrent { meta, info_hash })
 }
 
 // 4b3ea6a5b1e62537dceb67230248ff092a723e4d

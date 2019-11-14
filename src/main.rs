@@ -1,30 +1,15 @@
 use serde::{Serialize, Deserialize};
-use smallvec::SmallVec;
+// use smallvec::SmallVec;
 
 mod de;
 mod http_client;
 mod metadata;
+mod session;
 
-use metadata::MetaTorrent;
-
-use async_std::task;
-
-use std::collections::HashMap;
+// use async_std::task;
 use std::io::{self, Read};
 
-use http_client::Escaped;
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct Query {
-    info_hash: Vec<u8>,
-    peer_id: String,
-    port: i64,
-    uploaded: i64,
-    downloaded: i64,
-    //left: i64,
-    event: String,
-    compact: i64
-}
+use session::Session;
 
 //fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
 fn main() {
@@ -34,22 +19,12 @@ fn main() {
 
     handle.read_to_end(&mut buffer).unwrap();
 
-    let (meta, info) = de::from_bytes::<MetaTorrent>(&buffer).unwrap();
+    //let (meta, info) = de::from_bytes_with_hash::<MetaTorrent>(&buffer).unwrap();
+    let torrent = de::read_meta(&buffer).unwrap();
 
-    println!("META: {:#?}\nINFO={:?}", meta, info);
+    let mut session = Session::new();
 
-    let query = Query {
-        info_hash: info,
-        peer_id: "-RT1220sJ1Nna5rzWLd8".to_owned(),
-        port: 6881,
-        uploaded: 0,
-        downloaded: 0,
-        event: "started".to_owned(),
-        compact: 1,
-    };
-    
-    http_client::get(meta.announce, query);
-    //http_client::get("http://localhost:90/announce", query);
+    session.add_torrent(torrent);
     
     
 //     task::block_on(async move {

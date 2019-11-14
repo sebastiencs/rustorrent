@@ -1,8 +1,8 @@
 use std::io::prelude::*;
 use std::net::TcpStream;
-use std::io::{self, BufReader};
 
-use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 // // http://www.ietf.org/rfc/rfc2396.txt
@@ -19,6 +19,97 @@ use url::Url;
 // // unreserved (alphanumerics)
 // 	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 // 	"0123456789";
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct AnnounceQuery<'a> {
+    pub info_hash: &'a [u8],
+    pub peer_id: String,
+    pub port: i64,
+    pub uploaded: i64,
+    pub downloaded: i64,
+    //left: i64,
+    pub event: String,
+    pub compact: i64
+}
+
+use crate::metadata::Torrent;
+
+impl<'a> From<&'a Torrent> for AnnounceQuery<'a> {
+    fn from(torrent: &'a Torrent) -> AnnounceQuery {
+        AnnounceQuery {
+            info_hash: torrent.info_hash.as_ref(),
+            peer_id: "-RT1220sJ1Nna5rzWLd8".to_owned(),
+            port: 6881,
+            uploaded: 0,
+            downloaded: 0,
+            event: "started".to_owned(),
+            compact: 1,
+        }
+    }
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(untagged)]
+pub enum Peers {
+    Dict {
+        ip: String,
+        port: i64
+    },
+    #[serde(with = "serde_bytes")]
+    Binary(Vec<u8>)
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(untagged)]
+pub enum Peers6 {
+    Dict {
+        ip: String,
+        port: i64
+    },
+    #[serde(with = "serde_bytes")]
+    Binary(Vec<u8>)
+}
+
+#[derive(Deserialize, Debug)]
+pub struct AnnounceResponse {
+    #[serde(rename="warning message")]
+    pub warning_message: Option<String>,
+    pub interval: i64,
+    #[serde(rename="min interval")]
+    pub min_interval: Option<i64>,
+    #[serde(rename="tracker id")]
+    pub tracker_id: Option<String>,
+    pub complete: i64,
+    pub incomplete: i64,
+    pub downloaded: Option<i64>,
+    pub peers: Option<Peers>,
+    pub peers6: Option<Peers6>,
+}
+
+use crate::de::{DeserializeError, from_bytes};
+
+#[derive(Debug)]
+pub enum HttpError {
+    ResponseCode(String),
+    Malformed,
+    Deserialize(DeserializeError),
+    HostResolution,
+    IO(std::io::Error)
+}
+
+impl From<std::io::Error> for HttpError {
+    fn from(e: std::io::Error) -> HttpError {
+        HttpError::IO(e)
+    }
+}
+
+impl From<DeserializeError> for HttpError {
+    fn from(e: DeserializeError) -> HttpError {
+        HttpError::Deserialize(e)
+    }
+}
+
+type Result<T> = std::result::Result<T, HttpError>;
 
 pub trait Escaped {
     fn escape(&self) -> String;
@@ -37,7 +128,7 @@ pub trait ToQuery {
     fn to_query(&self) -> String;
 }
 
-impl ToQuery for crate::Query {
+impl<'a> ToQuery for AnnounceQuery<'a> {
     fn to_query(&self) -> String {
         format!("info_hash={}&peer_id={}&port={}&uploaded={}&downloaded={}&event={}&compact={}",
                 self.info_hash.escape(),
@@ -80,8 +171,6 @@ pub fn escape_str<T: AsRef<[u8]>>(s: T) -> String {
 
 const DEFAULT_HEADERS: &str = "User-Agent: rustorrent/0.1\r\nAccept-Encoding: gzip\r\nConnection: close";
 
-const REQUEST_STR: &str = "GET {}?{} HTTP/1.1\r\n{}\r\n{}\r\n\r\n";
-
 fn format_host(url: &Url) -> String {
     if let Some(port) = url.port() {
         format!("Host: {}:{}", url.host_str().unwrap(), port)
@@ -100,25 +189,36 @@ fn format_request<T: ToQuery>(url: &Url, query: T) -> String {
     )
 }
 
-fn send(url: Url, query: impl ToQuery) {
-    let sockaddr = (url.host_str().unwrap(), url.port().unwrap_or(80));
+use std::time::Duration;
+use std::net::ToSocketAddrs;
 
-    let mut stream = TcpStream::connect(sockaddr).unwrap();
+fn send<T: DeserializeOwned>(url: Url, query: impl ToQuery) -> Result<T> {
+    let sockaddr = (
+        url.host_str().ok_or(HttpError::HostResolution)?,
+        url.port().unwrap_or(80)
+    ).to_socket_addrs()?;
 
-    let s = format_request(&url, query);
+    let mut stream = TcpStream::connect_timeout(
+        sockaddr.as_slice().get(0).ok_or(HttpError::HostResolution)?,
+        Duration::from_secs(5)
+    )?;
 
-    println!("REQ {}", s);
+    let req = format_request(&url, query);
+
+    println!("REQ {}", req);
     
-    stream.write_all(s.as_bytes()).unwrap();
-    stream.flush();
+    stream.write_all(req.as_bytes())?;
+    stream.flush()?;
 
-    // let mut data = Vec::new();
+    let (buffer, state) = read_response(stream)?;
 
-    // stream.read_to_end(&mut data);
+    let response = &buffer[state.header_length.unwrap()..];
 
-    // println!("DATA {:x?}", String::from_utf8_lossy(&data));
-
-    read_response(stream);
+    println!("DATA {:x?}", String::from_utf8_lossy(&response));
+    
+    let value = from_bytes(&response)?;
+    
+    Ok(value)
 }
 
 use memchr::{memchr, memrchr2};
@@ -200,6 +300,25 @@ fn get_header_length(buf: &[u8], state: &mut ReadingState) -> usize {
     }
 }
 
+fn check_http_code(buf: &[u8]) -> Result<()> {
+    let line = match memchr(b'\n', buf) {
+        Some(index) => &buf[..index],
+        _ => return Err(HttpError::Malformed)
+    };
+
+    let line = match std::str::from_utf8(line) {
+        Ok(line) => line.trim(),
+        _ => return Err(HttpError::Malformed)
+    };
+
+    if line.contains("200") {
+        Ok(())
+    } else {
+        println!("BUFFER: {:?}\n", String::from_utf8_lossy(buf));
+        Err(HttpError::ResponseCode(line.to_owned()))
+    }
+}
+
 fn stopper(buf: &[u8], state: &mut ReadingState) -> bool {
     if !state.valid_headers {
         return false;
@@ -246,7 +365,7 @@ impl Default for ReadingState {
 
 const BUFFER_READ_SIZE: usize = 64;
 
-fn read_response(mut stream: TcpStream) {
+fn read_response(mut stream: TcpStream) -> Result<(Vec<u8>, ReadingState)> {
     let mut buffer = Vec::with_capacity(BUFFER_READ_SIZE);
     
     unsafe { buffer.set_len(BUFFER_READ_SIZE); }
@@ -270,7 +389,7 @@ fn read_response(mut stream: TcpStream) {
                 }
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(_) => {}
+            Err(e) => return Err(HttpError::IO(e))
         }
     }
     
@@ -278,19 +397,26 @@ fn read_response(mut stream: TcpStream) {
         buffer.set_len(state.offset);
     }
 
-    println!("DATA {:x?}", String::from_utf8_lossy(&buffer));
+    //println!("DATA {:x?}", String::from_utf8_lossy(&buffer));
+    
+    if state.header_length.is_none() && get_header_length(&buffer, &mut state) == 0 {
+        return Err(HttpError::Malformed);
+    }
+
+    check_http_code(&buffer)?;
+    
+    Ok((buffer, state))
 }
 
-pub fn get<T, Q>(url: T, query: Q)
+pub fn get<R, T, Q>(url: T, query: Q) -> Result<R>
 where
     T: AsRef<str>,
-    Q: ToQuery
+    Q: ToQuery,
+    R: DeserializeOwned
 {
     let url: Url = url.as_ref().parse().unwrap();
-    //let query = query.to_query();
     
     println!("URL: {:?} {:?} {:?} {:?}", url, url.host(), url.port(), url.scheme());
-    //println!("QUERY: {:?}", query);
 
-    send(url, query);
+    send(url, query)
 }
