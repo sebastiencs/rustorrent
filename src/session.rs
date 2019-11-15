@@ -64,13 +64,17 @@ fn get_peers_addrs(response: &AnnounceResponse) -> Vec<SocketAddr> {
             addrs.reserve(bin.len() / 6);
             
             for chunk in bin.chunks_exact(6) {
-                let mut cursor = Cursor::new(&chunk[4..]);
+                let mut cursor = Cursor::new(&chunk[..]);
+                
+                let ipv4 = Ipv4Addr::from(
+                    cursor.read_u32::<BigEndian>().unwrap(),
+                );
+                
                 let port = match cursor.read_u16::<BigEndian>() {
                     Ok(port) => port,
                     _ => continue
                 };
                 
-                let ipv4 = Ipv4Addr::new(chunk[0], chunk[1], chunk[2], chunk[3]);
                 let ipv4 = SocketAddrV4::new(ipv4, port);
 
                 addrs.push(ipv4.into());
@@ -104,7 +108,7 @@ use std::net::TcpStream;
 use smallvec::SmallVec;
 use std::io::BufReader;
 
-fn read_messages(mut stream: TcpStream) {
+fn read_messages(mut stream: TcpStream) -> Result<(), std::io::Error> {
     let mut buffer = Vec::with_capacity(32_768);
 
     let mut i = 0;
@@ -112,15 +116,15 @@ fn read_messages(mut stream: TcpStream) {
         let stream = std::io::Read::by_ref(&mut stream);
         
         match stream.take(4).read_to_end(&mut buffer) {
-            Ok(0) => return,
-            Err(e) => return,
+            Ok(0) => return Ok(()),
+            Err(e) => return Ok(()),
             _ => {}
         }
 
         let length = {
             // println!("LEN BUF = {:?}", buffer.len());
             let mut cursor = Cursor::new(&buffer[..]);
-            cursor.read_u32::<BigEndian>().unwrap() as u64
+            cursor.read_u32::<BigEndian>()? as u64
         };
 
         if length == 0 {
@@ -129,7 +133,7 @@ fn read_messages(mut stream: TcpStream) {
         //     buffer.reserve(buffer.capacity() - length);
         // }
 
-        stream.take(length).read_to_end(&mut buffer);
+        stream.take(length).read_to_end(&mut buffer)?;
         //stream.read_exact(&mut buffer[..length]);
 
         match buffer[0] {
@@ -140,7 +144,7 @@ fn read_messages(mut stream: TcpStream) {
             4 => {
                 //cursor.set_position(1);
                 let mut cursor = Cursor::new(&buffer[1..]);
-                println!("HAVE {:?}", cursor.read_u32::<BigEndian>());
+                println!("HAVE {:?}", cursor.read_u32::<BigEndian>()?);
             }
             5 => {
                 println!("BITFIELD {:?}", &buffer[1..]);
@@ -152,7 +156,7 @@ fn read_messages(mut stream: TcpStream) {
         }
         i += 1;
         if i >= 6 {
-            return
+            return Ok(())
         }
     }
 }
@@ -232,9 +236,7 @@ fn do_handshake(addr: &SocketAddr, torrent: &Torrent) -> Result<(), std::io::Err
         //println!("HASH MATCHED !", );
     }
 
-    read_messages(stream);
-
-    Ok(())
+    read_messages(stream)
 }
 
 impl TorrentActor {
@@ -256,7 +258,7 @@ impl TorrentActor {
                 for addr in &addrs {
                     println!("ADDR: {:?}", addr);
                     let res = do_handshake(addr, torrent);
-                    //println!("RES: {:?}", res);
+                    println!("RES: {:?}", res);
                 }
             };
 
