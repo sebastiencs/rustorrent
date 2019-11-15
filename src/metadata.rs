@@ -143,6 +143,10 @@ impl<'a> Iterator for UrlIterator<'a> {
             }
         }
     }
+    
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.list.len(), None)
+    }
 }
 
 impl Torrent {
