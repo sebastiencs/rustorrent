@@ -1,5 +1,7 @@
 use serde::{Serialize, Deserialize};
 use smallvec::SmallVec;
+use url::Url;
+
 use std::iter::Iterator;
 
 type StackVec<T> = SmallVec<[T; 16]>;
@@ -128,12 +130,18 @@ pub struct UrlIterator<'a> {
 }
 
 impl<'a> Iterator for UrlIterator<'a> {
-    type Item = &'a str;
+    type Item = Url;
     
     fn next(&mut self) -> Option<Self::Item> {
-        let index = self.index;
-        self.index += 1;
-        self.list.get(index).copied()
+        loop {
+            let index = self.index;
+            self.index += 1;
+            match self.list.get(index).map(|u| u.parse()) {
+                Some(Ok(url)) => return Some(url),
+                None => return None,
+                _ => {}
+            }
+        }
     }
 }
 

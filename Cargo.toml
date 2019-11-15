@@ -17,6 +17,7 @@ smallvec = { version = "1.0", features = ["serde"] }
 memchr = "2"
 sha1 = { version = "0.6", features = ["std"] }
 url = "2"
+byteorder = "1"
 
 async-std = "1"
 # surf = "1.0.3"

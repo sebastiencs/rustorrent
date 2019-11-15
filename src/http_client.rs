@@ -49,12 +49,15 @@ impl<'a> From<&'a Torrent> for AnnounceQuery<'a> {
 }
 
 #[derive(Deserialize, Debug)]
+pub struct Peer {    
+    pub ip: String,
+    pub port: u16
+}
+
+#[derive(Deserialize, Debug)]
 #[serde(untagged)]
 pub enum Peers {
-    Dict {
-        ip: String,
-        port: i64
-    },
+    Dict(Vec<Peer>),
     #[serde(with = "serde_bytes")]
     Binary(Vec<u8>)
 }
@@ -62,10 +65,7 @@ pub enum Peers {
 #[derive(Deserialize, Debug)]
 #[serde(untagged)]
 pub enum Peers6 {
-    Dict {
-        ip: String,
-        port: i64
-    },
+    Dict(Vec<Peer>),
     #[serde(with = "serde_bytes")]
     Binary(Vec<u8>)
 }
@@ -153,14 +153,13 @@ pub fn escape_str<T: AsRef<[u8]>>(s: T) -> String {
 
     let mut result = Vec::with_capacity(bytes.len() * 3);
 
-    // Algo borrowed from libtorrent
     for b in bytes {
         if memchr(*b, UNRESERVED_CHAR).is_some() {
             result.push(*b);
         } else {
             result.push(b'%');
             result.push(HEXCHARS[(b >> 4) as usize]);
-            result.push(HEXCHARS[(b & 15) as usize]);
+            result.push(HEXCHARS[(b & 0xF) as usize]);
         }
     }
 
@@ -191,6 +190,7 @@ fn format_request<T: ToQuery>(url: &Url, query: T) -> String {
 
 use std::time::Duration;
 use std::net::ToSocketAddrs;
+use std::convert::TryInto;
 
 fn send<T: DeserializeOwned>(url: Url, query: impl ToQuery) -> Result<T> {
     let sockaddr = (
