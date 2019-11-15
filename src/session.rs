@@ -7,7 +7,7 @@ struct TorrentActor {
 
 use crate::http_client::{Peers,Peers6};
 use std::io::Cursor;
-use byteorder::{BigEndian, ReadBytesExt};
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 
 struct Peer {
@@ -114,10 +114,16 @@ fn read_messages(mut stream: TcpStream) -> Result<(), std::io::Error> {
     let mut i = 0;
     loop {
         let stream = std::io::Read::by_ref(&mut stream);
+
+        println!("READING LENGTH", );
         
+        buffer.clear();
         match stream.take(4).read_to_end(&mut buffer) {
             Ok(0) => return Ok(()),
-            Err(e) => return Ok(()),
+            Err(e) => {
+                println!("ERROR: {:?}", e);
+                return Ok(());
+            }
             _ => {}
         }
 
@@ -126,6 +132,8 @@ fn read_messages(mut stream: TcpStream) -> Result<(), std::io::Error> {
             let mut cursor = Cursor::new(&buffer[..]);
             cursor.read_u32::<BigEndian>()? as u64
         };
+        
+        println!("LENGTH={} {:?}", length, &buffer[..]);
 
         if length == 0 {
             continue;
@@ -133,31 +141,98 @@ fn read_messages(mut stream: TcpStream) -> Result<(), std::io::Error> {
         //     buffer.reserve(buffer.capacity() - length);
         // }
 
+        buffer.clear();
+
         stream.take(length).read_to_end(&mut buffer)?;
         //stream.read_exact(&mut buffer[..length]);
 
+        println!("ICIIII", );
+
+        let mut last_have = 0;
+
         match buffer[0] {
-            0 => println!("CHOKE", ),
-            1 => println!("UNCHOKE", ),
+            0 => {
+                println!("CHOKE {:?} {:?}", String::from_utf8_lossy(&buffer[1..]), &buffer[..]);
+                // let mut aa: [u8; 5] = [0; 5];
+                // let mut cursor = Cursor::new(&mut aa[..]);
+                // cursor.write_u32::<BigEndian>(1)?;
+                // cursor.write_u8(2)?;
+                                
+                // stream.write_all(&aa)?;
+                // stream.flush()?;
+
+                // println!("INTERESTED SENT");
+
+                // // request: <len=0013><id=6><index><begin><length>
+                
+                // let mut aa: [u8; 13] = [0; 13];
+                // let mut cursor = Cursor::new(&mut aa[..]);
+                // cursor.write_u32::<BigEndian>(13)?;
+                // cursor.write_u8(6)?;
+                // cursor.write_u32::<BigEndian>(0)?;
+                // cursor.write_u32::<BigEndian>(256)?;
+                                
+                // stream.write_all(&aa)?;
+                // stream.flush()?;
+
+                // println!("REQUEST SENT");
+            }
+            1 => {
+                println!("UNCHOKE", );
+                
+                let mut aa: [u8; 17] = [0; 17];
+                let mut cursor = Cursor::new(&mut aa[..]);
+                cursor.write_u32::<BigEndian>(13)?;
+                cursor.write_u8(6)?;
+                cursor.write_u32::<BigEndian>(last_have)?;
+                cursor.write_u32::<BigEndian>(0)?;
+                cursor.write_u32::<BigEndian>(16384)?;
+                                
+                stream.write_all(&aa)?;
+                stream.flush()?;
+
+                println!("REQUEST SENT");
+            }
             2 => println!("INTERESTED", ),
             3 => println!("NOT INTERESTED", ),
             4 => {
                 //cursor.set_position(1);
                 let mut cursor = Cursor::new(&buffer[1..]);
-                println!("HAVE {:?}", cursor.read_u32::<BigEndian>()?);
+                last_have = cursor.read_u32::<BigEndian>()?;
+                println!("HAVE {:?}", last_have);
             }
             5 => {
                 println!("BITFIELD {:?}", &buffer[1..]);
+                
+                let mut aa: [u8; 5] = [0; 5];
+                let mut cursor = Cursor::new(&mut aa[..]);
+                cursor.write_u32::<BigEndian>(1)?;
+                cursor.write_u8(2)?;
+                                
+                stream.write_all(&aa)?;
+                stream.flush()?;
+
+                println!("INTERESTED SENT");
             }
             6 => {
                 println!("REQUEST {:?}", &buffer[1..]);
             }
+            7 => {
+                // piece: <len=0009+X><id=7><index><begin><block>
+                
+                let mut cursor = Cursor::new(&buffer[1..]);
+
+                let index = cursor.read_u32::<BigEndian>()?;
+                let begin = cursor.read_u32::<BigEndian>()?;
+                
+                println!("PIECE ! {:?} {:?}", index, begin);
+            }
             x => { println!("UNKNOWN {} {:?}", x, &buffer[1..]); }
         }
         i += 1;
-        if i >= 6 {
-            return Ok(())
-        }
+        // if i >= 6 {
+        //     return Ok(())
+        // }
     }
 }
 
@@ -217,11 +292,11 @@ fn do_handshake(addr: &SocketAddr, torrent: &Torrent) -> Result<(), std::io::Err
         cursor.write(b"-RT1220sJ1Nna5rzWLd8");
     }
 
-    stream.set_write_timeout(Some(std::time::Duration::from_secs(2)));
+    stream.set_write_timeout(Some(std::time::Duration::from_secs(30)));
     
     stream.write_all(&handshake)?;
     stream.flush()?;
-    stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(30)));
 
     // TODO: Use SmallVec here
     let mut buffer = [0; 128];
