@@ -458,7 +458,7 @@ impl Peer {
         };
 
         //peer.start().await;
-        peer.do_handshake().await;
+        peer.do_handshake().await?;
         
         Ok(())
     }
@@ -489,18 +489,35 @@ impl Peer {
 
         println!("SENDING HANDSHAKE", );
 
+        let mut handshake: [u8; 68] = [0; 68];
+
+        {
+            let mut cursor = Cursor::new(&mut handshake[..]);
+
+            cursor.write(&[19])?;
+            cursor.write(b"BitTorrent protocol")?;
+            cursor.write(&[0,0,0,0,0,0,0,0])?;
+            self.data.with(|data| {
+                cursor.write(data.torrent.info_hash.as_ref());
+            });
+            cursor.write(b"-RT1220sJ1Nna5rzWLd8")?;
+        }
+        
         let writer = &mut self.writer;
-        writer.write(&[19]).await?;
-        writer.write(b"BitTorrent protocol").await?;
-        writer.write(&[0,0,0,0,0,0,0,0]).await?;
-        let data = self.data.clone();
-        writer.write(data.torrent.info_hash.as_ref()).await?;
-        // {
-        //     let data = self.data.read();
-        //     writer.write(data.torrent.info_hash.as_ref()).await?;
-        // }
-        writer.write(b"-RR1220sJ1Nna5rzWLd8").await?;
+        writer.write_all(&handshake).await?;
         writer.flush().await?;
+        
+        // writer.write(&[19]).await?;
+        // writer.write(b"BitTorrent protocol").await?;
+        // writer.write(&[0,0,0,0,0,0,0,0]).await?;
+        // let data = self.data.clone();
+        // writer.write(data.torrent.info_hash.as_ref()).await?;
+        // // {
+        // //     let data = self.data.read();
+        // //     writer.write(data.torrent.info_hash.as_ref()).await?;
+        // // }
+        // writer.write(b"-RR1220sJ1Nna5rzWLd8").await?;
+        // writer.flush().await?;
 
         println!("DONE", );
 
@@ -555,9 +572,9 @@ impl TorrentData {
         )))
     }
     
-    fn with<R, F>(&self, fun: F) -> R
+    fn with<R, F>(&self, mut fun: F) -> R
     where
-        F: Fn(&SharedData) -> R
+        F: FnMut(&SharedData) -> R
     {
         let data = self.0.read();
         fun(&data)
