@@ -94,7 +94,8 @@ pub enum HttpError {
     Malformed,
     Deserialize(DeserializeError),
     HostResolution,
-    IO(std::io::Error)
+    IO(std::io::Error),
+    IOAsync(async_std::io::Error)
 }
 
 impl From<std::io::Error> for HttpError {
