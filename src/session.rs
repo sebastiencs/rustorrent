@@ -391,7 +391,8 @@ struct Peer {
     data: TorrentData,
     reader: BufReader<MyTcpStream>,
     writer: BufWriter<MyTcpStream>,
-    state: PeerState
+    state: PeerState,
+    buffer: Vec<u8>
 }
 
 use async_std::sync::Mutex;
@@ -439,7 +440,7 @@ use async_std::prelude::*;
 use async_std::io::{BufReader, BufWriter};
 
 impl Peer {
-    async fn new(addr: SocketAddr, data: TorrentData) -> Result<Peer> {
+    async fn new(addr: SocketAddr, data: TorrentData) -> Result<()> {
         let stream = TcpStream::connect(&addr).await?;
 
         println!("PEER CONNECTED {:?}", addr);
@@ -447,14 +448,82 @@ impl Peer {
         let reader = MyTcpStream(Arc::new(stream));
         let writer = reader.clone();
         
-        Ok(Peer {
+        let mut peer = Peer {
             addr,
             data,
             reader: BufReader::with_capacity(32 * 1024, reader),
             writer: BufWriter::with_capacity(32 * 1024, writer),
-            state: PeerState::Connecting
-        })
+            state: PeerState::Connecting,
+            buffer: Vec::with_capacity(32 * 1024)
+        };
+
+        //peer.start().await;
+        peer.do_handshake().await;
+        
+        Ok(())
     }
+
+    // async fn new(addr: SocketAddr, data: TorrentData) -> Result<Peer> {
+    //     let stream = TcpStream::connect(&addr).await?;
+
+    //     println!("PEER CONNECTED {:?}", addr);
+        
+    //     let reader = MyTcpStream(Arc::new(stream));
+    //     let writer = reader.clone();
+        
+    //     Ok(Peer {
+    //         addr,
+    //         data,
+    //         reader: BufReader::with_capacity(32 * 1024, reader),
+    //         writer: BufWriter::with_capacity(32 * 1024, writer),
+    //         state: PeerState::Connecting,
+    //         buffer: Vec::with_capacity(32 * 1024)
+    //     })
+    // }
+
+    async fn start(&mut self) {
+        //self.do_handshake().await;
+    }
+   
+    async fn do_handshake(&mut self) -> Result<()> {
+
+        println!("SENDING HANDSHAKE", );
+
+        let writer = &mut self.writer;
+        writer.write(&[19]).await?;
+        writer.write(b"BitTorrent protocol").await?;
+        writer.write(&[0,0,0,0,0,0,0,0]).await?;
+        let data = self.data.clone();
+        writer.write(data.torrent.info_hash.as_ref()).await?;
+        // {
+        //     let data = self.data.read();
+        //     writer.write(data.torrent.info_hash.as_ref()).await?;
+        // }
+        writer.write(b"-RR1220sJ1Nna5rzWLd8").await?;
+        writer.flush().await?;
+
+        println!("DONE", );
+
+        println!("READING HANDSHAKE", );
+
+        let reader = &mut self.reader;
+        let reader = reader.by_ref();
+
+        reader.take(1).read_to_end(&mut self.buffer).await?;
+
+        let len = self.buffer[0] as u64;
+
+        reader.take(len + 48).read_to_end(&mut self.buffer).await?;
+
+        println!("HANDSHAKE DONE", );
+
+        // if &buffer[len + 8..len + 28] == torrent.info_hash.as_slice() {
+        //     //println!("HASH MATCHED !", );
+        // }
+
+        Ok(())
+    }
+
 }
 
 enum MessageActor {
@@ -514,7 +583,7 @@ struct TorrentActor {
     receiver: Receiver<MessageActor>,
     // We keep a Sender to not close the channel
     // in case there is no peer
-    sender: Sender<MessageActor>,
+    _sender: Sender<MessageActor>,
 }
 
 type Result<T> = std::result::Result<T, TorrentError>;
@@ -524,11 +593,11 @@ use parking_lot::{RwLock, RwLockReadGuard};
 
 impl TorrentActor {
     fn new(torrent: Torrent) -> TorrentActor {
-        let (sender, receiver) = unbounded();
+        let (_sender, receiver) = unbounded();
         TorrentActor {
             data: TorrentData::new(torrent),
             receiver,
-            sender,
+            _sender,
             peers: vec![],
             trackers: vec![],            
         }
@@ -555,12 +624,23 @@ impl TorrentActor {
 
             let addr = *addr;
             let data = data.clone();
+            
             task::spawn(async move {
-                let res = Peer::new(addr, data).await;
-                if let Err(e) = res {
-                    println!("PEER ERROR {:?}", e);                    
+                let mut peer = match Peer::new(addr, data).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        println!("PEER ERROR {:?}", e);
+                        return;
+                    }
                 };
-
+                // let mut peer = match Peer::new(addr, data).await {
+                //     Ok(mut peer) => peer.start().await,
+                //     Err(e) => {
+                //         println!("PEER ERROR {:?}", e);
+                //         return;
+                //     }
+                // };
+//                peer.start().await;
             });
             // std::thread::spawn(|| {
             //     //let res = do_handshake(addr, &torrent);
