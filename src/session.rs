@@ -391,18 +391,46 @@ enum MessageActor {
 
 type PeerAddr = Sender<MessageActor>;
 
-struct TorrentData {
+/// Data shared between peers and torrent actor
+struct SharedData {
     torrent: Torrent
 }
 
+impl SharedData {
+    fn new(torrent: Torrent) -> SharedData {
+        SharedData { torrent }
+    }
+}
+
+struct TorrentData(Arc<RwLock<SharedData>>);
+
 impl TorrentData {
     fn new(torrent: Torrent) -> TorrentData {
-        TorrentData { torrent }
+        TorrentData(Arc::new(RwLock::new(
+            SharedData::new(torrent)
+        )))
+    }
+    
+    fn read<R, F>(&self, fun: F) -> R
+    where
+        F: Fn(&SharedData) -> R
+    {
+        let data = self.0.read();
+        fun(&data)
+    }
+    
+    fn write<R, F>(&self, fun: F) -> R
+    where
+        F: Fn(&mut SharedData) -> R
+    {
+        let mut data = self.0.write();
+        fun(&mut data)
     }
 }
 
 struct TorrentActor {
-    data: Arc<RwLock<TorrentData>>,
+    data: TorrentData,
+//    data: Arc<RwLock<SharedData>>,
     peers: Vec<PeerAddr>,
     trackers: Vec<Tracker>,
     receiver: Receiver<MessageActor>,
@@ -413,13 +441,15 @@ struct TorrentActor {
 
 type Result<T> = std::result::Result<T, TorrentError>;
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;
 
 impl TorrentActor {
     fn new(torrent: Torrent) -> TorrentActor {
         let (sender, receiver) = unbounded();
         TorrentActor {
-            data: Arc::new(RwLock::new(TorrentData::new(torrent))),
+            data: TorrentData::new(torrent),
+//            data: Arc::new(RwLock::new(SharedData::new(torrent))),
             receiver,
             sender,
             peers: vec![],
@@ -433,33 +463,35 @@ impl TorrentActor {
     }
 
     fn collect_trackers(&mut self) {
-        let data = self.data.read().unwrap();
-        self.trackers = data.torrent.iter_urls().map(Tracker::new).collect();
+        let trackers = self.data.read(|data| {
+            data.torrent.iter_urls().map(Tracker::new).collect()
+        });
+        self.trackers = trackers;
     }
     
     fn connect(&mut self) -> Result<()> {
-        let torrent = &self.torrent;
+        // let torrent = &self.torrent;
 
-        for tracker in &mut self.trackers {
-            let addrs = match tracker.announce(&torrent) {
-                Ok(peers) => peers,
-                Err(e) => {
-                    eprintln!("[Tracker announce] {:?}", e);
-                    continue;
-                }
-            };
+        // for tracker in &mut self.trackers {
+        //     let addrs = match tracker.announce(&torrent) {
+        //         Ok(peers) => peers,
+        //         Err(e) => {
+        //             eprintln!("[Tracker announce] {:?}", e);
+        //             continue;
+        //         }
+        //     };
             
-            for addr in &addrs {
-                println!("ADDR: {:?}", addr);
+        //     for addr in &addrs {
+        //         println!("ADDR: {:?}", addr);
                 
-                std::thread::spawn(|| {
-                    let res = do_handshake(addr, torrent);
-                    println!("RES: {:?}", res);
-                });
+        //         std::thread::spawn(|| {
+        //             let res = do_handshake(addr, torrent);
+        //             println!("RES: {:?}", res);
+        //         });
                 
-            }
+        //     }
            
-        }
+        // }
 
         Ok(())
         // for url in self.torrent.iter_urls().filter(|url| url.scheme() == "http") {

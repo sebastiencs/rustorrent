@@ -19,6 +19,7 @@ sha1 = { version = "0.6", features = ["std"] }
 url = "2"
 byteorder = "1"
 crossbeam-channel = "0.4"
+parking_lot = "0.9"
 
 async-std = "1"
 # surf = "1.0.3"
