@@ -442,6 +442,8 @@ impl Peer {
     async fn new(addr: SocketAddr, data: TorrentData) -> Result<Peer> {
         let stream = TcpStream::connect(&addr).await?;
 
+        println!("PEER CONNECTED {:?}", addr);
+        
         let reader = MyTcpStream(Arc::new(stream));
         let writer = reader.clone();
         
@@ -463,6 +465,7 @@ enum MessageActor {
 type PeerAddr = Sender<MessageActor>;
 
 /// Data shared between peers and torrent actor
+#[derive(Debug)]
 struct SharedData {
     torrent: Torrent
 }
@@ -473,6 +476,7 @@ impl SharedData {
     }
 }
 
+#[derive(Debug, Clone)]
 struct TorrentData(Arc<RwLock<SharedData>>);
 
 impl TorrentData {
@@ -534,7 +538,7 @@ impl TorrentActor {
         self.collect_trackers();
         
         if let Some(addrs) = self.find_tracker() {
-            self.connect_to_peers(&addrs);
+            self.connect_to_peers(&addrs, self.data.clone());
         }
     }
 
@@ -545,14 +549,23 @@ impl TorrentActor {
         self.trackers = trackers;
     }
 
-    fn connect_to_peers(&self, addrs: &[SocketAddr]) {
+    fn connect_to_peers(&self, addrs: &[SocketAddr], data: TorrentData) {
         for addr in addrs {
             println!("ADDR: {:?}", addr);
-            
-            std::thread::spawn(|| {
-                //let res = do_handshake(addr, &torrent);
-                //println!("RES: {:?}", res);
+
+            let addr = *addr;
+            let data = data.clone();
+            task::spawn(async move {
+                let res = Peer::new(addr, data).await;
+                if let Err(e) = res {
+                    println!("PEER ERROR {:?}", e);                    
+                };
+
             });
+            // std::thread::spawn(|| {
+            //     //let res = do_handshake(addr, &torrent);
+            //     //println!("RES: {:?}", res);
+            // });
             
         }
     }
@@ -562,7 +575,7 @@ impl TorrentActor {
         let torrent = &data.torrent;
 
         for tracker in &mut self.trackers {
-            let addrs = match tracker.announce(&torrent) {
+            match tracker.announce(&torrent) {
                 Ok(peers) => return Some(peers),
                 Err(e) => {
                     eprintln!("[Tracker announce] {:?}", e);
