@@ -389,154 +389,79 @@ enum PeerState {
 struct Peer {
     addr: SocketAddr,
     data: TorrentData,
-    reader: BufReader<MyTcpStream>,
-    writer: BufWriter<MyTcpStream>,
+    reader: BufReader<TcpStream>,
     state: PeerState,
     buffer: Vec<u8>
 }
 
 use async_std::sync::Mutex;
 
-#[derive(Clone)]
-struct MyTcpStream(Arc<TcpStream>);
-
-impl async_std::io::Read for MyTcpStream {
-    fn poll_read(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut async_std::task::Context<'_>,
-        buf: &mut [u8],
-    ) -> async_std::task::Poll<async_std::io::Result<usize>> {
-        async_std::io::Read::poll_read(
-            std::pin::Pin::new(Arc::get_mut(&mut self.0).unwrap()),
-            cx,
-            buf
-        )
-    }
-}
-
-impl async_std::io::Write for MyTcpStream {
-    fn poll_write(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut async_std::task::Context<'_>,
-        buf: &[u8],
-    ) -> async_std::task::Poll<async_std::io::Result<usize>> {
-        let pin = std::pin::Pin::new(Arc::get_mut(&mut self.0).unwrap());
-        pin.poll_write(cx, buf)
-    }
-
-    fn poll_flush(mut self: std::pin::Pin<&mut Self>, cx: &mut async_std::task::Context<'_>) -> async_std::task::Poll<async_std::io::Result<()>> {
-        let pin = std::pin::Pin::new(Arc::get_mut(&mut self.0).unwrap());
-        pin.poll_flush(cx)
-    }
-
-    fn poll_close(mut self: std::pin::Pin<&mut Self>, cx: &mut async_std::task::Context<'_>) -> async_std::task::Poll<async_std::io::Result<()>> {
-        let pin = std::pin::Pin::new(Arc::get_mut(&mut self.0).unwrap());
-        pin.poll_close(cx)
-    }
-}
-
 use async_std::net::TcpStream;
 use async_std::prelude::*;
 use async_std::io::{BufReader, BufWriter};
 
 impl Peer {
-    async fn new(addr: SocketAddr, data: TorrentData) -> Result<()> {
+    async fn new(addr: SocketAddr, data: TorrentData) -> Result<Peer> {
         let stream = TcpStream::connect(&addr).await?;
-
-        println!("PEER CONNECTED {:?}", addr);
         
-        let reader = MyTcpStream(Arc::new(stream));
-        let writer = reader.clone();
-        
-        let mut peer = Peer {
+        Ok(Peer {
             addr,
             data,
-            reader: BufReader::with_capacity(32 * 1024, reader),
-            writer: BufWriter::with_capacity(32 * 1024, writer),
+            reader: BufReader::with_capacity(32 * 1024, stream),
             state: PeerState::Connecting,
             buffer: Vec::with_capacity(32 * 1024)
-        };
+        })
+    }
 
-        //peer.start().await;
-        peer.do_handshake().await?;
+    fn writer(&mut self) -> &mut TcpStream {
+        self.reader.get_mut()
+    }
+
+    async fn start(&mut self) {
+        self.do_handshake().await;
+    }
+
+    async fn read_exactly(&mut self, n: usize) -> Result<()> {
+        let reader = self.reader.by_ref();
+        self.buffer.clear();
+        
+        if reader.take(n as u64).read_to_end(&mut self.buffer).await? != n {
+            return Err(async_std::io::Error::new(
+                async_std::io::ErrorKind::UnexpectedEof,
+                "Size doesn't match"
+            ).into());
+        }
         
         Ok(())
     }
 
-    // async fn new(addr: SocketAddr, data: TorrentData) -> Result<Peer> {
-    //     let stream = TcpStream::connect(&addr).await?;
-
-    //     println!("PEER CONNECTED {:?}", addr);
-        
-    //     let reader = MyTcpStream(Arc::new(stream));
-    //     let writer = reader.clone();
-        
-    //     Ok(Peer {
-    //         addr,
-    //         data,
-    //         reader: BufReader::with_capacity(32 * 1024, reader),
-    //         writer: BufWriter::with_capacity(32 * 1024, writer),
-    //         state: PeerState::Connecting,
-    //         buffer: Vec::with_capacity(32 * 1024)
-    //     })
-    // }
-
-    async fn start(&mut self) {
-        //self.do_handshake().await;
+    async fn write(&mut self, data: &[u8]) -> Result<()> {
+        let writer = self.writer();
+        writer.write_all(data).await?;
+        writer.flush().await?;
+        Ok(())
     }
    
     async fn do_handshake(&mut self) -> Result<()> {
-
-        println!("SENDING HANDSHAKE", );
-
         let mut handshake: [u8; 68] = [0; 68];
 
-        {
-            let mut cursor = Cursor::new(&mut handshake[..]);
+        let mut cursor = Cursor::new(&mut handshake[..]);
 
-            cursor.write(&[19])?;
-            cursor.write(b"BitTorrent protocol")?;
-            cursor.write(&[0,0,0,0,0,0,0,0])?;
-            self.data.with(|data| {
-                cursor.write(data.torrent.info_hash.as_ref());
-            });
-            cursor.write(b"-RT1220sJ1Nna5rzWLd8")?;
-        }
-        
-        let writer = &mut self.writer;
-        writer.write_all(&handshake).await?;
-        writer.flush().await?;
-        
-        // writer.write(&[19]).await?;
-        // writer.write(b"BitTorrent protocol").await?;
-        // writer.write(&[0,0,0,0,0,0,0,0]).await?;
-        // let data = self.data.clone();
-        // writer.write(data.torrent.info_hash.as_ref()).await?;
-        // // {
-        // //     let data = self.data.read();
-        // //     writer.write(data.torrent.info_hash.as_ref()).await?;
-        // // }
-        // writer.write(b"-RR1220sJ1Nna5rzWLd8").await?;
-        // writer.flush().await?;
+        cursor.write(&[19])?;
+        cursor.write(b"BitTorrent protocol")?;
+        cursor.write(&[0,0,0,0,0,0,0,0])?;
+        self.data.with(|data| {
+            cursor.write(data.torrent.info_hash.as_ref());
+        });
+        cursor.write(b"-RT1220sJ1Nna5rzWLd8")?;
+
+        self.write(&handshake).await?;
+
+        self.read_exactly(1).await?;
+        let len = self.buffer[0] as usize;
+        self.read_exactly(len + 48).await?;
 
         println!("DONE", );
-
-        println!("READING HANDSHAKE", );
-
-        let reader = &mut self.reader;
-        let reader = reader.by_ref();
-
-        reader.take(1).read_to_end(&mut self.buffer).await?;
-
-        let len = self.buffer[0] as u64;
-
-        reader.take(len + 48).read_to_end(&mut self.buffer).await?;
-
-        println!("HANDSHAKE DONE", );
-
-        // if &buffer[len + 8..len + 28] == torrent.info_hash.as_slice() {
-        //     //println!("HASH MATCHED !", );
-        // }
 
         Ok(())
     }
@@ -644,26 +569,14 @@ impl TorrentActor {
             
             task::spawn(async move {
                 let mut peer = match Peer::new(addr, data).await {
-                    Ok(_) => {}
+                    Ok(peer) => peer,
                     Err(e) => {
                         println!("PEER ERROR {:?}", e);
                         return;
                     }
                 };
-                // let mut peer = match Peer::new(addr, data).await {
-                //     Ok(mut peer) => peer.start().await,
-                //     Err(e) => {
-                //         println!("PEER ERROR {:?}", e);
-                //         return;
-                //     }
-                // };
-//                peer.start().await;
+                peer.start().await;
             });
-            // std::thread::spawn(|| {
-            //     //let res = do_handshake(addr, &torrent);
-            //     //println!("RES: {:?}", res);
-            // });
-            
         }
     }
     
