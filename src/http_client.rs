@@ -193,16 +193,30 @@ use std::time::Duration;
 use std::net::ToSocketAddrs;
 use std::convert::TryInto;
 
+fn try_addr(sockaddr: std::vec::IntoIter<std::net::SocketAddr>) -> Result<TcpStream> {
+    let mut last_err = None;
+    for addr in sockaddr {
+        match TcpStream::connect_timeout(
+            &addr,
+            Duration::from_secs(5)
+        ) {
+            Ok(stream) => return Ok(stream),
+            Err(e) => last_err = Some(Err(e))
+        }            
+    }
+    match last_err {
+        Some(e) => e?,
+        _ => Err(HttpError::HostResolution)?
+    }
+}
+
 fn send<T: DeserializeOwned>(url: Url, query: impl ToQuery) -> Result<T> {
     let sockaddr = (
         url.host_str().ok_or(HttpError::HostResolution)?,
         url.port().unwrap_or(80)
     ).to_socket_addrs()?;
 
-    let mut stream = TcpStream::connect_timeout(
-        sockaddr.as_slice().get(0).ok_or(HttpError::HostResolution)?,
-        Duration::from_secs(5)
-    )?;
+    let mut stream = try_addr(sockaddr)?;
 
     let req = format_request(&url, query);
 

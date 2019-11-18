@@ -3,6 +3,7 @@ use smallvec::SmallVec;
 use url::Url;
 
 use std::iter::Iterator;
+use std::sync::Arc;
 
 type StackVec<T> = SmallVec<[T; 16]>;
 
@@ -162,10 +163,39 @@ impl Torrent {
         };
 
         vec.push(self.meta.announce.as_ref());
+
+        println!("TRACKERS={:?}", vec);
         
         UrlIterator {
             index: 0,
             list: vec,
         }
+    }
+
+    pub fn files_total_size(&self) -> usize {
+        match &self.meta.info.files {
+            InfoFile::Single { length, .. } => {
+                *length as usize
+            },
+            InfoFile::Multiple { files, .. } => {
+                files.iter().fold(0, |acc, f| acc + f.length as usize)
+            }
+        }
+    }
+
+    pub fn sha_pieces(&self) -> Vec<Arc<Vec<u8>>> {
+        let pieces = self.meta.info.pieces.as_slice();
+        let mut vec = Vec::with_capacity(pieces.len() / 20);
+
+        println!("PIECES LEN = {:?}", pieces.len());
+        
+        for piece in pieces.chunks_exact(20) {
+            let mut bytes = Vec::with_capacity(20);
+            unsafe { bytes.set_len(20) }
+            bytes.as_mut_slice().copy_from_slice(piece);
+            vec.push(Arc::new(bytes));
+        }
+        
+        vec
     }
 }

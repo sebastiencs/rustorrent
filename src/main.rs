@@ -23,6 +23,8 @@ fn main() {
     //let (meta, info) = de::from_bytes_with_hash::<MetaTorrent>(&buffer).unwrap();
     let torrent = de::read_meta(&buffer).unwrap();
 
+    println!("TORRENT={:#?}", torrent);
+
     let mut session = Session::new();
 
     session.add_torrent(torrent);

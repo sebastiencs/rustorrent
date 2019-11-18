@@ -355,6 +355,7 @@ impl From<async_std::io::Error> for TorrentError {
     }
 }
 
+#[derive(Debug)]
 struct Tracker {
     url: Url,
     announce: Option<AnnounceResponse>
@@ -386,12 +387,19 @@ enum PeerState {
     Dead
 }
 
+enum Choke {
+    UnChoked,
+    Choked
+}
+
 struct Peer {
     addr: SocketAddr,
     data: TorrentData,
     reader: BufReader<TcpStream>,
     state: PeerState,
-    buffer: Vec<u8>
+    buffer: Vec<u8>,
+    /// Are we choked from the peer
+    choked: Choke,
 }
 
 use async_std::sync::Mutex;
@@ -496,7 +504,8 @@ impl Peer {
             data,
             reader: BufReader::with_capacity(32 * 1024, stream),
             state: PeerState::Connecting,
-            buffer: Vec::with_capacity(32 * 1024)
+            buffer: Vec::with_capacity(32 * 1024),
+            choked: Choke::Choked,
         })
     }
 
@@ -591,6 +600,14 @@ impl Peer {
         Ok(())
     }
 
+    fn set_choked(&mut self, choked: bool) {
+        self.choked = if choked {
+            Choke::Choked
+        } else {
+            Choke::UnChoked
+        };
+    }
+
     async fn dispatch<'a>(&'a mut self) -> Result<()> {
         use MessagePeer::*;
 
@@ -598,11 +615,13 @@ impl Peer {
         
         match msg {
             Choke => {
+                self.set_choked(true);
                 println!("CHOKE", );
             },
             UnChoke => {
                 // If the peer has piece we're interested in
                 // Send a Request
+                self.set_choked(false);
                 println!("UNCHOKE", );                
             },
             Interested => {
@@ -615,11 +634,21 @@ impl Peer {
             },
             Have { piece_index } => {
                 // Update peer info
+                // Send an Interested ?
+                self.data.with_write(|data| {
+                    data.pieces.update_have(piece_index);
+                });
                 println!("HAVE {}", piece_index);
             },
             BitField (bitfield) => {
                 // Send an Interested ?
-                println!("BITFIELD {:?}", bitfield.get(0..10));
+                self.data.with_write(|data| {
+                    data.pieces.update_from_bitfield(bitfield);
+                });
+                self.data.with(|data| {
+                    println!("BITFIELD {:?}", data.pieces.have_pieces);
+                });
+                //println!("BITFIELD {:?}", bitfield.get(0..10));
             },
             Request { index, begin, length } => {
                 // Mark this peer as interested
@@ -799,17 +828,103 @@ enum MessageActor {
     RemovePeer(PeerAddr),
 }
 
+#[derive(Debug)]
+struct Pieces {
+    /// Number of pieces
+    num_pieces: usize,
+    /// SHA1 of each piece
+    sha1_pieces: Vec<Arc<Vec<u8>>>,
+    /// Pieces other peers have
+    /// have_pieces[0] is the number of peers having the piece 0
+    have_pieces: Vec<u8>,
+    /// Size of a block
+    block_size: usize,
+    /// Number of block in 1 piece
+    nblocks_piece: usize,
+    /// Number of block in the last piece
+    nblocks_last_piece: usize,
+}
+
+impl From<&Torrent> for Pieces {
+    fn from(torrent: &Torrent) -> Pieces {
+        let sha1_pieces = torrent.sha_pieces();
+
+        let total = torrent.files_total_size();
+        let piece_length = torrent.meta.info.piece_length as usize;
+
+        if piece_length == 0 {
+            panic!("Invalid piece length");
+        }
+        
+        let num_pieces = (total + piece_length - 1) / piece_length;
+
+        if sha1_pieces.len() != num_pieces {
+            panic!("Invalid hashes");
+        }
+        
+        let mut have_pieces = Vec::with_capacity(num_pieces);
+        have_pieces.resize_with(num_pieces, || 0);
+        
+        let block_size = std::cmp::min(piece_length, 0x4000);
+        let nblocks_piece = (piece_length + block_size - 1) / block_size;
+        let nblocks_last_piece = ((total % piece_length) + block_size - 1) / block_size;
+        
+        Pieces {
+            num_pieces,
+            sha1_pieces,
+            have_pieces,
+            block_size,
+            nblocks_piece,
+            nblocks_last_piece
+        }
+    }
+}
+
+//use bit_field::BitArray;
+
+// TODO:
+// See https://doc.rust-lang.org/1.29.0/core/arch/x86_64/fn._popcnt64.html
+// https://github.com/rust-lang/packed_simd
+// https://stackoverflow.com/questions/42938907/is-it-possible-to-use-simd-instructions-in-rust
+
+impl Pieces {
+    fn update_from_bitfield(&mut self, bitfield: &[u8]) {
+        // TODO: Handle bitfield with wrong length
+        if bitfield.len() * 8 >= self.have_pieces.len() {
+            for (i, value) in self.have_pieces.iter_mut().enumerate() {
+                let slice_index = i / 8;
+                let bit_index = i % 8;
+
+                if bitfield[slice_index] & (1 << (7 - bit_index)) != 0 {
+                    *value = value.saturating_add(1);                
+                }
+            }
+        }
+    }
+
+    fn update_have(&mut self, piece_num: u32) {
+        // TODO: Handle inexistant piece
+        if let Some(piece) = self.have_pieces.get_mut(piece_num as usize) {
+            *piece = piece.saturating_add(1);
+        }
+    }
+}
+
 type PeerAddr = Sender<MessageActor>;
 
 /// Data shared between peers and torrent actor
 #[derive(Debug)]
 struct SharedData {
-    torrent: Torrent
+    torrent: Torrent,
+    pieces: Pieces
 }
 
 impl SharedData {
     fn new(torrent: Torrent) -> SharedData {
-        SharedData { torrent }
+        SharedData {
+            pieces: Pieces::from(&torrent),
+            torrent,
+        }
     }
 }
 
@@ -910,14 +1025,17 @@ impl TorrentActor {
         let data = self.data.read();
         let torrent = &data.torrent;
 
-        for tracker in &mut self.trackers {
-            match tracker.announce(&torrent) {
-                Ok(peers) => return Some(peers),
-                Err(e) => {
-                    eprintln!("[Tracker announce] {:?}", e);
-                    continue;
-                }
-            };
+        loop {
+            for tracker in &mut self.trackers {
+                println!("TRYING {:?}", tracker);
+                match tracker.announce(&torrent) {
+                    Ok(peers) => return Some(peers),
+                    Err(e) => {
+                        eprintln!("[Tracker announce] {:?}", e);
+                        continue;
+                    }
+                };
+            }
         }
         None
     }
