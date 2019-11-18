@@ -392,9 +392,67 @@ enum Choke {
     Choked
 }
 
+struct BitField {
+    inner: Vec<u8>,
+    nbits: u32
+}
+
+impl BitField {
+    fn new(bitfield: &[u8], nbits: u32) -> BitField {
+        BitField {
+            inner: Vec::from_slice(bitfield),
+            nbits
+        }
+    }
+
+    fn get_bit(&self, index: usize) -> bool {
+        if self.inner.len() * 8 > index {
+            let slice_index = index / 8;
+            let bit_index = index % 8;
+
+            self.inner[slice_index] & (1 << (7 - bit_index)) != 0
+        } else {
+            false
+        }
+    }
+}
+
+#[derive(Debug)]
+struct PiecesActor {
+    data: TorrentData,
+    pieces: Vec<bool>
+}
+
+impl PiecesActor {
+    fn new(data: &TorrentData) -> PiecesActor {
+        let npieces = data.with(|data| {
+            data.pieces.num_pieces
+        });
+
+        PiecesActor {
+            data: data.clone(),
+            pieces: Vec::with_capacity(npieces)
+        }
+    }
+    
+    fn start() {
+        
+    }
+
+    /// Return (piece, start)
+    fn get_piece_to_request(&self, bitfiels: &BitField) -> Option<(usize, usize)> {
+        let piece = self.pieces.iter().enumerate().position(|(index, p)| {
+            !*p && bitfiels.get_bit(index)
+        })?;
+
+        Some((piece, 0))
+    }
+}
+
 struct Peer {
     addr: SocketAddr,
     data: TorrentData,
+    files: PiecesActor,
     reader: BufReader<TcpStream>,
     state: PeerState,
     buffer: Vec<u8>,
@@ -409,13 +467,14 @@ use async_std::prelude::*;
 use async_std::io::{BufReader, BufWriter};
 
 trait FromSlice<T> {
-    fn from_slice(size: usize, slice: &[T]) -> Vec<T>;
+    fn from_slice(slice: &[T]) -> Vec<T>;
 }
 
 impl<T: Copy> FromSlice<T> for Vec<T> {
-    fn from_slice(size: usize, slice: &[T]) -> Vec<T> {
-        let mut vec = Vec::with_capacity(size);
-        unsafe { vec.set_len(size); }
+    fn from_slice(slice: &[T]) -> Vec<T> {
+        let len = slice.len();
+        let mut vec = Vec::with_capacity(len);
+        unsafe { vec.set_len(len); }
         vec.as_mut_slice().copy_from_slice(slice);
         vec
     }
@@ -514,6 +573,7 @@ impl Peer {
         
         Ok(Peer {
             addr,
+            //files: PiecesActor::new(&data),
             data,
             reader: BufReader::with_capacity(32 * 1024, stream),
             state: PeerState::Connecting,
@@ -929,7 +989,8 @@ type PeerAddr = Sender<MessageActor>;
 #[derive(Debug)]
 struct SharedData {
     torrent: Torrent,
-    pieces: Pieces
+    pieces: Pieces,
+//    files: FilesActor
 }
 
 impl SharedData {
@@ -949,6 +1010,10 @@ impl TorrentData {
         TorrentData(Arc::new(RwLock::new(
             SharedData::new(torrent)
         )))
+    }
+
+    fn clone(&self) -> TorrentData {
+        TorrentData(Arc::clone(&self.0))
     }
     
     fn with<R, F>(&self, mut fun: F) -> R
