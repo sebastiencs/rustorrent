@@ -400,6 +400,93 @@ use async_std::net::TcpStream;
 use async_std::prelude::*;
 use async_std::io::{BufReader, BufWriter};
 
+#[derive(Debug)]
+enum MessagePeer<'a> {
+    KeepAlive,
+    Choke,
+    UnChoke,
+    Interested,
+    NotInterested,
+    Have {
+        piece_index: u32
+    },
+    BitField(&'a [u8]),
+    Request {
+        index: u32,
+        begin: u32,
+        length: u32,
+    },
+    Piece {
+        index: u32,
+        begin: u32,
+        block: &'a [u8],
+    },
+    Cancel {
+        index: u32,
+        begin: u32,
+        length: u32,
+    },
+    Port(u16),
+    Unknown(u8)
+}
+
+use std::convert::TryFrom;
+
+impl<'a> TryFrom<&'a [u8]> for MessagePeer<'a> {
+    type Error = TorrentError;
+    
+    fn try_from(buffer: &'a [u8]) -> Result<MessagePeer> {
+        let id = buffer[0];
+        let buffer = &buffer[1..];
+        Ok(match id {
+            0 => MessagePeer::Choke,
+            1 => MessagePeer::UnChoke,
+            2 => MessagePeer::Interested,
+            3 => MessagePeer::NotInterested,
+            4 => {
+                let mut cursor = Cursor::new(buffer);
+                let piece_index = cursor.read_u32::<BigEndian>()?;
+                
+                MessagePeer::Have { piece_index }
+            }
+            5 => {
+                MessagePeer::BitField(buffer)
+            }
+            6 => {
+                let mut cursor = Cursor::new(buffer);
+                let index = cursor.read_u32::<BigEndian>()?;
+                let begin = cursor.read_u32::<BigEndian>()?;
+                let length = cursor.read_u32::<BigEndian>()?;
+
+                MessagePeer::Request { index, begin, length }
+            }
+            7 => {
+                let mut cursor = Cursor::new(buffer);
+                let index = cursor.read_u32::<BigEndian>()?;
+                let begin = cursor.read_u32::<BigEndian>()?;
+                let block = &buffer[8..];
+
+                MessagePeer::Piece { index, begin, block }
+            }
+            8 => {
+                let mut cursor = Cursor::new(buffer);
+                let index = cursor.read_u32::<BigEndian>()?;
+                let begin = cursor.read_u32::<BigEndian>()?;
+                let length = cursor.read_u32::<BigEndian>()?;
+
+                MessagePeer::Cancel { index, begin, length }
+            }
+            9 => {
+                let mut cursor = Cursor::new(buffer);
+                let port = cursor.read_u16::<BigEndian>()?;
+
+                MessagePeer::Port(port)
+            }
+            x => MessagePeer::Unknown(x)
+        })
+    }
+}
+
 impl Peer {
     async fn new(addr: SocketAddr, data: TorrentData) -> Result<Peer> {
         let stream = TcpStream::connect(&addr).await?;
@@ -413,13 +500,250 @@ impl Peer {
         })
     }
 
+    async fn send_message(&mut self, msg: MessagePeer<'_>) -> Result<()> {
+        self.write_message_in_buffer(msg);
+
+        let writer = self.reader.get_mut();
+        writer.write_all(self.buffer.as_slice()).await?;
+        writer.flush().await?;
+        
+        Ok(())
+    }
+
+    fn write_message_in_buffer(&mut self, msg: MessagePeer<'_>) {
+        self.buffer.clear();
+        let mut cursor = Cursor::new(&mut self.buffer);
+
+        match msg {
+            MessagePeer::Choke => {
+                cursor.write_u32::<BigEndian>(1).unwrap();
+                cursor.write_u8(0).unwrap();                
+            }
+            MessagePeer::UnChoke => {
+                cursor.write_u32::<BigEndian>(1).unwrap();
+                cursor.write_u8(1).unwrap();                
+            }
+            MessagePeer::Interested => {
+                cursor.write_u32::<BigEndian>(1).unwrap();
+                cursor.write_u8(2).unwrap();                
+            }
+            MessagePeer::NotInterested => {
+                cursor.write_u32::<BigEndian>(1).unwrap();
+                cursor.write_u8(3).unwrap();                
+            }
+            MessagePeer::Have { piece_index } => {
+                cursor.write_u32::<BigEndian>(5).unwrap();
+                cursor.write_u8(4).unwrap();                
+                cursor.write_u32::<BigEndian>(piece_index).unwrap();                
+            }
+            MessagePeer::BitField (bitfield) => {
+                cursor.write_u32::<BigEndian>(1 + bitfield.len() as u32).unwrap();
+                cursor.write_u8(5).unwrap();                
+                cursor.write_all(bitfield).unwrap();
+            }
+            MessagePeer::Request { index, begin, length } => {
+                cursor.write_u32::<BigEndian>(13).unwrap();
+                cursor.write_u8(6).unwrap();                
+                cursor.write_u32::<BigEndian>(index).unwrap();
+                cursor.write_u32::<BigEndian>(begin).unwrap();
+                cursor.write_u32::<BigEndian>(length).unwrap();
+            }
+            MessagePeer::Piece { index, begin, block } => {
+                cursor.write_u32::<BigEndian>(9 + block.len() as u32).unwrap();
+                cursor.write_u8(7).unwrap();                
+                cursor.write_u32::<BigEndian>(index).unwrap();
+                cursor.write_u32::<BigEndian>(begin).unwrap();
+                cursor.write_all(block).unwrap();
+            }
+            MessagePeer::Cancel { index, begin, length } => {
+                cursor.write_u32::<BigEndian>(13).unwrap();
+                cursor.write_u8(8).unwrap();                
+                cursor.write_u32::<BigEndian>(index).unwrap();
+                cursor.write_u32::<BigEndian>(begin).unwrap();
+                cursor.write_u32::<BigEndian>(length).unwrap();
+            }
+            MessagePeer::Port (port) => {
+                cursor.write_u32::<BigEndian>(3).unwrap();
+                cursor.write_u8(9).unwrap();                
+                cursor.write_u16::<BigEndian>(port).unwrap();
+            }
+            MessagePeer::KeepAlive => {
+                cursor.write_u32::<BigEndian>(0).unwrap();                
+            }
+            MessagePeer::Unknown (_) => unreachable!()
+        }
+        
+        cursor.flush();
+    }
+
     fn writer(&mut self) -> &mut TcpStream {
         self.reader.get_mut()
     }
 
-    async fn start(&mut self) {
-        self.do_handshake().await;
+    async fn start(&mut self) -> Result<()> {
+        self.do_handshake().await?;
+
+        loop {
+            self.read_messages().await?;
+            self.dispatch().await?;
+        }
+        
+        Ok(())
     }
+
+    async fn dispatch<'a>(&'a mut self) -> Result<()> {
+        use MessagePeer::*;
+
+        let msg = MessagePeer::try_from(self.buffer.as_slice())?;
+        
+        match msg {
+            Choke => {
+                println!("CHOKE", );
+            },
+            UnChoke => {
+                // If the peer has piece we're interested in
+                // Send a Request
+                println!("UNCHOKE", );                
+            },
+            Interested => {
+                // Unshoke this peer
+                println!("INTERESTED", );                
+            },
+            NotInterested => {
+                // Shoke this peer
+                println!("NOT INTERESTED", );                
+            },
+            Have { piece_index } => {
+                // Update peer info
+                println!("HAVE {}", piece_index);
+            },
+            BitField (bitfield) => {
+                // Send an Interested ?
+                println!("BITFIELD {:?}", bitfield.get(0..10));
+            },
+            Request { index, begin, length } => {
+                // Mark this peer as interested
+                // Make sure this peer is not choked, send a choke
+                println!("REQUEST {} {} {}", index, begin, length);
+            },
+            Piece { index, begin, block } => {
+                // If we already have it, send another Request
+                // Check the sum and write to disk
+                // Send Request
+                println!("PIECE {} {} {:?}", index, begin, block);
+            },
+            Cancel { index, begin, length } => {
+                // Cancel a Request
+                println!("PIECE {} {} {}", index, begin, length);
+            },
+            Port (port) => {
+                println!("PORT {}", port);
+            },
+            KeepAlive => {
+                println!("KEEP ALICE");
+            }
+            Unknown (x) => {
+                // Check extension
+                // Disconnect
+                println!("UNKNOWN {:?}", x);
+            }
+        }
+        Ok(())
+    }
+
+    async fn read_messages(&mut self) -> Result<()> {
+        self.read_exactly(4).await?;
+        
+        let length = {
+            let mut cursor = Cursor::new(&self.buffer);
+            cursor.read_u32::<BigEndian>()? as usize
+        };
+        
+        // println!("LENGTH={} {:?}", length, &self.buffer[..]);
+
+        if length == 0 {
+            return Ok(()); // continue
+        }
+        
+        self.read_exactly(length).await?;
+
+        Ok(())
+
+        // let mut last_have = 0;
+
+        // let (id, buffer) = (self.buffer[0], &self.buffer[..]);
+
+        // return MessagePeer::try_from(self.buffer.as_slice());
+
+        //println!("MESSAGE {:?}", message);
+        
+        // match id {
+        //     0 => {
+        //         println!("CHOKE {:?} {:?}", String::from_utf8_lossy(&buffer[1..]), &buffer[..]);
+        //     }
+        //     1 => {
+        //         println!("UNCHOKE", );
+                
+        //         let mut aa: [u8; 17] = [0; 17];
+        //         let mut cursor = Cursor::new(&mut aa[..]);
+        //         cursor.write_u32::<BigEndian>(13)?;
+        //         cursor.write_u8(6)?;
+        //         cursor.write_u32::<BigEndian>(last_have)?;
+        //         cursor.write_u32::<BigEndian>(0)?;
+        //         cursor.write_u32::<BigEndian>(16384)?;
+                
+        //         // stream.write_all(&aa)?;
+        //         // stream.flush()?;
+
+        //         println!("REQUEST SENT");
+        //     }
+        //     2 => println!("INTERESTED", ),
+        //     3 => println!("NOT INTERESTED", ),
+        //     4 => {
+        //         //cursor.set_position(1);
+        //         let mut cursor = Cursor::new(&buffer[1..]);
+        //         last_have = cursor.read_u32::<BigEndian>()?;
+        //         println!("HAVE {:?}", last_have);
+        //     }
+        //     5 => {
+        //         println!("BITFIELD {:?}", &buffer[1..]);
+                
+        //         let mut aa: [u8; 5] = [0; 5];
+        //         let mut cursor = Cursor::new(&mut aa[..]);
+        //         cursor.write_u32::<BigEndian>(1)?;
+        //         cursor.write_u8(2)?;
+                
+        //         // stream.write_all(&aa)?;
+        //         // stream.flush()?;
+
+        //         println!("INTERESTED SENT");
+        //     }
+        //     6 => {
+        //         println!("REQUEST {:?}", &buffer[1..]);
+        //     }
+        //     7 => {
+        //         // piece: <len=0009+X><id=7><index><begin><block>
+                
+        //         let mut cursor = Cursor::new(&buffer[1..]);
+
+        //         let index = cursor.read_u32::<BigEndian>()?;
+        //         let begin = cursor.read_u32::<BigEndian>()?;
+                
+        //         println!("PIECE ! {:?} {:?}", index, begin);
+        //     }
+        //     x => { println!("UNKNOWN {} {:?}", x, &buffer[1..]); }
+        // }
+        //     i += 1;
+        //     // if i >= 6 {
+        //     //     return Ok(())
+        //     // }
+        // }
+        // Ok(())
+    }
+
+    // fn loop_on_messages(&mut self) -> Result<()> {
+        
+    // }
 
     async fn read_exactly(&mut self, n: usize) -> Result<()> {
         let reader = self.reader.by_ref();
@@ -460,6 +784,8 @@ impl Peer {
         self.read_exactly(1).await?;
         let len = self.buffer[0] as usize;
         self.read_exactly(len + 48).await?;
+
+        // TODO: Check the info hash and send to other TorrentActor if necessary
 
         println!("DONE", );
 
@@ -636,7 +962,7 @@ enum SessionCommand {
 
 pub struct Session {
     handle: std::thread::JoinHandle<()>,
-    inner: Sender<SessionCommand>,
+    actor: Sender<SessionCommand>,
 }
 
 impl Session {
@@ -651,10 +977,10 @@ impl Session {
             session.start();
         });
         
-        Session { handle, inner: sender }
+        Session { handle, actor: sender }
     }
     
     pub fn add_torrent(&mut self, torrent: Torrent) {
-        self.inner.send(SessionCommand::AddTorrent(torrent));
+        self.actor.send(SessionCommand::AddTorrent(torrent));
     }
 }
