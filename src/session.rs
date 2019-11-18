@@ -408,6 +408,19 @@ use async_std::net::TcpStream;
 use async_std::prelude::*;
 use async_std::io::{BufReader, BufWriter};
 
+trait FromSlice<T> {
+    fn from_slice(size: usize, slice: &[T]) -> Vec<T>;
+}
+
+impl<T: Copy> FromSlice<T> for Vec<T> {
+    fn from_slice(size: usize, slice: &[T]) -> Vec<T> {
+        let mut vec = Vec::with_capacity(size);
+        unsafe { vec.set_len(size); }
+        vec.as_mut_slice().copy_from_slice(slice);
+        vec
+    }
+}
+
 #[derive(Debug)]
 enum MessagePeer<'a> {
     KeepAlive,
