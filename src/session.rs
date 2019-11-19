@@ -397,20 +397,45 @@ enum Choke {
 }
 
 #[derive(Debug)]
+struct PieceStealer {
+    /// Id of the peer
+    peer_id: usize,
+    stealer: Stealer<PieceToDownload>
+}
+
+impl PieceStealer {
+    fn new(peer: &Peer) -> PieceStealer {
+        PieceStealer {
+            peer_id: peer.id,
+            stealer: peer.worker.stealer()
+        }
+    }
+}
+
+#[derive(Debug)]
 struct PiecesActor {
     data: TorrentData,
-    pieces: RwLock<Vec<bool>>
+    pieces: RwLock<Vec<Option<PieceStealer>>>,
+    nblocks_piece: usize,
+    block_size: usize,
 }
 
 impl PiecesActor {
     fn new(data: &TorrentData) -> PiecesActor {
-        let npieces = data.with(|data| {
-            data.pieces.num_pieces
+        let (npieces, nblocks_piece, block_size) = data.with(|data| {
+            (data.pieces.num_pieces, data.pieces.nblocks_piece, data.pieces.block_size)
         });
+
+        let mut p = Vec::with_capacity(npieces);
+        for _ in 0..npieces {
+            p.push(None);
+        }
 
         PiecesActor {
             data: data.clone(),
-            pieces: RwLock::new(vec![false; npieces])
+            nblocks_piece,
+            block_size,
+            pieces: RwLock::new(p),
         }
     }
     
@@ -418,60 +443,69 @@ impl PiecesActor {
         
     }
 
-    fn find_piece(&self, pieces: &[bool], bitfield: &BitField) -> Option<usize> {
-        let res = 
-        pieces.iter().enumerate().position(|(index, p)| {
-            !*p && bitfield.get_bit(index)
-        });
-//        println!("FIND_PIECE={:?}", res);
-//        println!("FIND_PIECE={:?} {:?} {:?}", res, pieces, bitfield);
-        res
-    }
-
-    fn is_interested(&self, update: &BitFieldUpdate) -> Option<(usize, usize)> {
+    fn get_pieces_to_downloads(&self, peer: &Peer, update: &BitFieldUpdate) {
+        let mut pieces = self.pieces.write();
         match update {
             BitFieldUpdate::BitField(bitfield) => {
-                let pieces = self.pieces.read();
-                self.find_piece(&pieces, bitfield).map(|p| (p, 0))
+                let pieces = pieces.iter_mut()
+                                   .enumerate()
+                                   .filter(|(index, p)| p.is_none() && bitfield.get_bit(*index))
+                                   .take(5);
+                
+                let nblock_piece = self.nblocks_piece;
+                let block_size = self.block_size;
+                let worker = &peer.worker;
+
+                let mut i = 0;
+                for (piece, value) in pieces {
+                    for i in 0..nblock_piece {
+                        worker.push(PieceToDownload::new(piece, i * block_size));
+                    }
+                    // println!("PUSHING PIECE={} TO PEER {:?}", piece, peer.id);
+                    value.replace(PieceStealer::new(peer));
+                    i += 1;
+                }
             }
             BitFieldUpdate::Piece(piece) => {
-                let pieces = self.pieces.read();
                 let piece = *piece;
-                pieces.get(piece).copied().map(|p| (piece, 0))
-            }
+
+                if piece >= pieces.len() {
+                    return;
+                }
+                
+                if pieces.get(piece).unwrap().is_none() {
+                    let nblock_piece = self.nblocks_piece;
+                    let block_size = self.block_size;
+                    let worker = &peer.worker;
+
+                    for i in 0..nblock_piece {
+                        worker.push(PieceToDownload::new(piece, i * block_size));
+                    }
+
+                    println!("_PUSHING PIECE={} TO PEER {:?}", piece, peer.id);
+                    pieces.get_mut(piece).unwrap().replace(PieceStealer::new(peer));
+                }
+
+            }            
         }
     }
+}
 
-    /// Return (piece, start)
-    fn acquire_piece_inner(&self, pieces: &mut [bool], bitfield: &BitField) -> Option<(usize, usize)> {
-        match self.find_piece(&pieces, bitfield) {
-            Some(piece) => {
-                pieces[piece] = true;
-                Some((piece, 0))
-            }
-            _ => None
-        }
-    }
+use crossbeam_deque::{Worker, Injector, Stealer};
 
-    /// Return (piece, start)
-    fn acquire_piece(&self, bitfield: &BitField) -> Option<(usize, usize)> {
-        let mut pieces = self.pieces.write();
-        self.acquire_piece_inner(&mut pieces, bitfield)
-    }
+struct PieceToDownload {
+    piece: u32,
+    start: u32
+}
 
-    fn acquire_this_piece_or_new(&self, piece: usize, bitfield: &BitField) -> Option<(usize, usize)> {
-        let mut pieces = self.pieces.write();
-        
-        if let Some(false) = pieces.get(piece) {
-            pieces[piece] = true;
-            return Some((piece, 0))
-        };
-
-        self.acquire_piece_inner(&mut pieces, bitfield)
+impl PieceToDownload {
+    fn new(piece: usize, start: usize) -> PieceToDownload {
+        PieceToDownload { piece: piece as u32, start: start as u32 }
     }
 }
 
 struct Peer {
+    id: usize,
     addr: SocketAddr,
     data: TorrentData,
     pieces_actor: Arc<PiecesActor>,
@@ -482,7 +516,8 @@ struct Peer {
     choked: Choke,
     /// BitField of the peer
     bitfield: BitField,
-    //worker: 
+    /// List of pieces to download
+    worker: Worker<PieceToDownload>
 }
 
 use async_std::sync::Mutex;
@@ -597,6 +632,13 @@ impl From<BitField> for BitFieldUpdate {
     }
 }
 
+use std::{
+    sync::atomic::{AtomicUsize, Ordering},
+    thread,
+};
+
+static PEER_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
 impl Peer {
     async fn new(addr: SocketAddr, data: TorrentData, pieces_actor: Arc<PiecesActor>) -> Result<Peer> {
         let stream = TcpStream::connect(&addr).await?;
@@ -608,6 +650,8 @@ impl Peer {
             pieces_actor,
             data,
             bitfield,
+            id: PEER_COUNTER.fetch_add(1, Ordering::SeqCst),
+            worker: Worker::new_lifo(),
             reader: BufReader::with_capacity(32 * 1024, stream),
             state: PeerState::Connecting,
             buffer: Vec::with_capacity(32 * 1024),
@@ -767,16 +811,16 @@ impl Peer {
             Have { piece_index } => {
                 let update = BitFieldUpdate::from(piece_index);
 
-                let interested = self.pieces_actor.is_interested(&update);
+                self.pieces_actor.get_pieces_to_downloads(&self, &update);
 
                 self.update_bitfield(update);
                 
                 println!("HAVE {}", piece_index);
-                if let Some((piece, index)) = interested {
-                    println!("INTERESTED", );
-                    // If unchoked Request
-                    self.send_message(MessagePeer::Interested).await?;
-                }
+                // if let Some((piece, index)) = interested {
+                //     println!("INTERESTED", );
+                //     // If unchoked Request
+                //     self.send_message(MessagePeer::Interested).await?;
+                // }
             },
             BitField (bitfield) => {
                 // Send an Interested ?
@@ -785,31 +829,30 @@ impl Peer {
                     bitfield,
                     self.data.with(|data| data.pieces.num_pieces)
                 )?;
-
-                let interested = self.pieces_actor.acquire_piece(&bitfield);
                 
                 let update = BitFieldUpdate::from(bitfield);
-
+                
+                self.pieces_actor.get_pieces_to_downloads(&self, &update);
                 
                 self.update_bitfield(update);
 
                 println!("BITFIELD", );
-                if let Some((piece, index)) = interested {
-                    // If unchoked Request
-                    if self.am_choked() {
-                        println!("SEND INTERESTED", );
-                        self.send_message(MessagePeer::Interested).await?;
-                    } else {
-                        if let Some((piece, index)) = self.pieces_actor.acquire_this_piece_or_new(piece, &self.bitfield) {
-                            println!("SEND REQUEST", );
-                            self.send_message(MessagePeer::Request {
-                                index: piece as u32,
-                                begin: index as u32,
-                                length: 0x4000,
-                            });                            
-                        };
-                    }
-                }
+                // if let Some((piece, index)) = interested {
+                //     // If unchoked Request
+                //     if self.am_choked() {
+                //         println!("SEND INTERESTED", );
+                //         self.send_message(MessagePeer::Interested).await?;
+                //     } else {
+                //         if let Some((piece, index)) = self.pieces_actor.acquire_this_piece_or_new(piece, &self.bitfield) {
+                //             println!("SEND REQUEST", );
+                //             self.send_message(MessagePeer::Request {
+                //                 index: piece as u32,
+                //                 begin: index as u32,
+                //                 length: 0x4000,
+                //             });                            
+                //         };
+                //     }
+                // }
                 
             },
             Request { index, begin, length } => {
@@ -944,6 +987,8 @@ struct Pieces {
     nblocks_piece: usize,
     /// Number of block in the last piece
     nblocks_last_piece: usize,
+    /// Piece length
+    piece_length: usize,
 }
 
 impl From<&Torrent> for Pieces {
@@ -976,7 +1021,8 @@ impl From<&Torrent> for Pieces {
             peers_pieces,
             block_size,
             nblocks_piece,
-            nblocks_last_piece
+            nblocks_last_piece,
+            piece_length
         }
     }
 }
