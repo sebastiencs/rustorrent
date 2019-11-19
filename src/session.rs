@@ -1,5 +1,7 @@
 use crate::metadata::Torrent;
 use crate::http_client::{self, AnnounceQuery, AnnounceResponse};
+use crate::bitfield::BitField;
+use crate::utils::FromSlice;
 
 // enum State {
 //     Handshaking,
@@ -333,7 +335,8 @@ use crate::http_client::HttpError;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
 #[derive(Debug)]
-enum TorrentError {
+pub enum TorrentError {
+    InvalidInput,
     Http(HttpError),
     IO(std::io::Error),
     IOAsync(async_std::io::Error)
@@ -387,40 +390,16 @@ enum PeerState {
     Dead
 }
 
+#[derive(Debug, PartialEq, Eq)]
 enum Choke {
     UnChoked,
     Choked
 }
 
-struct BitField {
-    inner: Vec<u8>,
-    nbits: u32
-}
-
-impl BitField {
-    fn new(bitfield: &[u8], nbits: u32) -> BitField {
-        BitField {
-            inner: Vec::from_slice(bitfield),
-            nbits
-        }
-    }
-
-    fn get_bit(&self, index: usize) -> bool {
-        if self.inner.len() * 8 > index {
-            let slice_index = index / 8;
-            let bit_index = index % 8;
-
-            self.inner[slice_index] & (1 << (7 - bit_index)) != 0
-        } else {
-            false
-        }
-    }
-}
-
 #[derive(Debug)]
 struct PiecesActor {
     data: TorrentData,
-    pieces: Vec<bool>
+    pieces: RwLock<Vec<bool>>
 }
 
 impl PiecesActor {
@@ -431,7 +410,7 @@ impl PiecesActor {
 
         PiecesActor {
             data: data.clone(),
-            pieces: Vec::with_capacity(npieces)
+            pieces: RwLock::new(vec![false; npieces])
         }
     }
     
@@ -439,25 +418,71 @@ impl PiecesActor {
         
     }
 
-    /// Return (piece, start)
-    fn get_piece_to_request(&self, bitfiels: &BitField) -> Option<(usize, usize)> {
-        let piece = self.pieces.iter().enumerate().position(|(index, p)| {
-            !*p && bitfiels.get_bit(index)
-        })?;
+    fn find_piece(&self, pieces: &[bool], bitfield: &BitField) -> Option<usize> {
+        let res = 
+        pieces.iter().enumerate().position(|(index, p)| {
+            !*p && bitfield.get_bit(index)
+        });
+//        println!("FIND_PIECE={:?}", res);
+//        println!("FIND_PIECE={:?} {:?} {:?}", res, pieces, bitfield);
+        res
+    }
 
-        Some((piece, 0))
+    fn is_interested(&self, update: &BitFieldUpdate) -> Option<(usize, usize)> {
+        match update {
+            BitFieldUpdate::BitField(bitfield) => {
+                let pieces = self.pieces.read();
+                self.find_piece(&pieces, bitfield).map(|p| (p, 0))
+            }
+            BitFieldUpdate::Piece(piece) => {
+                let pieces = self.pieces.read();
+                let piece = *piece;
+                pieces.get(piece).copied().map(|p| (piece, 0))
+            }
+        }
+    }
+
+    /// Return (piece, start)
+    fn acquire_piece_inner(&self, pieces: &mut [bool], bitfield: &BitField) -> Option<(usize, usize)> {
+        match self.find_piece(&pieces, bitfield) {
+            Some(piece) => {
+                pieces[piece] = true;
+                Some((piece, 0))
+            }
+            _ => None
+        }
+    }
+
+    /// Return (piece, start)
+    fn acquire_piece(&self, bitfield: &BitField) -> Option<(usize, usize)> {
+        let mut pieces = self.pieces.write();
+        self.acquire_piece_inner(&mut pieces, bitfield)
+    }
+
+    fn acquire_this_piece_or_new(&self, piece: usize, bitfield: &BitField) -> Option<(usize, usize)> {
+        let mut pieces = self.pieces.write();
+        
+        if let Some(false) = pieces.get(piece) {
+            pieces[piece] = true;
+            return Some((piece, 0))
+        };
+
+        self.acquire_piece_inner(&mut pieces, bitfield)
     }
 }
 
 struct Peer {
     addr: SocketAddr,
     data: TorrentData,
-    files: PiecesActor,
+    pieces_actor: Arc<PiecesActor>,
     reader: BufReader<TcpStream>,
     state: PeerState,
     buffer: Vec<u8>,
     /// Are we choked from the peer
     choked: Choke,
+    /// BitField of the peer
+    bitfield: BitField,
+    //worker: 
 }
 
 use async_std::sync::Mutex;
@@ -465,20 +490,6 @@ use async_std::sync::Mutex;
 use async_std::net::TcpStream;
 use async_std::prelude::*;
 use async_std::io::{BufReader, BufWriter};
-
-trait FromSlice<T> {
-    fn from_slice(slice: &[T]) -> Vec<T>;
-}
-
-impl<T: Copy> FromSlice<T> for Vec<T> {
-    fn from_slice(slice: &[T]) -> Vec<T> {
-        let len = slice.len();
-        let mut vec = Vec::with_capacity(len);
-        unsafe { vec.set_len(len); }
-        vec.as_mut_slice().copy_from_slice(slice);
-        vec
-    }
-}
 
 #[derive(Debug)]
 enum MessagePeer<'a> {
@@ -567,14 +578,36 @@ impl<'a> TryFrom<&'a [u8]> for MessagePeer<'a> {
     }
 }
 
+use std::borrow::Cow;
+
+enum BitFieldUpdate {
+    BitField(BitField),
+    Piece(usize)
+}
+
+impl From<u32> for BitFieldUpdate {
+    fn from(p: u32) -> BitFieldUpdate {
+        BitFieldUpdate::Piece(p as usize)
+    }
+}
+
+impl From<BitField> for BitFieldUpdate {
+    fn from(b: BitField) -> BitFieldUpdate {
+        BitFieldUpdate::BitField(b)
+    }
+}
+
 impl Peer {
-    async fn new(addr: SocketAddr, data: TorrentData) -> Result<Peer> {
+    async fn new(addr: SocketAddr, data: TorrentData, pieces_actor: Arc<PiecesActor>) -> Result<Peer> {
         let stream = TcpStream::connect(&addr).await?;
+
+        let bitfield = BitField::new(data.with(|d| d.pieces.num_pieces));
         
         Ok(Peer {
             addr,
-            //files: PiecesActor::new(&data),
+            pieces_actor,
             data,
+            bitfield,
             reader: BufReader::with_capacity(32 * 1024, stream),
             state: PeerState::Connecting,
             buffer: Vec::with_capacity(32 * 1024),
@@ -681,6 +714,25 @@ impl Peer {
         };
     }
 
+    fn am_choked(&self) -> bool {
+        self.choked == Choke::Choked
+    }
+
+    fn update_bitfield(&mut self, update: BitFieldUpdate) {
+        self.data.with_write(|data| {
+            data.pieces.update(&update);
+        });
+        
+        match update {
+            BitFieldUpdate::BitField(bitfield) => {
+                self.bitfield = bitfield;
+            }
+            BitFieldUpdate::Piece(piece) => {
+                self.bitfield.set_bit(piece as usize);
+            }
+        }
+    }
+
     async fn dispatch<'a>(&'a mut self) -> Result<()> {
         use MessagePeer::*;
 
@@ -695,7 +747,14 @@ impl Peer {
                 // If the peer has piece we're interested in
                 // Send a Request
                 self.set_choked(false);
-                println!("UNCHOKE", );                
+                println!("UNCHOKE", );
+                
+                // self.send_message(MessagePeer::Request {
+                //     index: piece as u32,
+                //     begin: index as u32,
+                //     length: 0x4000,
+                // });                            
+
             },
             Interested => {
                 // Unshoke this peer
@@ -706,26 +765,56 @@ impl Peer {
                 println!("NOT INTERESTED", );                
             },
             Have { piece_index } => {
-                // Update peer info
-                // Send an Interested ?
-                self.data.with_write(|data| {
-                    data.pieces.update_have(piece_index);
-                });
+                let update = BitFieldUpdate::from(piece_index);
+
+                let interested = self.pieces_actor.is_interested(&update);
+
+                self.update_bitfield(update);
+                
                 println!("HAVE {}", piece_index);
+                if let Some((piece, index)) = interested {
+                    println!("INTERESTED", );
+                    // If unchoked Request
+                    self.send_message(MessagePeer::Interested).await?;
+                }
             },
             BitField (bitfield) => {
                 // Send an Interested ?
-                self.data.with_write(|data| {
-                    data.pieces.update_from_bitfield(bitfield);
-                });
-                self.data.with(|data| {
-                    println!("BITFIELD {:?}", data.pieces.have_pieces);
-                });
-                //println!("BITFIELD {:?}", bitfield.get(0..10));
+
+                let bitfield = crate::bitfield::BitField::from(
+                    bitfield,
+                    self.data.with(|data| data.pieces.num_pieces)
+                )?;
+
+                let interested = self.pieces_actor.acquire_piece(&bitfield);
+                
+                let update = BitFieldUpdate::from(bitfield);
+
+                
+                self.update_bitfield(update);
+
+                println!("BITFIELD", );
+                if let Some((piece, index)) = interested {
+                    // If unchoked Request
+                    if self.am_choked() {
+                        println!("SEND INTERESTED", );
+                        self.send_message(MessagePeer::Interested).await?;
+                    } else {
+                        if let Some((piece, index)) = self.pieces_actor.acquire_this_piece_or_new(piece, &self.bitfield) {
+                            println!("SEND REQUEST", );
+                            self.send_message(MessagePeer::Request {
+                                index: piece as u32,
+                                begin: index as u32,
+                                length: 0x4000,
+                            });                            
+                        };
+                    }
+                }
+                
             },
             Request { index, begin, length } => {
                 // Mark this peer as interested
-                // Make sure this peer is not choked, send a choke
+                // Make sure this peer is not choked or resend a choke
                 println!("REQUEST {} {} {}", index, begin, length);
             },
             Piece { index, begin, block } => {
@@ -760,8 +849,6 @@ impl Peer {
             let mut cursor = Cursor::new(&self.buffer);
             cursor.read_u32::<BigEndian>()? as usize
         };
-        
-        // println!("LENGTH={} {:?}", length, &self.buffer[..]);
 
         if length == 0 {
             return Ok(()); // continue
@@ -770,82 +857,7 @@ impl Peer {
         self.read_exactly(length).await?;
 
         Ok(())
-
-        // let mut last_have = 0;
-
-        // let (id, buffer) = (self.buffer[0], &self.buffer[..]);
-
-        // return MessagePeer::try_from(self.buffer.as_slice());
-
-        //println!("MESSAGE {:?}", message);
-        
-        // match id {
-        //     0 => {
-        //         println!("CHOKE {:?} {:?}", String::from_utf8_lossy(&buffer[1..]), &buffer[..]);
-        //     }
-        //     1 => {
-        //         println!("UNCHOKE", );
-                
-        //         let mut aa: [u8; 17] = [0; 17];
-        //         let mut cursor = Cursor::new(&mut aa[..]);
-        //         cursor.write_u32::<BigEndian>(13)?;
-        //         cursor.write_u8(6)?;
-        //         cursor.write_u32::<BigEndian>(last_have)?;
-        //         cursor.write_u32::<BigEndian>(0)?;
-        //         cursor.write_u32::<BigEndian>(16384)?;
-                
-        //         // stream.write_all(&aa)?;
-        //         // stream.flush()?;
-
-        //         println!("REQUEST SENT");
-        //     }
-        //     2 => println!("INTERESTED", ),
-        //     3 => println!("NOT INTERESTED", ),
-        //     4 => {
-        //         //cursor.set_position(1);
-        //         let mut cursor = Cursor::new(&buffer[1..]);
-        //         last_have = cursor.read_u32::<BigEndian>()?;
-        //         println!("HAVE {:?}", last_have);
-        //     }
-        //     5 => {
-        //         println!("BITFIELD {:?}", &buffer[1..]);
-                
-        //         let mut aa: [u8; 5] = [0; 5];
-        //         let mut cursor = Cursor::new(&mut aa[..]);
-        //         cursor.write_u32::<BigEndian>(1)?;
-        //         cursor.write_u8(2)?;
-                
-        //         // stream.write_all(&aa)?;
-        //         // stream.flush()?;
-
-        //         println!("INTERESTED SENT");
-        //     }
-        //     6 => {
-        //         println!("REQUEST {:?}", &buffer[1..]);
-        //     }
-        //     7 => {
-        //         // piece: <len=0009+X><id=7><index><begin><block>
-                
-        //         let mut cursor = Cursor::new(&buffer[1..]);
-
-        //         let index = cursor.read_u32::<BigEndian>()?;
-        //         let begin = cursor.read_u32::<BigEndian>()?;
-                
-        //         println!("PIECE ! {:?} {:?}", index, begin);
-        //     }
-        //     x => { println!("UNKNOWN {} {:?}", x, &buffer[1..]); }
-        // }
-        //     i += 1;
-        //     // if i >= 6 {
-        //     //     return Ok(())
-        //     // }
-        // }
-        // Ok(())
     }
-
-    // fn loop_on_messages(&mut self) -> Result<()> {
-        
-    // }
 
     async fn read_exactly(&mut self, n: usize) -> Result<()> {
         let reader = self.reader.by_ref();
@@ -889,7 +901,7 @@ impl Peer {
 
         // TODO: Check the info hash and send to other TorrentActor if necessary
 
-        println!("DONE", );
+        println!("HANDSHAKE DONE", );
 
         Ok(())
     }
@@ -901,6 +913,21 @@ enum MessageActor {
     RemovePeer(PeerAddr),
 }
 
+#[derive(Debug, Default)]
+struct PieceInformation {
+    current: Option<PeerAddr>,
+    list: SmallVec<[PeerAddr; 8]>
+}
+
+// impl Default for PieceInformation {
+//     fn default() -> Self {
+//         PieceInformation {
+//             current: None,
+//             list: Default::D
+//         }
+//     }
+// }
+
 #[derive(Debug)]
 struct Pieces {
     /// Number of pieces
@@ -908,8 +935,9 @@ struct Pieces {
     /// SHA1 of each piece
     sha1_pieces: Vec<Arc<Vec<u8>>>,
     /// Pieces other peers have
-    /// have_pieces[0] is the number of peers having the piece 0
-    have_pieces: Vec<u8>,
+    /// peers_pieces[0] is the number of peers having the piece 0
+    peers_pieces: Vec<u8>,
+    //peers_pieces: Vec<PieceInformation>,
     /// Size of a block
     block_size: usize,
     /// Number of block in 1 piece
@@ -935,8 +963,8 @@ impl From<&Torrent> for Pieces {
             panic!("Invalid hashes");
         }
         
-        let mut have_pieces = Vec::with_capacity(num_pieces);
-        have_pieces.resize_with(num_pieces, || 0);
+        let mut peers_pieces = Vec::with_capacity(num_pieces);
+        peers_pieces.resize_with(num_pieces, Default::default);
         
         let block_size = std::cmp::min(piece_length, 0x4000);
         let nblocks_piece = (piece_length + block_size - 1) / block_size;
@@ -945,7 +973,7 @@ impl From<&Torrent> for Pieces {
         Pieces {
             num_pieces,
             sha1_pieces,
-            have_pieces,
+            peers_pieces,
             block_size,
             nblocks_piece,
             nblocks_last_piece
@@ -961,26 +989,72 @@ impl From<&Torrent> for Pieces {
 // https://stackoverflow.com/questions/42938907/is-it-possible-to-use-simd-instructions-in-rust
 
 impl Pieces {
-    fn update_from_bitfield(&mut self, bitfield: &[u8]) {
+    fn update_from_bitfield(&mut self, bitfield: &BitField) {
         // TODO: Handle bitfield with wrong length
-        if bitfield.len() * 8 >= self.have_pieces.len() {
-            for (i, value) in self.have_pieces.iter_mut().enumerate() {
-                let slice_index = i / 8;
-                let bit_index = i % 8;
+        for (i, piece) in self.peers_pieces.iter_mut().enumerate() {
+            if bitfield.get_bit(i) {
+                *piece = piece.saturating_add(1);                
+            }
+        }
+        
+        // if bitfield.len() * 8 >= self.peers_pieces.len() {
+        //     for (i, piece_info) in self.peers_pieces.iter_mut().enumerate() {
+        //         let slice_index = i / 8;
+        //         let bit_index = i % 8;
 
-                if bitfield[slice_index] & (1 << (7 - bit_index)) != 0 {
-                    *value = value.saturating_add(1);                
-                }
+        //         if bitfield[slice_index] & (1 << (7 - bit_index)) != 0 {
+        //             //*value = value.saturating_add(1);
+        //             piece_info.list.push(Arc::clone(peer));
+        //         }
+        //     }
+        // }
+    }
+
+    fn update(&mut self, update: &BitFieldUpdate)  {
+        match update {
+            BitFieldUpdate::BitField(bitfield) => {
+                for (i, piece) in self.peers_pieces.iter_mut().enumerate() {
+                    if bitfield.get_bit(i) {
+                        *piece = piece.saturating_add(1);                
+                    }
+                }                
+            }
+            BitFieldUpdate::Piece(piece) => {
+                // TODO: Handle inexistant piece
+                if let Some(piece) = self.peers_pieces.get_mut(*piece) {
+                    *piece = piece.saturating_add(1);
+                }                
             }
         }
     }
 
     fn update_have(&mut self, piece_num: u32) {
         // TODO: Handle inexistant piece
-        if let Some(piece) = self.have_pieces.get_mut(piece_num as usize) {
+        if let Some(piece) = self.peers_pieces.get_mut(piece_num as usize) {
             *piece = piece.saturating_add(1);
         }
     }
+    
+    // fn update_from_bitfield(&mut self, bitfield: &[u8]) {
+    //     // TODO: Handle bitfield with wrong length
+    //     if bitfield.len() * 8 >= self.peers_pieces.len() {
+    //         for (i, value) in self.peers_pieces.iter_mut().enumerate() {
+    //             let slice_index = i / 8;
+    //             let bit_index = i % 8;
+
+    //             if bitfield[slice_index] & (1 << (7 - bit_index)) != 0 {
+    //                 *value = value.saturating_add(1);
+    //             }
+    //         }
+    //     }
+    // }
+
+    // fn update_have(&mut self, piece_num: u32) {
+    //     // TODO: Handle inexistant piece
+    //     if let Some(piece) = self.peers_pieces.get_mut(piece_num as usize) {
+    //         *piece = piece.saturating_add(1);
+    //     }
+    // }
 }
 
 type PeerAddr = Sender<MessageActor>;
@@ -1047,7 +1121,7 @@ struct TorrentActor {
     _sender: Sender<MessageActor>,
 }
 
-type Result<T> = std::result::Result<T, TorrentError>;
+pub type Result<T> = std::result::Result<T, TorrentError>;
 
 use std::sync::Arc;
 use parking_lot::{RwLock, RwLockReadGuard};
@@ -1080,14 +1154,17 @@ impl TorrentActor {
     }
 
     fn connect_to_peers(&self, addrs: &[SocketAddr], data: TorrentData) {
+
+        let pieces_actor = Arc::new(PiecesActor::new(&data));
+        
         for addr in addrs {
             println!("ADDR: {:?}", addr);
 
             let addr = *addr;
             let data = data.clone();
-            
+            let pieces_actor = Arc::clone(&pieces_actor);
             task::spawn(async move {
-                let mut peer = match Peer::new(addr, data).await {
+                let mut peer = match Peer::new(addr, data, pieces_actor).await {
                     Ok(peer) => peer,
                     Err(e) => {
                         println!("PEER ERROR {:?}", e);
@@ -1117,6 +1194,15 @@ impl TorrentActor {
         }
         None
     }
+}
+
+enum FilesMessage {
+    HaveBitfield,
+    HavePiece { piece_index: u32 }
+}
+
+struct FilesActor {
+    data: TorrentData,
 }
 
 struct SessionInner {

@@ -6,6 +6,8 @@ mod de;
 mod http_client;
 mod metadata;
 mod session;
+mod bitfield;
+mod utils;
 
 // use async_std::task;
 use std::io::{self, Read};
