@@ -170,12 +170,14 @@ type PeerTask = Arc<async_std::sync::RwLock<VecDeque<PieceToDownload>>>;
 
 #[derive(Debug)]
 struct PieceInfo {
+    bytes_downloaded: usize,
     workers: SmallVec<[PeerTask; 4]>
 }
 
 impl PieceInfo {
     fn new(peer: &Peer) -> PieceInfo {
         PieceInfo {
+            bytes_downloaded: 0,
             workers: smallvec![peer.tasks.clone()]
         }
     }
@@ -191,7 +193,12 @@ enum PieceActorMessage {
     RemoveQueue {
         id: PeerId ,
         queue: PeerTask
-   },
+    },
+    AddPiece {
+        index: u32,
+        begin: u32,
+        block: Vec<u8>
+    }
 }
 
 #[derive(Debug)]
@@ -200,6 +207,10 @@ struct PiecesActor {
     pieces: async_std::sync::RwLock<Vec<Option<PieceInfo>>>,
     nblocks_piece: usize,
     block_size: usize,
+    files_size: usize,
+    piece_length: usize,
+    last_piece_size: usize,
+    npieces: usize,
     queue_map: async_std::sync::RwLock<HashMap<PeerId, PeerTask>>,
     channel: async_std::sync::Receiver<PieceActorMessage>
 }
@@ -208,8 +219,18 @@ type PeerId = usize;
 
 impl PiecesActor {
     fn new(data: &TorrentData, channel: async_std::sync::Receiver<PieceActorMessage>) -> PiecesActor {
-        let (npieces, nblocks_piece, block_size) = data.with(|data| {
-            (data.pieces.num_pieces, data.pieces.nblocks_piece, data.pieces.block_size)
+        let (npieces, nblocks_piece, block_size, files_size, piece_length, last_piece_size) = data.with(|data| {
+            let piece_length = data.pieces.piece_length;
+            let total = data.torrent.files_total_size();
+            let last_piece_size = total % piece_length;
+            
+            (data.pieces.num_pieces,
+             data.pieces.nblocks_piece,
+             data.pieces.block_size,
+             total,
+             piece_length,
+             if last_piece_size == 0 { piece_length } else { last_piece_size }
+            )
         });
 
         let mut p = Vec::with_capacity(npieces);
@@ -222,6 +243,10 @@ impl PiecesActor {
             nblocks_piece,
             block_size,
             channel,
+            files_size,
+            piece_length,
+            last_piece_size,
+            npieces,
             pieces: async_std::sync::RwLock::new(p),
             queue_map: async_std::sync::RwLock::new(HashMap::new()),
         }
@@ -230,6 +255,14 @@ impl PiecesActor {
     async fn set_task_queue(&self, id: PeerId, queue: PeerTask) {
         let mut queue_map = self.queue_map.write().await;
         queue_map.insert(id, queue);
+    }
+
+    fn piece_size(&self, piece_index: usize) -> usize {
+        if piece_index == self.npieces - 1 {
+            self.last_piece_size
+        } else {
+            self.piece_length
+        }
     }
     
     async fn start(&self) {
@@ -244,7 +277,7 @@ impl PiecesActor {
                     }
                     {
                         let mut pieces = self.pieces.write().await;
-                        for piece in pieces.iter_mut().filter_map(|p| p.as_mut()) {
+                        for piece in pieces.iter_mut().filter_map(Option::as_mut) {
                             piece.workers.retain(|p| {
                                 !Arc::ptr_eq(&p, &queue)
                             });
@@ -253,7 +286,18 @@ impl PiecesActor {
                 }
                 AddQueue { id, queue } => {
                     
-                }                
+                }
+                AddPiece { index, begin, block } => {
+                    // let mut pieces = self.pieces.write().await;
+                    // if let Some(Some(piece)) = pieces.get_mut(index as usize) {
+                    //     piece.bytes_downloaded += block.len();
+                    //     if piece.bytes_downloaded == self.block_size {
+                    //         println!("PIECE [{}] FINISHED !", index);
+                    //     }
+                    // };
+
+                    //println!("PIECE RECEIVED {} {} {}", index, begin, block.len());
+                }
             }            
         }
     }
@@ -271,11 +315,10 @@ impl PiecesActor {
                 let pieces = pieces.iter_mut()
                                    .enumerate()
                                    .filter(|(index, p)| p.is_none() && bitfield.get_bit(*index))
-                                   .take(100);
+                                   .take(5);
                 
                 let nblock_piece = self.nblocks_piece;
                 let block_size = self.block_size;
-                // let worker = &peer.worker;
 
                 let mut i = 0;
                 for (piece, value) in pieces {
@@ -331,6 +374,7 @@ struct Peer {
     addr: SocketAddr,
     data: TorrentData,
     pieces_actor: Arc<PiecesActor>,
+    pieces_actor_chan: async_std::sync::Sender<PieceActorMessage>,
     reader: BufReader<TcpStream>,
     state: PeerState,
     buffer: Vec<u8>,
@@ -340,6 +384,11 @@ struct Peer {
     bitfield: BitField,
     /// List of pieces to download
     tasks: PeerTask,
+
+    /// Small buffer where the downloaded block are kept.
+    /// Once the piece is full, we send this buffer to PieceActor
+    /// and reset this vec.
+    piece_buffer: Option<PieceBuffer>,
 
     nblocks: usize, // Downloaded
     start: Option<Instant>, // Downloaded,
@@ -464,10 +513,56 @@ use std::{
     thread,
 };
 
+struct PieceBuffer {
+    buf: Vec<u8>,
+    piece_index: usize,
+    bytes_added: usize,
+}
+
+impl PieceBuffer {
+    /// piece_size might be different than piece_length if it's the last piece
+    fn new(piece_index: usize, piece_size: usize) -> PieceBuffer {
+        let mut buf = Vec::with_capacity(piece_size);
+        unsafe { buf.set_len(piece_size) };
+
+        // println!("ADDING PIECE_BUFFER {} SIZE={}", piece_index, piece_size);
+        
+        PieceBuffer { buf, piece_index, bytes_added: 0 }
+    }
+
+    /// begin: offset of the block in the piece
+    fn add_block(&mut self, begin: usize, block: &[u8]) {
+        let block_len = block.len();
+
+        let buffer_len = self.buf.len();
+        if let Some(buffer) = self.buf.get_mut(begin..begin + block_len) {
+            buffer.copy_from_slice(block);
+            self.bytes_added += block_len;            
+        } else {
+            panic!("ERROR on addblock BEGIN={} BLOCK_LEN={} BUF_LEN={}", begin, block_len, buffer_len);
+        }
+    }
+
+    fn added(&self) -> usize {
+        self.bytes_added
+    }
+
+    /// The piece is considered completed once added block size match with
+    /// the piece size. There is no check where the blocks have been added
+    fn is_completed(&self) -> bool {
+        self.buf.len() == self.bytes_added
+    }
+}
+
 static PEER_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 impl Peer {
-    async fn new(addr: SocketAddr, data: TorrentData, pieces_actor: Arc<PiecesActor>) -> Result<Peer> {
+    async fn new(
+        addr: SocketAddr,
+        data: TorrentData,
+        pieces_actor: Arc<PiecesActor>,
+        pieces_actor_chan: async_std::sync::Sender<PieceActorMessage>
+    ) -> Result<Peer> {
         let stream = TcpStream::connect(&addr).await?;
 
         let id = PEER_COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -477,6 +572,7 @@ impl Peer {
         Ok(Peer {
             addr,
             pieces_actor,
+            pieces_actor_chan,
             npieces: data.with(|d| d.pieces.num_pieces),
             data,
             bitfield,
@@ -489,6 +585,7 @@ impl Peer {
             nblocks: 0,
             start: None,
             _tasks: None,
+            piece_buffer: None
         })
     }
 
@@ -606,7 +703,7 @@ impl Peer {
                 self.send_request(task).await?;
             } else {
                 //self.pieces_actor.get_pieces_to_downloads().await;
-                // println!("[{:?}] No More Task ! {} downloaded in {:?}s", self.id, self.nblocks, self.start.map(|s| s.elapsed().as_secs()));
+                println!("[{:?}] No More Task ! {} downloaded in {:?}s", self.id, self.nblocks, self.start.map(|s| s.elapsed().as_secs()));
                 // Steal others tasks
             }
         }
@@ -729,6 +826,37 @@ impl Peer {
                 }
 
                 self.nblocks += block.len();
+
+                // self.pieces_actor_chan.send(PieceActorMessage::AddPiece {
+                //     index,
+                //     begin,
+                //     block: Vec::from_slice(block),
+                // }).await;
+
+                if let Some(piece_buffer) = self.piece_buffer.as_mut() {
+                    if piece_buffer.piece_index == index as usize {
+                        piece_buffer.add_block(begin as usize, block);
+
+                        if piece_buffer.is_completed() {
+                            println!("[{}] PIECE {} COMPLETED !", self.id, index);
+                            self.piece_buffer = None;
+                        } else {
+                            //println!("[{}] PIECEADDED {} {}", self.id, index, piece_buffer.added());
+                        }
+                    } else {
+                        println!("[{}] PIECE INDEX DOESN'T MATCH PIECE_BUFFER {} {}", self.id, index, piece_buffer.piece_index);
+                    }
+                } else {
+                    let mut piece_buffer = PieceBuffer::new(
+                        index as usize,
+                        self.pieces_actor.piece_size(index as usize)
+                    );
+
+                    piece_buffer.add_block(begin as usize, block);
+
+                    self.piece_buffer.replace(piece_buffer);
+                }
+
 
                 self.maybe_send_request().await?;                    
             },
@@ -1064,8 +1192,9 @@ impl TorrentActor {
             let addr = *addr;
             let data = data.clone();
             let pieces_actor = Arc::clone(&pieces_actor);
+            let pieces_actor_chan = sender.clone();
             task::spawn(async move {
-                let mut peer = match Peer::new(addr, data, pieces_actor).await {
+                let mut peer = match Peer::new(addr, data, pieces_actor, pieces_actor_chan).await {
                     Ok(peer) => peer,
                     Err(e) => {
                         println!("PEER ERROR {:?}", e);
