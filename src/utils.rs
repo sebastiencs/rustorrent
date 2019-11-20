@@ -12,3 +12,25 @@ impl<T: Copy> FromSlice<T> for Vec<T> {
         vec
     }
 }
+
+#[derive(Default)]
+pub struct NoHash(usize);
+
+impl std::hash::BuildHasher for NoHash {
+    type Hasher = Self;
+    fn build_hasher(&self) -> Self::Hasher {
+        Self(0)
+    }
+}
+
+impl std::hash::Hasher for NoHash {
+    fn finish(&self) -> u64 {
+        self.0 as u64
+    }
+    fn write(&mut self, _: &[u8]) {
+        unreachable!()
+    }
+    fn write_usize(&mut self, n: usize) {
+        self.0 = n
+    }
+}

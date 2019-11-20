@@ -1,7 +1,7 @@
 use crate::metadata::Torrent;
 use crate::http_client::{self, AnnounceQuery, AnnounceResponse};
 use crate::bitfield::BitField;
-use crate::utils::FromSlice;
+use crate::utils::{FromSlice, NoHash};
 
 use crate::http_client::{Peers,Peers6};
 use std::io::Cursor;
@@ -194,11 +194,12 @@ enum PieceActorMessage {
         id: PeerId ,
         queue: PeerTask
     },
-    AddPiece {
-        index: u32,
-        begin: u32,
-        block: Vec<u8>
-    }
+    AddPiece(PieceBuffer)
+    // AddPiece {
+    //     index: u32,
+    //     begin: u32,
+    //     block: Vec<u8>
+    // }
 }
 
 #[derive(Debug)]
@@ -287,7 +288,7 @@ impl PiecesActor {
                 AddQueue { id, queue } => {
 
                 }
-                AddPiece { index, begin, block } => {
+                AddPiece (piece_block) => {
                     // let mut pieces = self.pieces.write().await;
                     // if let Some(Some(piece)) = pieces.get_mut(index as usize) {
                     //     piece.bytes_downloaded += block.len();
@@ -388,7 +389,7 @@ struct Peer {
     /// Small buffer where the downloaded block are kept.
     /// Once the piece is full, we send this buffer to PieceActor
     /// and reset this vec.
-    piece_buffer: Option<PieceBuffer>,
+    piece_buffer: HashMap<usize, PieceBuffer, NoHash>,
 
     nblocks: usize, // Downloaded
     start: Option<Instant>, // Downloaded,
@@ -585,7 +586,7 @@ impl Peer {
             nblocks: 0,
             start: None,
             _tasks: None,
-            piece_buffer: None
+            piece_buffer: HashMap::default()
         })
     }
 
@@ -827,36 +828,30 @@ impl Peer {
 
                 self.nblocks += block.len();
 
-                // self.pieces_actor_chan.send(PieceActorMessage::AddPiece {
-                //     index,
-                //     begin,
-                //     block: Vec::from_slice(block),
-                // }).await;
+                self.add_block(index as usize, begin as usize, block);
 
-                if let Some(piece_buffer) = self.piece_buffer.as_mut() {
-                    if piece_buffer.piece_index == index as usize {
-                        piece_buffer.add_block(begin as usize, block);
+                // if let Some(piece_buffer) = self.piece_buffer.get_mut(&(index as usize)) {
+                //     piece_buffer.add_block(begin as usize, block);
 
-                        if piece_buffer.is_completed() {
-                            println!("[{}] PIECE {} COMPLETED !", self.id, index);
-                            self.piece_buffer = None;
-                        } else {
-                            //println!("[{}] PIECEADDED {} {}", self.id, index, piece_buffer.added());
-                        }
-                    } else {
-                        println!("[{}] PIECE INDEX DOESN'T MATCH PIECE_BUFFER {} {}", self.id, index, piece_buffer.piece_index);
-                    }
-                } else {
-                    let mut piece_buffer = PieceBuffer::new(
-                        index as usize,
-                        self.pieces_actor.piece_size(index as usize)
-                    );
+                //     if piece_buffer.is_completed() {
+                //         println!("[{}] PIECE {} COMPLETED !", self.id, index);
 
-                    piece_buffer.add_block(begin as usize, block);
+                //         self.pieces_actor_chan.send(PieceActorMessage::AddPiece(piece_buffer)).await;
 
-                    self.piece_buffer.replace(piece_buffer);
-                }
 
+                //     } else {
+                //         //println!("[{}] PIECEADDED {} {}", self.id, index, piece_buffer.added());
+                //     }
+                // } else {
+                //     let mut piece_buffer = PieceBuffer::new(
+                //         index as usize,
+                //         self.pieces_actor.piece_size(index as usize)
+                //     );
+
+                //     piece_buffer.add_block(begin as usize, block);
+
+                //     self.piece_buffer.insert(index as usize, piece_buffer);
+                // }
 
                 self.maybe_send_request().await?;
             },
@@ -877,6 +872,34 @@ impl Peer {
             }
         }
         Ok(())
+    }
+
+    fn add_block(&mut self, index: usize, begin: usize, block: &[u8]) {
+        if let Some(index) = self.add_block_to_buffer(index, begin, block) {
+            let piece_buffer = self.piece_buffer.remove(&index).unwrap();
+
+            self.pieces_actor_chan.send(
+                PieceActorMessage::AddPiece(piece_buffer)
+            );//.await;
+        };
+    }
+
+    fn add_block_to_buffer(&mut self, index: usize, begin: usize, block: &[u8]) -> Option<usize> {
+        if let Some(piece_buffer) = self.piece_buffer.get_mut(&index) {
+            piece_buffer.add_block(begin, block);
+
+            if piece_buffer.is_completed() {
+                return Some(index);
+            }
+        } else {
+            let mut piece_buffer = PieceBuffer::new(
+                index,
+                self.pieces_actor.piece_size(index)
+            );
+            piece_buffer.add_block(begin, block);
+            self.piece_buffer.insert(index, piece_buffer);
+        }
+        None
     }
 
     fn is_pending_data(&self) -> bool {
