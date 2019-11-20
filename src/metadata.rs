@@ -20,11 +20,11 @@ type StackVec<T> = SmallVec<[T; 16]>;
 //     Single {
 //         name: &'a str,
 //         length: i64,
-//         md5sum: Option<&'a str>,        
+//         md5sum: Option<&'a str>,
 //     },
 //     Multiple {
 //         name: &'a str,
-//         files: StackVec<MetaFile<'a>>        
+//         files: StackVec<MetaFile<'a>>
 //     },
 // }
 
@@ -58,7 +58,7 @@ type StackVec<T> = SmallVec<[T; 16]>;
 //     #[serde(rename="creation date")]
 //     pub creation_date: Option<u64>,
 //     pub comment: Option<&'a str>,
-//     #[serde(rename="created by")] 
+//     #[serde(rename="created by")]
 //     pub created_by: Option<&'a str>,
 //     pub encoding: Option<&'a str>
 // }
@@ -76,7 +76,7 @@ pub enum InfoFile {
     Single {
         name: String,
         length: i64,
-        md5sum: Option<String>,        
+        md5sum: Option<String>,
     },
     Multiple {
         name: String,
@@ -114,7 +114,7 @@ pub struct MetaTorrent {
     #[serde(rename="creation date")]
     pub creation_date: Option<u64>,
     pub comment: Option<String>,
-    #[serde(rename="created by")] 
+    #[serde(rename="created by")]
     pub created_by: Option<String>,
     pub encoding: Option<String>
 }
@@ -132,7 +132,7 @@ pub struct UrlIterator<'a> {
 
 impl<'a> Iterator for UrlIterator<'a> {
     type Item = Url;
-    
+
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             let index = self.index;
@@ -144,7 +144,7 @@ impl<'a> Iterator for UrlIterator<'a> {
             }
         }
     }
-    
+
     fn size_hint(&self) -> (usize, Option<usize>) {
         (self.list.len(), None)
     }
@@ -165,7 +165,7 @@ impl Torrent {
         vec.push(self.meta.announce.as_ref());
 
         println!("TRACKERS={:?}", vec);
-        
+
         UrlIterator {
             index: 0,
             list: vec,
@@ -188,14 +188,14 @@ impl Torrent {
         let mut vec = Vec::with_capacity(pieces.len() / 20);
 
         println!("PIECES LEN = {:?}", pieces.len());
-        
+
         for piece in pieces.chunks_exact(20) {
             let mut bytes = Vec::with_capacity(20);
             unsafe { bytes.set_len(20) }
             bytes.as_mut_slice().copy_from_slice(piece);
             vec.push(Arc::new(bytes));
         }
-        
+
         vec
     }
 }

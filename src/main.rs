@@ -30,12 +30,12 @@ fn main() {
     let mut session = Session::new();
 
     session.add_torrent(torrent);
-    
+
     let mut buffer = String::new();
     let stdin = io::stdin();
     let mut handle = stdin.lock();
 
-    handle.read_to_string(&mut buffer).unwrap();    
+    handle.read_to_string(&mut buffer).unwrap();
 //     task::block_on(async move {
 //         let mut res = surf::get("http://localhost:6969/announce")
 // //        let mut res = surf::get(&meta.announce)

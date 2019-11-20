@@ -49,7 +49,7 @@ impl<'a> From<&'a Torrent> for AnnounceQuery<'a> {
 }
 
 #[derive(Deserialize, Debug)]
-pub struct Peer {    
+pub struct Peer {
     pub ip: String,
     pub port: u16
 }
@@ -202,7 +202,7 @@ fn try_addr(sockaddr: std::vec::IntoIter<std::net::SocketAddr>) -> Result<TcpStr
         ) {
             Ok(stream) => return Ok(stream),
             Err(e) => last_err = Some(Err(e))
-        }            
+        }
     }
     match last_err {
         Some(e) => e?,
@@ -221,7 +221,7 @@ fn send<T: DeserializeOwned>(url: Url, query: impl ToQuery) -> Result<T> {
     let req = format_request(&url, query);
 
     println!("REQ {}", req);
-    
+
     stream.write_all(req.as_bytes())?;
     stream.flush()?;
 
@@ -230,9 +230,9 @@ fn send<T: DeserializeOwned>(url: Url, query: impl ToQuery) -> Result<T> {
     let response = &buffer[state.header_length.unwrap()..];
 
     println!("DATA {:x?}", String::from_utf8_lossy(&response));
-    
+
     let value = from_bytes(&response)?;
-    
+
     Ok(value)
 }
 
@@ -244,7 +244,7 @@ fn get_content_length(buf: &[u8], state: &mut ReadingState) {
         Some(index) => &buf[std::cmp::min(index + 1, buf.len())..],
         _ => return
     };
-    
+
     loop {
         let line = match memchr(b'\n', buf) {
             Some(index) => &buf[..index],
@@ -289,7 +289,7 @@ fn get_content_length(buf: &[u8], state: &mut ReadingState) {
 
 fn get_header_length(buf: &[u8], state: &mut ReadingState) -> usize {
     let start = buf.as_ptr();
-    
+
     // We skip the 1st line
     let mut buf = match memchr(b'\n', buf) {
         Some(index) => &buf[std::cmp::min(index + 1, buf.len())..],
@@ -307,7 +307,7 @@ fn get_header_length(buf: &[u8], state: &mut ReadingState) -> usize {
             state.header_length = Some(length);
             return length;
         }
-        
+
         buf = match memchr(b'\n', buf) {
             Some(index) => &buf[std::cmp::min(index + 1, buf.len())..],
             _ => return 0
@@ -340,7 +340,7 @@ fn stopper(buf: &[u8], state: &mut ReadingState) -> bool {
     }
 
     if state.content_length.is_none() {
-        get_content_length(buf, state);        
+        get_content_length(buf, state);
     }
 
     if state.header_length.is_none() {
@@ -355,7 +355,7 @@ fn stopper(buf: &[u8], state: &mut ReadingState) -> bool {
         }
         _ => {}
     }
-    
+
     false
 }
 
@@ -382,7 +382,7 @@ const BUFFER_READ_SIZE: usize = 64;
 
 fn read_response(mut stream: TcpStream) -> Result<(Vec<u8>, ReadingState)> {
     let mut buffer = Vec::with_capacity(BUFFER_READ_SIZE);
-    
+
     unsafe { buffer.set_len(BUFFER_READ_SIZE); }
 
     let mut state = ReadingState::default();
@@ -407,19 +407,19 @@ fn read_response(mut stream: TcpStream) -> Result<(Vec<u8>, ReadingState)> {
             Err(e) => return Err(HttpError::IO(e))
         }
     }
-    
+
     unsafe {
         buffer.set_len(state.offset);
     }
 
     //println!("DATA {:x?}", String::from_utf8_lossy(&buffer));
-    
+
     if state.header_length.is_none() && get_header_length(&buffer, &mut state) == 0 {
         return Err(HttpError::Malformed);
     }
 
     check_http_code(&buffer)?;
-    
+
     Ok((buffer, state))
 }
 
@@ -430,7 +430,7 @@ where
     R: DeserializeOwned
 {
     let url: Url = url.as_ref().parse().unwrap();
-    
+
     println!("URL: {:?} {:?} {:?} {:?}", url, url.host(), url.port(), url.scheme());
 
     send(url, query)
