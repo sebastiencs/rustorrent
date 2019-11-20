@@ -3,19 +3,10 @@ use crate::http_client::{self, AnnounceQuery, AnnounceResponse};
 use crate::bitfield::BitField;
 use crate::utils::FromSlice;
 
-// enum State {
-//     Handshaking,
-//     Downloading
-// }
-
 use crate::http_client::{Peers,Peers6};
 use std::io::Cursor;
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
-
-// struct Peers {
-//     addrs: Vec<SocketAddr>
-// }
 
 fn get_peers_addrs(response: &AnnounceResponse) -> Vec<SocketAddr> {
     let mut addrs = Vec::new();
@@ -104,232 +95,9 @@ fn get_peers_addrs(response: &AnnounceResponse) -> Vec<SocketAddr> {
 }
 
 use std::io::prelude::*;
-//use std::net::TcpStream;
-use smallvec::SmallVec;
-//use std::io::{BufReader, BufWriter};
-
-// fn read_messages(mut stream: TcpStream) -> std::result::Result<(), std::io::Error> {
-//     let mut buffer = Vec::with_capacity(32_768);
-
-//     //let mut stream = BufReader::with_capacity(32_768, stream);
-
-//     let mut i = 0;
-//     loop {
-//         let stream = std::io::Read::by_ref(&mut stream);
-
-//         println!("READING LENGTH", );
-        
-//         buffer.clear();
-//         match stream.take(4).read_to_end(&mut buffer) {
-//             Ok(0) => return Ok(()),
-//             Err(e) => {
-//                 println!("ERROR: {:?}", e);
-//                 return Ok(());
-//             }
-//             _ => {}
-//         }
-
-//         let length = {
-//             // println!("LEN BUF = {:?}", buffer.len());
-//             let mut cursor = Cursor::new(&buffer[..]);
-//             cursor.read_u32::<BigEndian>()? as u64
-//         };
-        
-//         println!("LENGTH={} {:?}", length, &buffer[..]);
-
-//         if length == 0 {
-//             continue;
-//         } // else if length >= buffer.capacity() {
-//         //     buffer.reserve(buffer.capacity() - length);
-//         // }
-
-//         buffer.clear();
-
-//         stream.take(length).read_to_end(&mut buffer)?;
-//         //stream.read_exact(&mut buffer[..length]);
-
-//         println!("ICIIII", );
-
-//         let mut last_have = 0;
-
-//         match buffer[0] {
-//             0 => {
-//                 println!("CHOKE {:?} {:?}", String::from_utf8_lossy(&buffer[1..]), &buffer[..]);
-//                 // let mut aa: [u8; 5] = [0; 5];
-//                 // let mut cursor = Cursor::new(&mut aa[..]);
-//                 // cursor.write_u32::<BigEndian>(1)?;
-//                 // cursor.write_u8(2)?;
-                                
-//                 // stream.write_all(&aa)?;
-//                 // stream.flush()?;
-
-//                 // println!("INTERESTED SENT");
-
-//                 // // request: <len=0013><id=6><index><begin><length>
-                
-//                 // let mut aa: [u8; 13] = [0; 13];
-//                 // let mut cursor = Cursor::new(&mut aa[..]);
-//                 // cursor.write_u32::<BigEndian>(13)?;
-//                 // cursor.write_u8(6)?;
-//                 // cursor.write_u32::<BigEndian>(0)?;
-//                 // cursor.write_u32::<BigEndian>(256)?;
-                                
-//                 // stream.write_all(&aa)?;
-//                 // stream.flush()?;
-
-//                 // println!("REQUEST SENT");
-//             }
-//             1 => {
-//                 println!("UNCHOKE", );
-                
-//                 let mut aa: [u8; 17] = [0; 17];
-//                 let mut cursor = Cursor::new(&mut aa[..]);
-//                 cursor.write_u32::<BigEndian>(13)?;
-//                 cursor.write_u8(6)?;
-//                 cursor.write_u32::<BigEndian>(last_have)?;
-//                 cursor.write_u32::<BigEndian>(0)?;
-//                 cursor.write_u32::<BigEndian>(16384)?;
-                                
-//                 stream.write_all(&aa)?;
-//                 stream.flush()?;
-
-//                 println!("REQUEST SENT");
-//             }
-//             2 => println!("INTERESTED", ),
-//             3 => println!("NOT INTERESTED", ),
-//             4 => {
-//                 //cursor.set_position(1);
-//                 let mut cursor = Cursor::new(&buffer[1..]);
-//                 last_have = cursor.read_u32::<BigEndian>()?;
-//                 println!("HAVE {:?}", last_have);
-//             }
-//             5 => {
-//                 println!("BITFIELD {:?}", &buffer[1..]);
-                
-//                 let mut aa: [u8; 5] = [0; 5];
-//                 let mut cursor = Cursor::new(&mut aa[..]);
-//                 cursor.write_u32::<BigEndian>(1)?;
-//                 cursor.write_u8(2)?;
-                                
-//                 stream.write_all(&aa)?;
-//                 stream.flush()?;
-
-//                 println!("INTERESTED SENT");
-//             }
-//             6 => {
-//                 println!("REQUEST {:?}", &buffer[1..]);
-//             }
-//             7 => {
-//                 // piece: <len=0009+X><id=7><index><begin><block>
-                
-//                 let mut cursor = Cursor::new(&buffer[1..]);
-
-//                 let index = cursor.read_u32::<BigEndian>()?;
-//                 let begin = cursor.read_u32::<BigEndian>()?;
-                
-//                 println!("PIECE ! {:?} {:?}", index, begin);
-//             }
-//             x => { println!("UNKNOWN {} {:?}", x, &buffer[1..]); }
-//         }
-//         i += 1;
-//         // if i >= 6 {
-//         //     return Ok(())
-//         // }
-//     }
-// }
-
-// fn read_messages(mut stream: TcpStream) {
-//     //let mut buffer = [0; 4096];
-//     let mut buffer = Vec::with_capacity(4096);
-//     //let mut buffer = BufReader::new(stream);
-//     //let mut cursor = Cursor::new(&buffer[..]);
-    
-//     loop {
-// //        buffer.read_exact();
-//         stream.read_exact(&mut buffer[..4]);
-
-//         let length = {
-//             let mut cursor = Cursor::new(&buffer[..]);
-//             cursor.read_u32::<BigEndian>().unwrap() as usize
-//         };
-
-//         if length == 0 {
-//             continue;
-//         } else if length >= buffer.capacity() {
-//             buffer.reserve(buffer.capacity() - length);
-//         }
-        
-//         stream.read_exact(&mut buffer[..length]);
-
-//         match buffer[0] {
-//             0 => println!("CHOKE", ),
-//             1 => println!("UNCHOKE", ),
-//             2 => println!("INTERESTED", ),
-//             3 => println!("NOT INTERESTED", ),
-//             4 => {
-//                 //cursor.set_position(1);
-//                 let mut cursor = Cursor::new(&buffer[1..]);
-//                 println!("HAVE {:?}", cursor.read_u32::<BigEndian>());
-//             }
-//             5 => {
-//                 println!("BITFIELD", );
-//             }
-//             x => { println!("UNKNOWN {}", x); }
-//         }
-//     }
-// }
-
-//fn do_handshake(addr: &SocketAddr, torrent: &Torrent) -> std::result::Result<(), std::io::Error> {
-// fn do_handshake(addr: &SocketAddr, torrent: &Torrent) {
-//     let mut stream = TcpStream::connect_timeout(addr, std::time::Duration::from_secs(5))?;
-
-//     let mut handshake: [u8; 68] = [0; 68];
-
-//     {
-//         let mut cursor = Cursor::new(&mut handshake[..]);
-
-//         cursor.write(&[19]);
-//         cursor.write(b"BitTorrent protocol");
-//         cursor.write(&[0,0,0,0,0,0,0,0]);
-//         cursor.write(torrent.info_hash.as_ref());
-//         cursor.write(b"-RT1220sJ1Nna5rzWLd8");
-//     }
-
-//     stream.set_write_timeout(Some(std::time::Duration::from_secs(30)));
-    
-//     stream.write_all(&handshake)?;
-//     stream.flush()?;
-//     stream.set_read_timeout(Some(std::time::Duration::from_secs(30)));
-
-//     // TODO: Use SmallVec here
-//     let mut buffer = [0; 128];
-
-//     stream.read_exact(&mut buffer[..1]);
-
-//     let len = buffer[0] as usize;
-
-//     stream.read_exact(&mut buffer[..len + 48]);
-
-//     if &buffer[len + 8..len + 28] == torrent.info_hash.as_slice() {
-//         //println!("HASH MATCHED !", );
-//     }
-
-//     //read_messages(stream)
-// }
+use smallvec::{SmallVec, smallvec};
 
 use url::Url;
-
-// struct TrackersList {
-//     list: Vec<Tracker>
-// }
-
-// impl From<&Torrent> for TrackersList {
-//     fn from(torrent: &Torrent) -> TrackersList {
-//         TrackersList {
-//             list: torrent.iter_urls().map(Tracker::new).collect()
-//         }
-//     }
-// }
 
 use crate::http_client::HttpError;
 use crossbeam_channel::{unbounded, Receiver, Sender};
@@ -396,32 +164,50 @@ enum Choke {
     Choked
 }
 
+use std::collections::VecDeque;
+
+type PeerTask = Arc<async_std::sync::RwLock<VecDeque<PieceToDownload>>>;
+
 #[derive(Debug)]
-struct PieceStealer {
-    /// Id of the peer
-    peer_id: usize,
-    stealer: Stealer<PieceToDownload>
+struct PieceInfo {
+    workers: SmallVec<[PeerTask; 4]>
 }
 
-impl PieceStealer {
-    fn new(peer: &Peer) -> PieceStealer {
-        PieceStealer {
-            peer_id: peer.id,
-            stealer: peer.worker.stealer()
+impl PieceInfo {
+    fn new(peer: &Peer) -> PieceInfo {
+        PieceInfo {
+            workers: smallvec![peer.tasks.clone()]
         }
     }
+}
+
+use hashbrown::HashMap;
+
+enum PieceActorMessage {
+    AddQueue {
+        id: PeerId,
+        queue: PeerTask
+    },
+    RemoveQueue {
+        id: PeerId ,
+        queue: PeerTask
+   },
 }
 
 #[derive(Debug)]
 struct PiecesActor {
     data: TorrentData,
-    pieces: RwLock<Vec<Option<PieceStealer>>>,
+    pieces: async_std::sync::RwLock<Vec<Option<PieceInfo>>>,
     nblocks_piece: usize,
     block_size: usize,
+    queue_map: async_std::sync::RwLock<HashMap<PeerId, PeerTask>>,
+    channel: async_std::sync::Receiver<PieceActorMessage>
 }
 
+type PeerId = usize;
+
 impl PiecesActor {
-    fn new(data: &TorrentData) -> PiecesActor {
+    fn new(data: &TorrentData, channel: async_std::sync::Receiver<PieceActorMessage>) -> PiecesActor {
         let (npieces, nblocks_piece, block_size) = data.with(|data| {
             (data.pieces.num_pieces, data.pieces.nblocks_piece, data.pieces.block_size)
         });
@@ -435,34 +221,69 @@ impl PiecesActor {
             data: data.clone(),
             nblocks_piece,
             block_size,
-            pieces: RwLock::new(p),
+            channel,
+            pieces: async_std::sync::RwLock::new(p),
+            queue_map: async_std::sync::RwLock::new(HashMap::new()),
         }
     }
+
+    async fn set_task_queue(&self, id: PeerId, queue: PeerTask) {
+        let mut queue_map = self.queue_map.write().await;
+        queue_map.insert(id, queue);
+    }
     
-    fn start() {
+    async fn start(&self) {
+        use PieceActorMessage::*;
         
+        while let Some(msg) = self.channel.recv().await {
+            match msg {
+                RemoveQueue { id, queue } => {
+                    {
+                        let mut queue_map = self.queue_map.write().await;
+                        queue_map.remove(&id);
+                    }
+                    {
+                        let mut pieces = self.pieces.write().await;
+                        for piece in pieces.iter_mut().filter_map(|p| p.as_mut()) {
+                            piece.workers.retain(|p| {
+                                !Arc::ptr_eq(&p, &queue)
+                            });
+                        }
+                    }
+                }
+                AddQueue { id, queue } => {
+                    
+                }                
+            }            
+        }
     }
 
-    fn get_pieces_to_downloads(&self, peer: &Peer, update: &BitFieldUpdate) {
-        let mut pieces = self.pieces.write();
+    async fn get_pieces_to_downloads(&self, peer: &Peer, update: &BitFieldUpdate) {
+        let mut pieces = self.pieces.write().await;
+        let queue_map = self.queue_map.read().await;
+        let mut queue = match queue_map.get(&peer.id) {
+            Some(queue) => queue.write().await,
+            _ => return
+        };
+        
         match update {
             BitFieldUpdate::BitField(bitfield) => {
                 let pieces = pieces.iter_mut()
                                    .enumerate()
                                    .filter(|(index, p)| p.is_none() && bitfield.get_bit(*index))
-                                   .take(5);
+                                   .take(100);
                 
                 let nblock_piece = self.nblocks_piece;
                 let block_size = self.block_size;
-                let worker = &peer.worker;
+                // let worker = &peer.worker;
 
                 let mut i = 0;
                 for (piece, value) in pieces {
                     for i in 0..nblock_piece {
-                        worker.push(PieceToDownload::new(piece, i * block_size));
+                        queue.push_back(PieceToDownload::new(piece, i * block_size, block_size));
                     }
-                    // println!("PUSHING PIECE={} TO PEER {:?}", piece, peer.id);
-                    value.replace(PieceStealer::new(peer));
+                    //println!("[{:?}] PUSHING PIECE={}", peer.id, piece);
+                    value.replace(PieceInfo::new(peer));
                     i += 1;
                 }
             }
@@ -476,14 +297,13 @@ impl PiecesActor {
                 if pieces.get(piece).unwrap().is_none() {
                     let nblock_piece = self.nblocks_piece;
                     let block_size = self.block_size;
-                    let worker = &peer.worker;
 
                     for i in 0..nblock_piece {
-                        worker.push(PieceToDownload::new(piece, i * block_size));
+                        queue.push_back(PieceToDownload::new(piece, i * block_size, block_size));
                     }
 
-                    println!("_PUSHING PIECE={} TO PEER {:?}", piece, peer.id);
-                    pieces.get_mut(piece).unwrap().replace(PieceStealer::new(peer));
+                    //println!("[{:?}] _PUSHING PIECE={}", peer.id, piece);
+                    pieces.get_mut(piece).unwrap().replace(PieceInfo::new(peer));
                 }
 
             }            
@@ -491,21 +311,23 @@ impl PiecesActor {
     }
 }
 
-use crossbeam_deque::{Worker, Injector, Stealer};
-
+#[derive(Clone, Debug)]
 struct PieceToDownload {
     piece: u32,
-    start: u32
+    start: u32,
+    size: u32
 }
 
 impl PieceToDownload {
-    fn new(piece: usize, start: usize) -> PieceToDownload {
-        PieceToDownload { piece: piece as u32, start: start as u32 }
+    fn new(piece: usize, start: usize, size: usize) -> PieceToDownload {
+        PieceToDownload { piece: piece as u32, start: start as u32, size: size as u32 }
     }
 }
 
+use coarsetime::{Duration, Instant};
+
 struct Peer {
-    id: usize,
+    id: PeerId,
     addr: SocketAddr,
     data: TorrentData,
     pieces_actor: Arc<PiecesActor>,
@@ -517,7 +339,12 @@ struct Peer {
     /// BitField of the peer
     bitfield: BitField,
     /// List of pieces to download
-    worker: Worker<PieceToDownload>
+    tasks: PeerTask,
+
+    nblocks: usize, // Downloaded
+    start: Option<Instant>, // Downloaded,
+    _tasks: Option<VecDeque<PieceToDownload>>,
+    npieces: usize,
 }
 
 use async_std::sync::Mutex;
@@ -643,19 +470,25 @@ impl Peer {
     async fn new(addr: SocketAddr, data: TorrentData, pieces_actor: Arc<PiecesActor>) -> Result<Peer> {
         let stream = TcpStream::connect(&addr).await?;
 
+        let id = PEER_COUNTER.fetch_add(1, Ordering::SeqCst);
+
         let bitfield = BitField::new(data.with(|d| d.pieces.num_pieces));
         
         Ok(Peer {
             addr,
             pieces_actor,
+            npieces: data.with(|d| d.pieces.num_pieces),
             data,
             bitfield,
-            id: PEER_COUNTER.fetch_add(1, Ordering::SeqCst),
-            worker: Worker::new_lifo(),
+            id,
+            tasks: PeerTask::default(),
             reader: BufReader::with_capacity(32 * 1024, stream),
             state: PeerState::Connecting,
             buffer: Vec::with_capacity(32 * 1024),
             choked: Choke::Choked,
+            nblocks: 0,
+            start: None,
+            _tasks: None,
         })
     }
 
@@ -740,6 +573,8 @@ impl Peer {
     }
 
     async fn start(&mut self) -> Result<()> {
+        self.pieces_actor.set_task_queue(self.id, self.tasks.clone()).await;
+        
         self.do_handshake().await?;
 
         loop {
@@ -748,6 +583,42 @@ impl Peer {
         }
         
         Ok(())
+    }
+
+    async fn take_tasks(&mut self) -> Option<PieceToDownload> {
+        if self._tasks.is_none() {
+            let t = self.tasks.read().await;
+            self._tasks = Some(t.clone());
+        }
+        self._tasks.as_mut().map(|mut t| t.pop_front().unwrap())
+    }
+
+    async fn maybe_send_request(&mut self) -> Result<()> {
+        if !self.am_choked() {
+            // let task = self.tasks.write().await.pop_front();
+
+            let task = match self._tasks.as_mut() {
+                Some(mut tasks) => tasks.pop_front(),
+                _ => self.take_tasks().await
+            };
+            
+            if let Some(task) = task {
+                self.send_request(task).await?;
+            } else {
+                //self.pieces_actor.get_pieces_to_downloads().await;
+                // println!("[{:?}] No More Task ! {} downloaded in {:?}s", self.id, self.nblocks, self.start.map(|s| s.elapsed().as_secs()));
+                // Steal others tasks
+            }
+        }
+        Ok(())
+    }
+
+    async fn send_request(&mut self, task: PieceToDownload) -> Result<()> {
+        self.send_message(MessagePeer::Request {
+            index: task.piece,
+            begin: task.start,
+            length: task.size,
+        }).await
     }
 
     fn set_choked(&mut self, choked: bool) {
@@ -785,20 +656,15 @@ impl Peer {
         match msg {
             Choke => {
                 self.set_choked(true);
-                println!("CHOKE", );
+                println!("[{}] CHOKE", self.id);
             },
             UnChoke => {
                 // If the peer has piece we're interested in
                 // Send a Request
                 self.set_choked(false);
-                println!("UNCHOKE", );
+                println!("[{}] UNCHOKE", self.id);
                 
-                // self.send_message(MessagePeer::Request {
-                //     index: piece as u32,
-                //     begin: index as u32,
-                //     length: 0x4000,
-                // });                            
-
+                self.maybe_send_request().await?;
             },
             Interested => {
                 // Unshoke this peer
@@ -811,48 +677,40 @@ impl Peer {
             Have { piece_index } => {
                 let update = BitFieldUpdate::from(piece_index);
 
-                self.pieces_actor.get_pieces_to_downloads(&self, &update);
+                //println!("[{:?}] HAVE {}", self.id, piece_index);
+                
+                self.pieces_actor.get_pieces_to_downloads(&self, &update).await;
 
                 self.update_bitfield(update);
                 
-                println!("HAVE {}", piece_index);
-                // if let Some((piece, index)) = interested {
-                //     println!("INTERESTED", );
-                //     // If unchoked Request
-                //     self.send_message(MessagePeer::Interested).await?;
-                // }
+                if self.am_choked() {
+                    self.send_message(MessagePeer::Interested).await?;
+                } else {
+                    self.maybe_send_request().await?;
+                }
             },
             BitField (bitfield) => {
                 // Send an Interested ?
 
                 let bitfield = crate::bitfield::BitField::from(
                     bitfield,
-                    self.data.with(|data| data.pieces.num_pieces)
+                    self.npieces
+                    //self.data.with(|data| data.pieces.num_pieces)
                 )?;
                 
                 let update = BitFieldUpdate::from(bitfield);
                 
-                self.pieces_actor.get_pieces_to_downloads(&self, &update);
+                //println!("[{:?}] BITFIELD", self.id);
+                
+                self.pieces_actor.get_pieces_to_downloads(&self, &update).await;
                 
                 self.update_bitfield(update);
 
-                println!("BITFIELD", );
-                // if let Some((piece, index)) = interested {
-                //     // If unchoked Request
-                //     if self.am_choked() {
-                //         println!("SEND INTERESTED", );
-                //         self.send_message(MessagePeer::Interested).await?;
-                //     } else {
-                //         if let Some((piece, index)) = self.pieces_actor.acquire_this_piece_or_new(piece, &self.bitfield) {
-                //             println!("SEND REQUEST", );
-                //             self.send_message(MessagePeer::Request {
-                //                 index: piece as u32,
-                //                 begin: index as u32,
-                //                 length: 0x4000,
-                //             });                            
-                //         };
-                //     }
-                // }
+                if self.am_choked() {
+                    self.send_message(MessagePeer::Interested).await?;
+                } else {
+                    self.maybe_send_request().await?;
+                }
                 
             },
             Request { index, begin, length } => {
@@ -864,7 +722,15 @@ impl Peer {
                 // If we already have it, send another Request
                 // Check the sum and write to disk
                 // Send Request
-                println!("PIECE {} {} {:?}", index, begin, block);
+                //println!("[{:?}] PIECE {} {} {}", self.id, index, begin, block.len());
+
+                if self.start.is_none() {
+                    self.start.replace(Instant::now());
+                }
+
+                self.nblocks += block.len();
+
+                self.maybe_send_request().await?;                    
             },
             Cancel { index, begin, length } => {
                 // Cancel a Request
@@ -883,6 +749,10 @@ impl Peer {
             }
         }
         Ok(())
+    }
+
+    fn is_pending_data(&self) -> bool {
+        !self.reader.buffer().is_empty()
     }
 
     async fn read_messages(&mut self) -> Result<()> {
@@ -956,21 +826,6 @@ enum MessageActor {
     RemovePeer(PeerAddr),
 }
 
-#[derive(Debug, Default)]
-struct PieceInformation {
-    current: Option<PeerAddr>,
-    list: SmallVec<[PeerAddr; 8]>
-}
-
-// impl Default for PieceInformation {
-//     fn default() -> Self {
-//         PieceInformation {
-//             current: None,
-//             list: Default::D
-//         }
-//     }
-// }
-
 #[derive(Debug)]
 struct Pieces {
     /// Number of pieces
@@ -980,7 +835,6 @@ struct Pieces {
     /// Pieces other peers have
     /// peers_pieces[0] is the number of peers having the piece 0
     peers_pieces: Vec<u8>,
-    //peers_pieces: Vec<PieceInformation>,
     /// Size of a block
     block_size: usize,
     /// Number of block in 1 piece
@@ -1201,7 +1055,8 @@ impl TorrentActor {
 
     fn connect_to_peers(&self, addrs: &[SocketAddr], data: TorrentData) {
 
-        let pieces_actor = Arc::new(PiecesActor::new(&data));
+        let (sender, receiver) = async_std::sync::channel(100);
+        let pieces_actor = Arc::new(PiecesActor::new(&data, receiver));
         
         for addr in addrs {
             println!("ADDR: {:?}", addr);
@@ -1220,6 +1075,10 @@ impl TorrentActor {
                 peer.start().await;
             });
         }
+            
+        task::spawn(async move {
+            pieces_actor.start().await
+        });
     }
     
     fn find_tracker(&mut self) -> Option<Vec<SocketAddr>> {
