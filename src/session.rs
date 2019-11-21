@@ -531,10 +531,22 @@ impl PieceBuffer {
         PieceBuffer { buf, piece_index, bytes_added: 0 }
     }
 
+    fn new_with_block(
+        piece_index: u32,
+        piece_size: usize,
+        begin: u32,
+        block: &[u8]
+    ) -> PieceBuffer {
+        let mut piece_buffer = PieceBuffer::new(piece_index as usize, piece_size);
+        piece_buffer.add_block(begin, block);
+        piece_buffer
+    }
+
     /// begin: offset of the block in the piece
-    fn add_block(&mut self, begin: usize, block: &[u8]) {
+    fn add_block(&mut self, begin: u32, block: &[u8]) {
         let block_len = block.len();
 
+        let begin = begin as usize;
         let buffer_len = self.buf.len();
         if let Some(buffer) = self.buf.get_mut(begin..begin + block_len) {
             buffer.copy_from_slice(block);
@@ -809,7 +821,6 @@ impl Peer {
                 } else {
                     self.maybe_send_request().await?;
                 }
-
             },
             Request { index, begin, length } => {
                 // Mark this peer as interested
@@ -828,30 +839,17 @@ impl Peer {
 
                 self.nblocks += block.len();
 
-                self.add_block(index as usize, begin as usize, block);
+                let piece_size = self.pieces_actor.piece_size(index as usize);
+                let mut is_completed = false;
 
-                // if let Some(piece_buffer) = self.piece_buffer.get_mut(&(index as usize)) {
-                //     piece_buffer.add_block(begin as usize, block);
+                self.piece_buffer
+                    .entry(index as usize)
+                    .and_modify(|p| { p.add_block(begin, block); is_completed = p.is_completed() })
+                    .or_insert_with(|| PieceBuffer::new_with_block(index, piece_size, begin, block));
 
-                //     if piece_buffer.is_completed() {
-                //         println!("[{}] PIECE {} COMPLETED !", self.id, index);
-
-                //         self.pieces_actor_chan.send(PieceActorMessage::AddPiece(piece_buffer)).await;
-
-
-                //     } else {
-                //         //println!("[{}] PIECEADDED {} {}", self.id, index, piece_buffer.added());
-                //     }
-                // } else {
-                //     let mut piece_buffer = PieceBuffer::new(
-                //         index as usize,
-                //         self.pieces_actor.piece_size(index as usize)
-                //     );
-
-                //     piece_buffer.add_block(begin as usize, block);
-
-                //     self.piece_buffer.insert(index as usize, piece_buffer);
-                // }
+                if is_completed {
+                    self.send_completed(index).await;
+                }
 
                 self.maybe_send_request().await?;
             },
@@ -874,32 +872,12 @@ impl Peer {
         Ok(())
     }
 
-    fn add_block(&mut self, index: usize, begin: usize, block: &[u8]) {
-        if let Some(index) = self.add_block_to_buffer(index, begin, block) {
-            let piece_buffer = self.piece_buffer.remove(&index).unwrap();
+    async fn send_completed(&mut self, index: u32) {
+        let piece_buffer = self.piece_buffer.remove(&(index as usize)).unwrap();
 
-            self.pieces_actor_chan.send(
-                PieceActorMessage::AddPiece(piece_buffer)
-            );//.await;
-        };
-    }
-
-    fn add_block_to_buffer(&mut self, index: usize, begin: usize, block: &[u8]) -> Option<usize> {
-        if let Some(piece_buffer) = self.piece_buffer.get_mut(&index) {
-            piece_buffer.add_block(begin, block);
-
-            if piece_buffer.is_completed() {
-                return Some(index);
-            }
-        } else {
-            let mut piece_buffer = PieceBuffer::new(
-                index,
-                self.pieces_actor.piece_size(index)
-            );
-            piece_buffer.add_block(begin, block);
-            self.piece_buffer.insert(index, piece_buffer);
-        }
-        None
+        self.pieces_actor_chan.send(
+            PieceActorMessage::AddPiece(piece_buffer)
+        ).await;
     }
 
     fn is_pending_data(&self) -> bool {
