@@ -34,3 +34,5 @@ impl std::hash::Hasher for NoHash {
         self.0 = n
     }
 }
+
+pub type Map<K, V> = std::collections::HashMap<K, V, NoHash>;

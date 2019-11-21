@@ -22,7 +22,7 @@ crossbeam-channel = "0.4"
 #crossbeam-deque = "0.7"
 parking_lot = "0.9"
 #bit_field = "0.10.0"
-hashbrown = "0.6"
+# hashbrown = "0.6"
 coarsetime = "0.1"
 num_cpus = "1"
 

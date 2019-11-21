@@ -1,7 +1,7 @@
 use crate::metadata::Torrent;
 use crate::http_client::{self, AnnounceQuery, AnnounceResponse};
 use crate::bitfield::BitField;
-use crate::utils::{FromSlice, NoHash};
+use crate::utils::{FromSlice, Map};
 
 use crate::http_client::{Peers,Peers6};
 use std::io::Cursor;
@@ -189,8 +189,6 @@ impl PieceInfo {
     //     }
     // }
 }
-
-use hashbrown::HashMap;
 
 // enum PieceActorMessage {
 //     AddQueue {
@@ -409,7 +407,7 @@ struct Peer {
     /// Small buffer where the downloaded block are kept.
     /// Once the piece is full, we send this buffer to PieceActor
     /// and reset this vec.
-    piece_buffer: HashMap<usize, PieceBuffer, NoHash>,
+    piece_buffer: Map<usize, PieceBuffer>,
 
     pieces_detail: Pieces,
 
@@ -632,7 +630,7 @@ impl Peer {
             nblocks: 0,
             start: None,
             _tasks: None,
-            piece_buffer: HashMap::default(),
+            piece_buffer: Map::default(),
         })
     }
 
@@ -1241,7 +1239,7 @@ struct TorrentSupervisor {
 
     pieces_detail: Pieces,
 
-    peers: HashMap<PeerId, PeerState, NoHash>,
+    peers: Map<PeerId, PeerState>,
 
     pieces: Vec<Option<PieceInfo>>,
 }
