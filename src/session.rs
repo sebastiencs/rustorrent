@@ -411,6 +411,8 @@ struct Peer {
     /// and reset this vec.
     piece_buffer: HashMap<usize, PieceBuffer, NoHash>,
 
+    pieces_detail: Pieces,
+
     nblocks: usize, // Downloaded
     start: Option<Instant>, // Downloaded,
     _tasks: Option<VecDeque<PieceToDownload>>,
@@ -606,18 +608,20 @@ impl Peer {
     async fn new(
         addr: SocketAddr,
         data: TorrentData,
+        pieces_detail: Pieces,
         supervisor: a_sync::Sender<PeerMessage>,
     ) -> Result<Peer> {
         let stream = TcpStream::connect(&addr).await?;
 
         let id = PEER_COUNTER.fetch_add(1, Ordering::SeqCst);
 
-        let bitfield = BitField::new(data.with(|d| d.pieces.num_pieces));
+        let bitfield = BitField::new(pieces_detail.num_pieces);
 
         Ok(Peer {
             addr,
             supervisor,
-            npieces: data.with(|d| d.pieces.num_pieces),
+            npieces: pieces_detail.num_pieces,
+            pieces_detail,
             data,
             bitfield,
             id,
@@ -718,7 +722,7 @@ impl Peer {
     ) -> PeerWaitEvent {
         use futures::async_await::*;
         use futures::task::{Context, Poll};
-        use futures::future::{self, FutureExt};
+        use futures::future;
         use pin_utils::pin_mut;
 
         let mut msgs = Box::pin(self.read_messages());
@@ -736,26 +740,8 @@ impl Peer {
 
             match FutureExt::poll_unpin(&mut cmds, cx).map(PeerWaitEvent::Cmd) {
                 v @ Poll::Ready(_) => return v,
-                _ => {}
+                _ => Poll::Pending
             }
-
-            // let mut msgs = |cx: &mut Context<'_>| {
-            //     FutureExt::poll_unpin(&mut msgs, cx).map(PeerWaitEvent::Msg)
-            // };
-            // let msgs: &mut dyn FnMut(&mut Context<'_>) -> Poll<_> = &mut msgs;
-
-            // let mut cmds = |cx: &mut Context<'_>| {
-            //     FutureExt::poll_unpin(&mut cmds, cx).map(PeerWaitEvent::Cmd)
-            // };
-            // let cmds: &mut dyn FnMut(&mut Context<'_>) -> Poll<_> = &mut cmds;
-
-            // for poller in &mut [msgs, cmds] {
-            //     match poller(cx) {
-            //         x @ Poll::Ready(_) => return x,
-            //         Poll::Pending => {}
-            //     }
-            // }
-            Poll::Pending
         };
 
         future::poll_fn(fun).await
@@ -777,13 +763,16 @@ impl Peer {
         let mut cmds = Box::pin(cmds);
 
         loop {
-
             match self.wait_event(cmds.as_mut()).await {
-                PeerWaitEvent::Msg(..) => {
+                PeerWaitEvent::Msg(Ok(..)) => {
                     self.dispatch().await?;
                 }
                 PeerWaitEvent::Cmd(..) => {
                     self.maybe_send_request().await;
+                }
+                PeerWaitEvent::Msg(Err(e)) => {
+                    eprintln!("[{}] PEER ERROR MSG {:?}", self.id, e);
+                    return Err(e);
                 }
             }
         }
@@ -840,21 +829,6 @@ impl Peer {
     fn am_choked(&self) -> bool {
         self.choked == Choke::Choked
     }
-
-    // fn update_bitfield(&mut self, update: BitFieldUpdate) {
-    //     self.data.with_write(|data| {
-    //         data.pieces.update(&update);
-    //     });
-
-    //     match update {
-    //         BitFieldUpdate::BitField(bitfield) => {
-    //             self.bitfield = bitfield;
-    //         }
-    //         BitFieldUpdate::Piece(piece) => {
-    //             self.bitfield.set_bit(piece as usize);
-    //         }
-    //     }
-    // }
 
     async fn dispatch<'a>(&'a mut self) -> Result<()> {
         use MessagePeer::*;
@@ -945,17 +919,17 @@ impl Peer {
 
                 self.nblocks += block.len();
 
-                //let piece_size = self.pieces_actor.piece_size(index as usize);
+                let piece_size = self.pieces_detail.piece_size(index as usize);
                 let mut is_completed = false;
 
-                // self.piece_buffer
-                //     .entry(index as usize)
-                //     .and_modify(|p| { p.add_block(begin, block); is_completed = p.is_completed() })
-                //     .or_insert_with(|| PieceBuffer::new_with_block(index, piece_size, begin, block));
+                self.piece_buffer
+                    .entry(index as usize)
+                    .and_modify(|p| { p.add_block(begin, block); is_completed = p.is_completed() })
+                    .or_insert_with(|| PieceBuffer::new_with_block(index, piece_size, begin, block));
 
-                // if is_completed {
-                //     self.send_completed(index).await;
-                // }
+                if is_completed {
+                    self.send_completed(index).await;
+                }
 
                 self.maybe_send_request().await?;
             },
@@ -981,14 +955,8 @@ impl Peer {
     async fn send_completed(&mut self, index: u32) {
         let piece_buffer = self.piece_buffer.remove(&(index as usize)).unwrap();
 
-        println!("[{}] PIECE COMPLETED {}", self.id, index);
-        // self.pieces_actor_chan.send(
-        //     PieceActorMessage::AddPiece(piece_buffer)
-        // ).await;
-    }
-
-    fn is_pending_data(&self) -> bool {
-        !self.reader.buffer().is_empty()
+        self.supervisor.send(PeerMessage::AddPiece(piece_buffer)).await;
+        //println!("[{}] PIECE COMPLETED {}", self.id, index);
     }
 
     async fn read_messages(&mut self) -> Result<()> {
@@ -1000,12 +968,12 @@ impl Peer {
         };
 
         if length == 0 {
-            return Ok(()); // continue
+            return Ok(0); // Keep Alive
         }
 
         self.read_exactly(length).await?;
 
-        Ok(())
+        Ok(length)
     }
 
     async fn read_exactly(&mut self, n: usize) -> Result<()> {
@@ -1062,15 +1030,15 @@ impl Peer {
 //     RemovePeer(PeerAddr),
 // }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Pieces {
     /// Number of pieces
     num_pieces: usize,
     /// SHA1 of each piece
-    sha1_pieces: Vec<Arc<Vec<u8>>>,
+    sha1_pieces: Arc<Vec<Arc<Vec<u8>>>>,
     /// Pieces other peers have
     /// peers_pieces[0] is the number of peers having the piece 0
-    peers_pieces: Vec<u8>,
+//    peers_pieces: Vec<u8>,
     /// Size of a block
     block_size: usize,
     /// Number of block in 1 piece
@@ -1087,7 +1055,7 @@ struct Pieces {
 
 impl From<&Torrent> for Pieces {
     fn from(torrent: &Torrent) -> Pieces {
-        let sha1_pieces = torrent.sha_pieces();
+        let sha1_pieces = Arc::new(torrent.sha_pieces());
 
         let files_size = torrent.files_total_size();
         let piece_length = torrent.meta.info.piece_length as usize;
@@ -1105,9 +1073,6 @@ impl From<&Torrent> for Pieces {
             panic!("Invalid hashes");
         }
 
-        let mut peers_pieces = Vec::with_capacity(num_pieces);
-        peers_pieces.resize_with(num_pieces, Default::default);
-
         let block_size = std::cmp::min(piece_length, 0x4000);
         let nblocks_piece = (piece_length + block_size - 1) / block_size;
         let nblocks_last_piece = ((files_size % piece_length) + block_size - 1) / block_size;
@@ -1115,7 +1080,6 @@ impl From<&Torrent> for Pieces {
         Pieces {
             num_pieces,
             sha1_pieces,
-            peers_pieces,
             block_size,
             nblocks_piece,
             nblocks_last_piece,
@@ -1134,23 +1098,23 @@ impl From<&Torrent> for Pieces {
 // https://stackoverflow.com/questions/42938907/is-it-possible-to-use-simd-instructions-in-rust
 
 impl Pieces {
-    fn update(&mut self, update: &BitFieldUpdate)  {
-        match update {
-            BitFieldUpdate::BitField(bitfield) => {
-                for (i, piece) in self.peers_pieces.iter_mut().enumerate() {
-                    if bitfield.get_bit(i) {
-                        *piece = piece.saturating_add(1);
-                    }
-                }
-            }
-            BitFieldUpdate::Piece(piece) => {
-                // TODO: Handle inexistant piece
-                if let Some(piece) = self.peers_pieces.get_mut(*piece) {
-                    *piece = piece.saturating_add(1);
-                }
-            }
-        }
-    }
+    // fn update(&mut self, update: &BitFieldUpdate)  {
+    //     match update {
+    //         BitFieldUpdate::BitField(bitfield) => {
+    //             for (i, piece) in self.peers_pieces.iter_mut().enumerate() {
+    //                 if bitfield.get_bit(i) {
+    //                     *piece = piece.saturating_add(1);
+    //                 }
+    //             }
+    //         }
+    //         BitFieldUpdate::Piece(piece) => {
+    //             // TODO: Handle inexistant piece
+    //             if let Some(piece) = self.peers_pieces.get_mut(*piece) {
+    //                 *piece = piece.saturating_add(1);
+    //             }
+    //         }
+    //     }
+    // }
 
     fn piece_size(&self, piece_index: usize) -> usize {
         if piece_index == self.num_pieces - 1 {
@@ -1167,14 +1131,11 @@ impl Pieces {
 #[derive(Debug)]
 struct SharedData {
     torrent: Torrent,
-    pieces: Pieces,
-//    files: FilesActor
 }
 
 impl SharedData {
     fn new(torrent: Torrent) -> SharedData {
         SharedData {
-            pieces: Pieces::from(&torrent),
             torrent,
         }
     }
@@ -1333,8 +1294,10 @@ impl TorrentSupervisor {
             let addr = *addr;
             let data = data.clone();
             let sender = self._sender.clone();
+            let pieces_detail = self.pieces_detail.clone();
+
             task::spawn(async move {
-                let mut peer = match Peer::new(addr, data, sender).await {
+                let mut peer = match Peer::new(addr, data, pieces_detail, sender).await {
                     Ok(peer) => peer,
                     Err(e) => {
                         println!("PEER ERROR {:?}", e);
@@ -1410,7 +1373,7 @@ impl TorrentSupervisor {
                         println!("PIECE RECEIVED BUT NOT FOUND {}", piece_block.piece_index);
                     }
 
-                    // println!("PIECE RECEIVED {} {}", piece_block.piece_index, piece_block.buf.len());
+                    println!("[S] PIECE RECEIVED {} {}", piece_block.piece_index, piece_block.buf.len());
                 }
             }
         }
