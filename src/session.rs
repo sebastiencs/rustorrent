@@ -415,9 +415,6 @@ struct Peer {
     start: Option<Instant>, // Downloaded,
     _tasks: Option<VecDeque<PieceToDownload>>,
     npieces: usize,
-
-    // cmds: a_sync::Receiver<PeerCmd>,
-    // s_cmds: Option<a_sync::Sender<PeerCmd>>,
 }
 
 use async_std::sync::Mutex;
@@ -597,20 +594,19 @@ enum PeerCmd {
     TasksAvailables
 }
 
-use futures::select;
+use futures::future::{Fuse, FutureExt};
+use std::pin::Pin;
 
-// enum PeerStream {
-//     Command(PeerCmd),
-//     Read
-// }
+enum PeerWaitEvent {
+    Msg(Result<()>),
+    Cmd(Option<PeerCmd>),
+}
 
 impl Peer {
     async fn new(
         addr: SocketAddr,
         data: TorrentData,
         supervisor: a_sync::Sender<PeerMessage>,
-        //pieces_actor: Arc<PiecesActor>,
-        //pieces_actor_chan: async_std::sync::Sender<PieceActorMessage>
     ) -> Result<Peer> {
         let stream = TcpStream::connect(&addr).await?;
 
@@ -618,22 +614,15 @@ impl Peer {
 
         let bitfield = BitField::new(data.with(|d| d.pieces.num_pieces));
 
-        //let (s_cmds, cmds) = a_sync::channel(16);
-
         Ok(Peer {
             addr,
             supervisor,
-            //pieces_actor,
-            //pieces_actor_chan,
             npieces: data.with(|d| d.pieces.num_pieces),
             data,
             bitfield,
             id,
-            //cmds,
-            //s_cmds: Some(s_cmds),
             tasks: PeerTask::default(),
             reader: BufReader::with_capacity(32 * 1024, stream),
-            //state: PeerState::Connecting,
             buffer: Vec::with_capacity(32 * 1024),
             choked: Choke::Choked,
             nblocks: 0,
@@ -723,110 +712,84 @@ impl Peer {
         self.reader.get_mut()
     }
 
+    async fn wait_event(
+        &mut self,
+        mut cmds: Pin<&mut Fuse<impl Future<Output = Option<PeerCmd>>>>
+    ) -> PeerWaitEvent {
+        use futures::async_await::*;
+        use futures::task::{Context, Poll};
+        use futures::future::{self, FutureExt};
+        use pin_utils::pin_mut;
+
+        let mut msgs = Box::pin(self.read_messages());
+        pin_mut!(msgs);
+
+        assert_unpin(&msgs);
+        assert_unpin(&cmds);
+        //assert_fused_future();
+
+        let mut fun = |cx: &mut Context<'_>| {
+            match FutureExt::poll_unpin(&mut msgs, cx).map(PeerWaitEvent::Msg) {
+                v @ Poll::Ready(_) => return v,
+                _ => {}
+            }
+
+            match FutureExt::poll_unpin(&mut cmds, cx).map(PeerWaitEvent::Cmd) {
+                v @ Poll::Ready(_) => return v,
+                _ => {}
+            }
+
+            // let mut msgs = |cx: &mut Context<'_>| {
+            //     FutureExt::poll_unpin(&mut msgs, cx).map(PeerWaitEvent::Msg)
+            // };
+            // let msgs: &mut dyn FnMut(&mut Context<'_>) -> Poll<_> = &mut msgs;
+
+            // let mut cmds = |cx: &mut Context<'_>| {
+            //     FutureExt::poll_unpin(&mut cmds, cx).map(PeerWaitEvent::Cmd)
+            // };
+            // let cmds: &mut dyn FnMut(&mut Context<'_>) -> Poll<_> = &mut cmds;
+
+            // for poller in &mut [msgs, cmds] {
+            //     match poller(cx) {
+            //         x @ Poll::Ready(_) => return x,
+            //         Poll::Pending => {}
+            //     }
+            // }
+            Poll::Pending
+        };
+
+        future::poll_fn(fun).await
+    }
+
     async fn start(&mut self) -> Result<()> {
 
-        let (s_cmds, cmds) = a_sync::channel(16);
+        let (addr, cmds) = a_sync::channel(1000);
 
         self.supervisor.send(PeerMessage::AddPeer {
             id: self.id,
             queue: self.tasks.clone(),
-            addr: s_cmds,
-//            addr: self.s_cmds.take().unwrap(),
+            addr,
         }).await;
 
         self.do_handshake().await?;
 
-        //use futures::future::FutureExt;
-        use pin_utils::pin_mut;
-
-        // let msgs = self.read_messages().fuse();
-        // let cmds = cmds.recv().fuse();
-        // let mut msgs = Box::pin(msgs);
-        // let mut cmds = Box::pin(cmds);
-
-        // let mut msgs = {
-        //     Box::pin(self.read_messages().fuse())
-        // };
-
-        // return msgs;
-
-        // let mut msgs = self.fused_msgs.unwrap();
-
         let cmds = cmds.recv().fuse();
         let mut cmds = Box::pin(cmds);
 
-        // use futures::future::poll_fn;
-
-        // let a = async {
-        //     self.read_messages()
-        // };
-        // let mut a = Box::pin(a.fuse());
-
-        //use futures::future::select;
-        use futures::future::{self, Either, Future, FutureExt};
-
-        // let a = Box::pin(self.read_messages());
-
         loop {
 
-            select! {
-                msg =
-                    self.read_messages().fuse()
-                 => {
-                     self.dispatch().await?;
-                    //return 1;
-                    //self.dispatch().await?;
-                },
-                cmd = cmds => {
+            match self.wait_event(cmds.as_mut()).await {
+                PeerWaitEvent::Msg(..) => {
+                    self.dispatch().await?;
+                }
+                PeerWaitEvent::Cmd(..) => {
                     self.maybe_send_request().await;
-                    println!("RECEIVED CMD {:?}", cmd);
-                    //return cmd;
-                    //self.dispatch().await?;
-                },
-            };
-
-            // self.dispatch().await?;
-
-
-            // select! {
-            //     msg = msgs => {
-            //         //self.dispatch().await?;
-            //         //return 1;
-            //         //self.dispatch().await?;
-            //     },
-            //     cmd = cmds => {
-            //         println!("RECEIVED CMD {:?}", cmd);
-            //         //return cmd;
-            //         //self.dispatch().await?;
-            //     },
-            // };
-
-
-            //return msgs;
-            // let msgs = self.read_messages().fuse();
-            // pin_mut!(msgs);
-
-            // select! {
-            //     msg = msgs => {
-            //         //self.dispatch().await?;
-            //     },
-            // };
-
-            // self.read_messages().await?;
-            // self.dispatch().await?;
+                }
+            }
         }
 
         Ok(())
     }
-
-    // async fn get_cmds(cmds: Receiver<PeerCmd>) -> Result<PeerStream> {
-    //     loop {
-    //         match cmds.recv() {
-    //             Some(cmd) => Ok(cmd),
-    //             _ => Err(TorrentError::InvalidInput)
-    //         }
-    //     }
-    // }
 
     async fn take_tasks(&mut self) -> Option<PieceToDownload> {
         if self._tasks.is_none() {
@@ -838,7 +801,6 @@ impl Peer {
 
     async fn maybe_send_request(&mut self) -> Result<()> {
         if !self.am_choked() {
-            // let task = self.tasks.write().await.pop_front();
 
             let task = match self._tasks.as_mut() {
                 Some(mut tasks) => tasks.pop_front(),
@@ -852,6 +814,9 @@ impl Peer {
                 println!("[{:?}] No More Task ! {} downloaded in {:?}s", self.id, self.nblocks, self.start.map(|s| s.elapsed().as_secs()));
                 // Steal others tasks
             }
+        } else {
+            self.send_message(MessagePeer::Interested).await;
+            println!("[{}] SENT INTERESTED", self.id);
         }
         Ok(())
     }
@@ -922,8 +887,9 @@ impl Peer {
 
                 self.supervisor.send(PeerMessage::UpdateBitfield { id: self.id, update }).await;
 
-                //println!("[{:?}] HAVE {}", self.id, piece_index);
+                println!("[{:?}] HAVE {}", self.id, piece_index);
 
+                //self.cmds.recv().await;
 
                 //self.pieces_actor.get_pieces_to_downloads(&self, &update).await;
 
@@ -948,7 +914,9 @@ impl Peer {
 
                 self.supervisor.send(PeerMessage::UpdateBitfield { id: self.id, update }).await;
 
-                //println!("[{:?}] BITFIELD", self.id);
+                //self.cmds.recv().await;
+
+                println!("[{:?}] BITFIELD", self.id);
 
                 //self.pieces_actor.get_pieces_to_downloads(&self, &update).await;
 
@@ -985,9 +953,9 @@ impl Peer {
                 //     .and_modify(|p| { p.add_block(begin, block); is_completed = p.is_completed() })
                 //     .or_insert_with(|| PieceBuffer::new_with_block(index, piece_size, begin, block));
 
-                if is_completed {
-                    self.send_completed(index).await;
-                }
+                // if is_completed {
+                //     self.send_completed(index).await;
+                // }
 
                 self.maybe_send_request().await?;
             },
@@ -1013,6 +981,7 @@ impl Peer {
     async fn send_completed(&mut self, index: u32) {
         let piece_buffer = self.piece_buffer.remove(&(index as usize)).unwrap();
 
+        println!("[{}] PIECE COMPLETED {}", self.id, index);
         // self.pieces_actor_chan.send(
         //     PieceActorMessage::AddPiece(piece_buffer)
         // ).await;
@@ -1265,6 +1234,34 @@ enum PeerMessage {
     }
 }
 
+impl std::fmt::Debug for PeerMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        use PeerMessage::*;
+        match self {
+            AddPeer { id, .. } => {
+                f.debug_struct("PeerMessage")
+                 .field("AddPeer", &id)
+                 .finish()
+            }
+            RemovePeer { id, .. } => {
+                f.debug_struct("PeerMessage")
+                 .field("RemovePeer", &id)
+                 .finish()
+            }
+            AddPiece(piece) => {
+                f.debug_struct("PeerMessage")
+                 .field("AddPiece", &piece.piece_index)
+                 .finish()
+            }
+            UpdateBitfield { id, .. } => {
+                f.debug_struct("PeerMessage")
+                 .field("UpdateBitfield", &id)
+                 .finish()
+            }
+        }
+    }
+}
+
 struct PeerState {
     bitfield: BitField,
     queue_tasks: PeerTask,
@@ -1434,7 +1431,7 @@ impl TorrentSupervisor {
                 let pieces = pieces.iter_mut()
                                    .enumerate()
                                    .filter(|(index, p)| p.is_none() && bitfield.get_bit(*index))
-                                   .take(5);
+                                   .take(20);
 
                 for (piece, value) in pieces {
                     for i in 0..nblock_piece {
