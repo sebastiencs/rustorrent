@@ -723,7 +723,7 @@ impl Peer {
         use futures::future;
         use pin_utils::pin_mut;
 
-        let mut msgs = Box::pin(self.read_messages());
+        let mut msgs = self.read_messages();
         pin_mut!(msgs);
 
         // assert_unpin(&msgs);
