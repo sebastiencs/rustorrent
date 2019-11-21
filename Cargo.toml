@@ -27,7 +27,8 @@ coarsetime = "0.1"
 num_cpus = "1"
 
 pin-utils = "0.1.0-alpha.4"
-futures = "0.3"
+futures =  { version = "0.3", default-features = false }
+#futures = "0.3"
 async-std = { version = "1", features = ["unstable"] }
 # async-std = "1"
 # surf = "1.0.3"

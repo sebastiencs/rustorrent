@@ -718,7 +718,7 @@ impl Peer {
         &mut self,
         mut cmds: Pin<&mut Fuse<impl Future<Output = Option<PeerCmd>>>>
     ) -> PeerWaitEvent {
-        use futures::async_await::*;
+        //use futures::async_await::*;
         use futures::task::{Context, Poll};
         use futures::future;
         use pin_utils::pin_mut;
@@ -726,8 +726,8 @@ impl Peer {
         let mut msgs = Box::pin(self.read_messages());
         pin_mut!(msgs);
 
-        assert_unpin(&msgs);
-        assert_unpin(&cmds);
+        // assert_unpin(&msgs);
+        // assert_unpin(&cmds);
         //assert_fused_future();
 
         let mut fun = |cx: &mut Context<'_>| {
