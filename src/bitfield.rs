@@ -1,6 +1,7 @@
 use crate::utils::FromSlice;
 use crate::session::TorrentError;
 use crate::session::Result;
+use crate::session::BitFieldUpdate;
 
 #[derive(Debug)]
 pub struct BitField {
@@ -9,6 +10,14 @@ pub struct BitField {
 }
 
 impl BitField {
+    // TODO: Handle this and update
+    pub fn empty() -> BitField {
+        BitField {
+            inner: Vec::new(),
+            nbits: 0
+        }
+    }
+
     pub fn new(nbits: usize) -> BitField {
         BitField {
             inner: vec![0; nbits],
@@ -44,6 +53,17 @@ impl BitField {
             let bit_index = index % 8;
 
             self.inner[slice_index] |= & (1 << (7 - bit_index));
+        }
+    }
+
+    pub fn update(&mut self, update: BitFieldUpdate) {
+        match update {
+            BitFieldUpdate::BitField(bitfield) => {
+                *self = bitfield;
+            }
+            BitFieldUpdate::Piece(piece) => {
+                self.set_bit(piece as usize);
+            }
         }
     }
 }

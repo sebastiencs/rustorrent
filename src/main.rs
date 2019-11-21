@@ -8,6 +8,7 @@ mod metadata;
 mod session;
 mod bitfield;
 mod utils;
+mod actors;
 
 // use async_std::task;
 use std::io::{self, Read};

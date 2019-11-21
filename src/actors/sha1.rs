@@ -1,7 +1,7 @@
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
-struct ToCheck {
+pub struct ToCheck {
 
 }
 

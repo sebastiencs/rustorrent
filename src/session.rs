@@ -148,15 +148,15 @@ impl Tracker {
     }
 }
 
-enum PeerState {
-    Connecting,
-    Handshaking,
-    Downloading {
-        piece: usize,
-        index: usize,
-    },
-    Dead
-}
+// enum PeerState {
+//     Connecting,
+//     Handshaking,
+//     Downloading {
+//         piece: usize,
+//         index: usize,
+//     },
+//     Dead
+// }
 
 #[derive(Debug, PartialEq, Eq)]
 enum Choke {
@@ -175,197 +175,204 @@ struct PieceInfo {
 }
 
 impl PieceInfo {
-    fn new(peer: &Peer) -> PieceInfo {
+    fn new(queue: PeerTask) -> PieceInfo {
         PieceInfo {
             bytes_downloaded: 0,
-            workers: smallvec![peer.tasks.clone()]
+            workers: smallvec![queue]
         }
     }
+
+    // fn new(peer: &Peer) -> PieceInfo {
+    //     PieceInfo {
+    //         bytes_downloaded: 0,
+    //         workers: smallvec![peer.tasks.clone()]
+    //     }
+    // }
 }
 
 use hashbrown::HashMap;
 
-enum PieceActorMessage {
-    AddQueue {
-        id: PeerId,
-        queue: PeerTask
-    },
-    RemoveQueue {
-        id: PeerId ,
-        queue: PeerTask
-    },
-    AddPiece(PieceBuffer)
-    // AddPiece {
-    //     index: u32,
-    //     begin: u32,
-    //     block: Vec<u8>
-    // }
-}
+// enum PieceActorMessage {
+//     AddQueue {
+//         id: PeerId,
+//         queue: PeerTask
+//     },
+//     RemoveQueue {
+//         id: PeerId ,
+//         queue: PeerTask
+//     },
+//     AddPiece(PieceBuffer)
+//     // AddPiece {
+//     //     index: u32,
+//     //     begin: u32,
+//     //     block: Vec<u8>
+//     // }
+// }
 
-#[derive(Debug)]
-struct PiecesActor {
-    data: TorrentData,
-    pieces: async_std::sync::RwLock<Vec<Option<PieceInfo>>>,
-    nblocks_piece: usize,
-    block_size: usize,
-    files_size: usize,
-    piece_length: usize,
-    last_piece_size: usize,
-    npieces: usize,
-    queue_map: async_std::sync::RwLock<HashMap<PeerId, PeerTask>>,
-    channel: async_std::sync::Receiver<PieceActorMessage>
-}
+// #[derive(Debug)]
+// struct PiecesActor {
+//     data: TorrentData,
+//     pieces: async_std::sync::RwLock<Vec<Option<PieceInfo>>>,
+//     nblocks_piece: usize,
+//     block_size: usize,
+//     files_size: usize,
+//     piece_length: usize,
+//     last_piece_size: usize,
+//     npieces: usize,
+//     queue_map: async_std::sync::RwLock<HashMap<PeerId, PeerTask>>,
+//     channel: async_std::sync::Receiver<PieceActorMessage>
+// }
 
 type PeerId = usize;
 
 use sha1::Sha1;
 
-impl PiecesActor {
-    fn new(data: &TorrentData, channel: async_std::sync::Receiver<PieceActorMessage>) -> PiecesActor {
-        let (npieces, nblocks_piece, block_size, files_size, piece_length, last_piece_size) = data.with(|data| {
-            let piece_length = data.pieces.piece_length;
-            let total = data.torrent.files_total_size();
-            let last_piece_size = total % piece_length;
+// impl PiecesActor {
+//     fn new(data: &TorrentData, channel: async_std::sync::Receiver<PieceActorMessage>) -> PiecesActor {
+//         let (npieces, nblocks_piece, block_size, files_size, piece_length, last_piece_size) = data.with(|data| {
+//             let piece_length = data.pieces.piece_length;
+//             let total = data.torrent.files_total_size();
+//             let last_piece_size = total % piece_length;
 
-            (data.pieces.num_pieces,
-             data.pieces.nblocks_piece,
-             data.pieces.block_size,
-             total,
-             piece_length,
-             if last_piece_size == 0 { piece_length } else { last_piece_size }
-            )
-        });
+//             (data.pieces.num_pieces,
+//              data.pieces.nblocks_piece,
+//              data.pieces.block_size,
+//              total,
+//              piece_length,
+//              if last_piece_size == 0 { piece_length } else { last_piece_size }
+//             )
+//         });
 
-        let mut p = Vec::with_capacity(npieces);
-        for _ in 0..npieces {
-            p.push(None);
-        }
+//         let mut p = Vec::with_capacity(npieces);
+//         for _ in 0..npieces {
+//             p.push(None);
+//         }
 
-        PiecesActor {
-            data: data.clone(),
-            nblocks_piece,
-            block_size,
-            channel,
-            files_size,
-            piece_length,
-            last_piece_size,
-            npieces,
-            pieces: async_std::sync::RwLock::new(p),
-            queue_map: async_std::sync::RwLock::new(HashMap::new()),
-        }
-    }
+//         PiecesActor {
+//             data: data.clone(),
+//             nblocks_piece,
+//             block_size,
+//             channel,
+//             files_size,
+//             piece_length,
+//             last_piece_size,
+//             npieces,
+//             pieces: async_std::sync::RwLock::new(p),
+//             queue_map: async_std::sync::RwLock::new(HashMap::new()),
+//         }
+//     }
 
-    async fn set_task_queue(&self, id: PeerId, queue: PeerTask) {
-        let mut queue_map = self.queue_map.write().await;
-        queue_map.insert(id, queue);
-    }
+//     async fn set_task_queue(&self, id: PeerId, queue: PeerTask) {
+//         let mut queue_map = self.queue_map.write().await;
+//         queue_map.insert(id, queue);
+//     }
 
-    fn piece_size(&self, piece_index: usize) -> usize {
-        if piece_index == self.npieces - 1 {
-            self.last_piece_size
-        } else {
-            self.piece_length
-        }
-    }
+//     fn piece_size(&self, piece_index: usize) -> usize {
+//         if piece_index == self.npieces - 1 {
+//             self.last_piece_size
+//         } else {
+//             self.piece_length
+//         }
+//     }
 
-    async fn start(&self) {
-        use PieceActorMessage::*;
+//     async fn start(&self) {
+//         use PieceActorMessage::*;
 
-        while let Some(msg) = self.channel.recv().await {
-            match msg {
-                RemoveQueue { id, queue } => {
-                    {
-                        let mut queue_map = self.queue_map.write().await;
-                        queue_map.remove(&id);
-                    }
-                    {
-                        let mut pieces = self.pieces.write().await;
-                        for piece in pieces.iter_mut().filter_map(Option::as_mut) {
-                            piece.workers.retain(|p| {
-                                !Arc::ptr_eq(&p, &queue)
-                            });
-                        }
-                    }
-                }
-                AddQueue { id, queue } => {
+//         while let Some(msg) = self.channel.recv().await {
+//             match msg {
+//                 RemoveQueue { id, queue } => {
+//                     {
+//                         let mut queue_map = self.queue_map.write().await;
+//                         queue_map.remove(&id);
+//                     }
+//                     {
+//                         let mut pieces = self.pieces.write().await;
+//                         for piece in pieces.iter_mut().filter_map(Option::as_mut) {
+//                             piece.workers.retain(|p| {
+//                                 !Arc::ptr_eq(&p, &queue)
+//                             });
+//                         }
+//                     }
+//                 }
+//                 AddQueue { id, queue } => {
 
-                }
-                AddPiece (piece_block) => {
+//                 }
+//                 AddPiece (piece_block) => {
 
-                    let sha1_torrent = self.data.with(|data| {
-                        data.pieces.sha1_pieces.get(piece_block.piece_index).map(Arc::clone)
-                    });
+//                     let sha1_torrent = self.data.with(|data| {
+//                         data.pieces.sha1_pieces.get(piece_block.piece_index).map(Arc::clone)
+//                     });
 
-                    if let Some(sha1_torrent) = sha1_torrent {
-                        let sha1_this_piece = Sha1::from(&piece_block.buf).digest();
-                        let sha1_this_piece = sha1_this_piece.bytes();
-                        if sha1_this_piece == sha1_torrent.as_slice() {
-                            //println!("SHA1 ARE GOOD !! {}", piece_block.piece_index);
-                        } else {
-                            println!("WRONG SHA1 :() {}", piece_block.piece_index);
-                        }
-                    } else {
-                        println!("PIECE RECEIVED BUT NOT FOUND {}", piece_block.piece_index);
-                    }
+//                     if let Some(sha1_torrent) = sha1_torrent {
+//                         let sha1 = Sha1::from(&piece_block.buf).digest();
+//                         let sha1 = sha1.bytes();
+//                         if sha1 == sha1_torrent.as_slice() {
+//                             //println!("SHA1 ARE GOOD !! {}", piece_block.piece_index);
+//                         } else {
+//                             println!("WRONG SHA1 :() {}", piece_block.piece_index);
+//                         }
+//                     } else {
+//                         println!("PIECE RECEIVED BUT NOT FOUND {}", piece_block.piece_index);
+//                     }
 
 
-//                    println!("PIECE RECEIVED {} {}", piece_block.piece_index, piece_block.buf.len());
-                }
-            }
-        }
-    }
+// //                    println!("PIECE RECEIVED {} {}", piece_block.piece_index, piece_block.buf.len());
+//                 }
+//             }
+//         }
+//     }
 
-    async fn get_pieces_to_downloads(&self, peer: &Peer, update: &BitFieldUpdate) {
-        let mut pieces = self.pieces.write().await;
-        let queue_map = self.queue_map.read().await;
-        let mut queue = match queue_map.get(&peer.id) {
-            Some(queue) => queue.write().await,
-            _ => return
-        };
+//     async fn get_pieces_to_downloads(&self, peer: &Peer, update: &BitFieldUpdate) {
+//         let mut pieces = self.pieces.write().await;
+//         let queue_map = self.queue_map.read().await;
+//         let mut queue = match queue_map.get(&peer.id) {
+//             Some(queue) => queue.write().await,
+//             _ => return
+//         };
 
-        match update {
-            BitFieldUpdate::BitField(bitfield) => {
-                let pieces = pieces.iter_mut()
-                                   .enumerate()
-                                   .filter(|(index, p)| p.is_none() && bitfield.get_bit(*index))
-                                   .take(5);
+//         match update {
+//             BitFieldUpdate::BitField(bitfield) => {
+//                 let pieces = pieces.iter_mut()
+//                                    .enumerate()
+//                                    .filter(|(index, p)| p.is_none() && bitfield.get_bit(*index))
+//                                    .take(5);
 
-                let nblock_piece = self.nblocks_piece;
-                let block_size = self.block_size;
+//                 let nblock_piece = self.nblocks_piece;
+//                 let block_size = self.block_size;
 
-                let mut i = 0;
-                for (piece, value) in pieces {
-                    for i in 0..nblock_piece {
-                        queue.push_back(PieceToDownload::new(piece, i * block_size, block_size));
-                    }
-                    //println!("[{:?}] PUSHING PIECE={}", peer.id, piece);
-                    value.replace(PieceInfo::new(peer));
-                    i += 1;
-                }
-            }
-            BitFieldUpdate::Piece(piece) => {
-                let piece = *piece;
+//                 let mut i = 0;
+//                 for (piece, value) in pieces {
+//                     for i in 0..nblock_piece {
+//                         queue.push_back(PieceToDownload::new(piece, i * block_size, block_size));
+//                     }
+//                     //println!("[{:?}] PUSHING PIECE={}", peer.id, piece);
+//                     value.replace(PieceInfo::new(peer));
+//                     i += 1;
+//                 }
+//             }
+//             BitFieldUpdate::Piece(piece) => {
+//                 let piece = *piece;
 
-                if piece >= pieces.len() {
-                    return;
-                }
+//                 if piece >= pieces.len() {
+//                     return;
+//                 }
 
-                if pieces.get(piece).unwrap().is_none() {
-                    let nblock_piece = self.nblocks_piece;
-                    let block_size = self.block_size;
+//                 if pieces.get(piece).unwrap().is_none() {
+//                     let nblock_piece = self.nblocks_piece;
+//                     let block_size = self.block_size;
 
-                    for i in 0..nblock_piece {
-                        queue.push_back(PieceToDownload::new(piece, i * block_size, block_size));
-                    }
+//                     for i in 0..nblock_piece {
+//                         queue.push_back(PieceToDownload::new(piece, i * block_size, block_size));
+//                     }
 
-                    //println!("[{:?}] _PUSHING PIECE={}", peer.id, piece);
-                    pieces.get_mut(piece).unwrap().replace(PieceInfo::new(peer));
-                }
+//                     //println!("[{:?}] _PUSHING PIECE={}", peer.id, piece);
+//                     pieces.get_mut(piece).unwrap().replace(PieceInfo::new(peer));
+//                 }
 
-            }
-        }
-    }
-}
+//             }
+//         }
+//     }
+// }
 
 #[derive(Clone, Debug)]
 struct PieceToDownload {
@@ -386,10 +393,11 @@ struct Peer {
     id: PeerId,
     addr: SocketAddr,
     data: TorrentData,
-    pieces_actor: Arc<PiecesActor>,
-    pieces_actor_chan: async_std::sync::Sender<PieceActorMessage>,
+    supervisor: a_sync::Sender<PeerMessage>,
+    //pieces_actor: Arc<PiecesActor>,
+    //pieces_actor_chan: async_std::sync::Sender<PieceActorMessage>,
     reader: BufReader<TcpStream>,
-    state: PeerState,
+    //state: PeerState,
     buffer: Vec<u8>,
     /// Are we choked from the peer
     choked: Choke,
@@ -407,6 +415,9 @@ struct Peer {
     start: Option<Instant>, // Downloaded,
     _tasks: Option<VecDeque<PieceToDownload>>,
     npieces: usize,
+
+    // cmds: a_sync::Receiver<PeerCmd>,
+    // s_cmds: Option<a_sync::Sender<PeerCmd>>,
 }
 
 use async_std::sync::Mutex;
@@ -504,7 +515,7 @@ impl<'a> TryFrom<&'a [u8]> for MessagePeer<'a> {
 
 use std::borrow::Cow;
 
-enum BitFieldUpdate {
+pub enum BitFieldUpdate {
     BitField(BitField),
     Piece(usize)
 }
@@ -581,12 +592,25 @@ impl PieceBuffer {
 
 static PEER_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+#[derive(Debug)]
+enum PeerCmd {
+    TasksAvailables
+}
+
+use futures::select;
+
+// enum PeerStream {
+//     Command(PeerCmd),
+//     Read
+// }
+
 impl Peer {
     async fn new(
         addr: SocketAddr,
         data: TorrentData,
-        pieces_actor: Arc<PiecesActor>,
-        pieces_actor_chan: async_std::sync::Sender<PieceActorMessage>
+        supervisor: a_sync::Sender<PeerMessage>,
+        //pieces_actor: Arc<PiecesActor>,
+        //pieces_actor_chan: async_std::sync::Sender<PieceActorMessage>
     ) -> Result<Peer> {
         let stream = TcpStream::connect(&addr).await?;
 
@@ -594,23 +618,28 @@ impl Peer {
 
         let bitfield = BitField::new(data.with(|d| d.pieces.num_pieces));
 
+        //let (s_cmds, cmds) = a_sync::channel(16);
+
         Ok(Peer {
             addr,
-            pieces_actor,
-            pieces_actor_chan,
+            supervisor,
+            //pieces_actor,
+            //pieces_actor_chan,
             npieces: data.with(|d| d.pieces.num_pieces),
             data,
             bitfield,
             id,
+            //cmds,
+            //s_cmds: Some(s_cmds),
             tasks: PeerTask::default(),
             reader: BufReader::with_capacity(32 * 1024, stream),
-            state: PeerState::Connecting,
+            //state: PeerState::Connecting,
             buffer: Vec::with_capacity(32 * 1024),
             choked: Choke::Choked,
             nblocks: 0,
             start: None,
             _tasks: None,
-            piece_buffer: HashMap::default()
+            piece_buffer: HashMap::default(),
         })
     }
 
@@ -695,24 +724,116 @@ impl Peer {
     }
 
     async fn start(&mut self) -> Result<()> {
-        self.pieces_actor.set_task_queue(self.id, self.tasks.clone()).await;
+
+        let (s_cmds, cmds) = a_sync::channel(16);
+
+        self.supervisor.send(PeerMessage::AddPeer {
+            id: self.id,
+            queue: self.tasks.clone(),
+            addr: s_cmds,
+//            addr: self.s_cmds.take().unwrap(),
+        }).await;
 
         self.do_handshake().await?;
 
+        //use futures::future::FutureExt;
+        use pin_utils::pin_mut;
+
+        // let msgs = self.read_messages().fuse();
+        // let cmds = cmds.recv().fuse();
+        // let mut msgs = Box::pin(msgs);
+        // let mut cmds = Box::pin(cmds);
+
+        // let mut msgs = {
+        //     Box::pin(self.read_messages().fuse())
+        // };
+
+        // return msgs;
+
+        // let mut msgs = self.fused_msgs.unwrap();
+
+        let cmds = cmds.recv().fuse();
+        let mut cmds = Box::pin(cmds);
+
+        // use futures::future::poll_fn;
+
+        // let a = async {
+        //     self.read_messages()
+        // };
+        // let mut a = Box::pin(a.fuse());
+
+        //use futures::future::select;
+        use futures::future::{self, Either, Future, FutureExt};
+
+        // let a = Box::pin(self.read_messages());
+
         loop {
-            self.read_messages().await?;
-            self.dispatch().await?;
+
+            select! {
+                msg =
+                    self.read_messages().fuse()
+                 => {
+                     self.dispatch().await?;
+                    //return 1;
+                    //self.dispatch().await?;
+                },
+                cmd = cmds => {
+                    self.maybe_send_request().await;
+                    println!("RECEIVED CMD {:?}", cmd);
+                    //return cmd;
+                    //self.dispatch().await?;
+                },
+            };
+
+            // self.dispatch().await?;
+
+
+            // select! {
+            //     msg = msgs => {
+            //         //self.dispatch().await?;
+            //         //return 1;
+            //         //self.dispatch().await?;
+            //     },
+            //     cmd = cmds => {
+            //         println!("RECEIVED CMD {:?}", cmd);
+            //         //return cmd;
+            //         //self.dispatch().await?;
+            //     },
+            // };
+
+
+            //return msgs;
+            // let msgs = self.read_messages().fuse();
+            // pin_mut!(msgs);
+
+            // select! {
+            //     msg = msgs => {
+            //         //self.dispatch().await?;
+            //     },
+            // };
+
+            // self.read_messages().await?;
+            // self.dispatch().await?;
         }
 
         Ok(())
     }
+
+    // async fn get_cmds(cmds: Receiver<PeerCmd>) -> Result<PeerStream> {
+    //     loop {
+    //         match cmds.recv() {
+    //             Some(cmd) => Ok(cmd),
+    //             _ => Err(TorrentError::InvalidInput)
+    //         }
+    //     }
+    // }
 
     async fn take_tasks(&mut self) -> Option<PieceToDownload> {
         if self._tasks.is_none() {
             let t = self.tasks.read().await;
             self._tasks = Some(t.clone());
         }
-        self._tasks.as_mut().map(|mut t| t.pop_front().unwrap())
+        self._tasks.as_mut().and_then(|mut t| t.pop_front())
     }
 
     async fn maybe_send_request(&mut self) -> Result<()> {
@@ -728,7 +849,7 @@ impl Peer {
                 self.send_request(task).await?;
             } else {
                 //self.pieces_actor.get_pieces_to_downloads().await;
-                //println!("[{:?}] No More Task ! {} downloaded in {:?}s", self.id, self.nblocks, self.start.map(|s| s.elapsed().as_secs()));
+                println!("[{:?}] No More Task ! {} downloaded in {:?}s", self.id, self.nblocks, self.start.map(|s| s.elapsed().as_secs()));
                 // Steal others tasks
             }
         }
@@ -755,20 +876,20 @@ impl Peer {
         self.choked == Choke::Choked
     }
 
-    fn update_bitfield(&mut self, update: BitFieldUpdate) {
-        self.data.with_write(|data| {
-            data.pieces.update(&update);
-        });
+    // fn update_bitfield(&mut self, update: BitFieldUpdate) {
+    //     self.data.with_write(|data| {
+    //         data.pieces.update(&update);
+    //     });
 
-        match update {
-            BitFieldUpdate::BitField(bitfield) => {
-                self.bitfield = bitfield;
-            }
-            BitFieldUpdate::Piece(piece) => {
-                self.bitfield.set_bit(piece as usize);
-            }
-        }
-    }
+    //     match update {
+    //         BitFieldUpdate::BitField(bitfield) => {
+    //             self.bitfield = bitfield;
+    //         }
+    //         BitFieldUpdate::Piece(piece) => {
+    //             self.bitfield.set_bit(piece as usize);
+    //         }
+    //     }
+    // }
 
     async fn dispatch<'a>(&'a mut self) -> Result<()> {
         use MessagePeer::*;
@@ -799,17 +920,20 @@ impl Peer {
             Have { piece_index } => {
                 let update = BitFieldUpdate::from(piece_index);
 
+                self.supervisor.send(PeerMessage::UpdateBitfield { id: self.id, update }).await;
+
                 //println!("[{:?}] HAVE {}", self.id, piece_index);
 
-                self.pieces_actor.get_pieces_to_downloads(&self, &update).await;
 
-                self.update_bitfield(update);
+                //self.pieces_actor.get_pieces_to_downloads(&self, &update).await;
 
-                if self.am_choked() {
-                    self.send_message(MessagePeer::Interested).await?;
-                } else {
-                    self.maybe_send_request().await?;
-                }
+                // self.update_bitfield(update);
+
+                // if self.am_choked() {
+                //     self.send_message(MessagePeer::Interested).await?;
+                // } else {
+                //     self.maybe_send_request().await?;
+                // }
             },
             BitField (bitfield) => {
                 // Send an Interested ?
@@ -822,17 +946,19 @@ impl Peer {
 
                 let update = BitFieldUpdate::from(bitfield);
 
+                self.supervisor.send(PeerMessage::UpdateBitfield { id: self.id, update }).await;
+
                 //println!("[{:?}] BITFIELD", self.id);
 
-                self.pieces_actor.get_pieces_to_downloads(&self, &update).await;
+                //self.pieces_actor.get_pieces_to_downloads(&self, &update).await;
 
-                self.update_bitfield(update);
+                // self.update_bitfield(update);
 
-                if self.am_choked() {
-                    self.send_message(MessagePeer::Interested).await?;
-                } else {
-                    self.maybe_send_request().await?;
-                }
+                // if self.am_choked() {
+                //     self.send_message(MessagePeer::Interested).await?;
+                // } else {
+                //     self.maybe_send_request().await?;
+                // }
             },
             Request { index, begin, length } => {
                 // Mark this peer as interested
@@ -851,13 +977,13 @@ impl Peer {
 
                 self.nblocks += block.len();
 
-                let piece_size = self.pieces_actor.piece_size(index as usize);
+                //let piece_size = self.pieces_actor.piece_size(index as usize);
                 let mut is_completed = false;
 
-                self.piece_buffer
-                    .entry(index as usize)
-                    .and_modify(|p| { p.add_block(begin, block); is_completed = p.is_completed() })
-                    .or_insert_with(|| PieceBuffer::new_with_block(index, piece_size, begin, block));
+                // self.piece_buffer
+                //     .entry(index as usize)
+                //     .and_modify(|p| { p.add_block(begin, block); is_completed = p.is_completed() })
+                //     .or_insert_with(|| PieceBuffer::new_with_block(index, piece_size, begin, block));
 
                 if is_completed {
                     self.send_completed(index).await;
@@ -887,9 +1013,9 @@ impl Peer {
     async fn send_completed(&mut self, index: u32) {
         let piece_buffer = self.piece_buffer.remove(&(index as usize)).unwrap();
 
-        self.pieces_actor_chan.send(
-            PieceActorMessage::AddPiece(piece_buffer)
-        ).await;
+        // self.pieces_actor_chan.send(
+        //     PieceActorMessage::AddPiece(piece_buffer)
+        // ).await;
     }
 
     fn is_pending_data(&self) -> bool {
@@ -953,7 +1079,7 @@ impl Peer {
         let len = self.buffer[0] as usize;
         self.read_exactly(len + 48).await?;
 
-        // TODO: Check the info hash and send to other TorrentActor if necessary
+        // TODO: Check the info hash and send to other TorrentSupervisor if necessary
 
         println!("HANDSHAKE DONE", );
 
@@ -962,10 +1088,10 @@ impl Peer {
 
 }
 
-enum MessageActor {
-    AddPeer(PeerAddr),
-    RemovePeer(PeerAddr),
-}
+// enum MessageActor {
+//     AddPeer(PeerAddr),
+//     RemovePeer(PeerAddr),
+// }
 
 #[derive(Debug)]
 struct Pieces {
@@ -984,20 +1110,27 @@ struct Pieces {
     nblocks_last_piece: usize,
     /// Piece length
     piece_length: usize,
+    /// Last piece length
+    last_piece_length: usize,
+    /// Total files size
+    files_size: usize,
 }
 
 impl From<&Torrent> for Pieces {
     fn from(torrent: &Torrent) -> Pieces {
         let sha1_pieces = torrent.sha_pieces();
 
-        let total = torrent.files_total_size();
+        let files_size = torrent.files_total_size();
         let piece_length = torrent.meta.info.piece_length as usize;
+
+        let last_piece_length = files_size % piece_length;
+        let last_piece_length = if last_piece_length == 0 { piece_length } else { last_piece_length };
 
         if piece_length == 0 {
             panic!("Invalid piece length");
         }
 
-        let num_pieces = (total + piece_length - 1) / piece_length;
+        let num_pieces = (files_size + piece_length - 1) / piece_length;
 
         if sha1_pieces.len() != num_pieces {
             panic!("Invalid hashes");
@@ -1008,7 +1141,7 @@ impl From<&Torrent> for Pieces {
 
         let block_size = std::cmp::min(piece_length, 0x4000);
         let nblocks_piece = (piece_length + block_size - 1) / block_size;
-        let nblocks_last_piece = ((total % piece_length) + block_size - 1) / block_size;
+        let nblocks_last_piece = ((files_size % piece_length) + block_size - 1) / block_size;
 
         Pieces {
             num_pieces,
@@ -1017,7 +1150,9 @@ impl From<&Torrent> for Pieces {
             block_size,
             nblocks_piece,
             nblocks_last_piece,
-            piece_length
+            piece_length,
+            last_piece_length,
+            files_size,
         }
     }
 }
@@ -1030,27 +1165,6 @@ impl From<&Torrent> for Pieces {
 // https://stackoverflow.com/questions/42938907/is-it-possible-to-use-simd-instructions-in-rust
 
 impl Pieces {
-    fn update_from_bitfield(&mut self, bitfield: &BitField) {
-        // TODO: Handle bitfield with wrong length
-        for (i, piece) in self.peers_pieces.iter_mut().enumerate() {
-            if bitfield.get_bit(i) {
-                *piece = piece.saturating_add(1);
-            }
-        }
-
-        // if bitfield.len() * 8 >= self.peers_pieces.len() {
-        //     for (i, piece_info) in self.peers_pieces.iter_mut().enumerate() {
-        //         let slice_index = i / 8;
-        //         let bit_index = i % 8;
-
-        //         if bitfield[slice_index] & (1 << (7 - bit_index)) != 0 {
-        //             //*value = value.saturating_add(1);
-        //             piece_info.list.push(Arc::clone(peer));
-        //         }
-        //     }
-        // }
-    }
-
     fn update(&mut self, update: &BitFieldUpdate)  {
         match update {
             BitFieldUpdate::BitField(bitfield) => {
@@ -1069,36 +1183,16 @@ impl Pieces {
         }
     }
 
-    fn update_have(&mut self, piece_num: u32) {
-        // TODO: Handle inexistant piece
-        if let Some(piece) = self.peers_pieces.get_mut(piece_num as usize) {
-            *piece = piece.saturating_add(1);
+    fn piece_size(&self, piece_index: usize) -> usize {
+        if piece_index == self.num_pieces - 1 {
+            self.last_piece_length
+        } else {
+            self.piece_length
         }
     }
-
-    // fn update_from_bitfield(&mut self, bitfield: &[u8]) {
-    //     // TODO: Handle bitfield with wrong length
-    //     if bitfield.len() * 8 >= self.peers_pieces.len() {
-    //         for (i, value) in self.peers_pieces.iter_mut().enumerate() {
-    //             let slice_index = i / 8;
-    //             let bit_index = i % 8;
-
-    //             if bitfield[slice_index] & (1 << (7 - bit_index)) != 0 {
-    //                 *value = value.saturating_add(1);
-    //             }
-    //         }
-    //     }
-    // }
-
-    // fn update_have(&mut self, piece_num: u32) {
-    //     // TODO: Handle inexistant piece
-    //     if let Some(piece) = self.peers_pieces.get_mut(piece_num as usize) {
-    //         *piece = piece.saturating_add(1);
-    //     }
-    // }
 }
 
-type PeerAddr = Sender<MessageActor>;
+// type PeerAddr = Sender<MessageActor>;
 
 /// Data shared between peers and torrent actor
 #[derive(Debug)]
@@ -1152,14 +1246,44 @@ impl TorrentData {
     }
 }
 
-struct TorrentActor {
+use async_std::sync as a_sync;
+
+enum PeerMessage {
+    AddPeer {
+        id: PeerId,
+        queue: PeerTask,
+        addr: a_sync::Sender<PeerCmd>
+    },
+    RemovePeer {
+        id: PeerId ,
+        queue: PeerTask
+    },
+    AddPiece(PieceBuffer),
+    UpdateBitfield {
+        id: PeerId,
+        update: BitFieldUpdate
+    }
+}
+
+struct PeerState {
+    bitfield: BitField,
+    queue_tasks: PeerTask,
+    addr: a_sync::Sender<PeerCmd>
+}
+
+struct TorrentSupervisor {
     data: TorrentData,
-    peers: Vec<PeerAddr>,
     trackers: Vec<Tracker>,
-    receiver: Receiver<MessageActor>,
+    receiver: a_sync::Receiver<PeerMessage>,
     // We keep a Sender to not close the channel
     // in case there is no peer
-    _sender: Sender<MessageActor>,
+    _sender: a_sync::Sender<PeerMessage>,
+
+    pieces_detail: Pieces,
+
+    peers: HashMap<PeerId, PeerState, NoHash>,
+
+    pieces: Vec<Option<PieceInfo>>,
 }
 
 pub type Result<T> = std::result::Result<T, TorrentError>;
@@ -1167,24 +1291,35 @@ pub type Result<T> = std::result::Result<T, TorrentError>;
 use std::sync::Arc;
 use parking_lot::{RwLock, RwLockReadGuard};
 
-impl TorrentActor {
-    fn new(torrent: Torrent) -> TorrentActor {
-        let (_sender, receiver) = unbounded();
-        TorrentActor {
+impl TorrentSupervisor {
+    fn new(torrent: Torrent) -> TorrentSupervisor {
+        let (_sender, receiver) = a_sync::channel(100);
+        let pieces_detail = Pieces::from(&torrent);
+
+        let num_pieces = pieces_detail.num_pieces;
+        let mut pieces = Vec::with_capacity(num_pieces);
+        pieces.resize_with(num_pieces, Default::default);
+
+        TorrentSupervisor {
             data: TorrentData::new(torrent),
             receiver,
             _sender,
-            peers: vec![],
+            pieces_detail,
+            pieces,
+            peers: Default::default(),
             trackers: vec![],
+            //queue_map: Default::default()
         }
     }
 
-    fn start(&mut self) {
+    async fn start(&mut self) {
         self.collect_trackers();
 
         if let Some(addrs) = self.find_tracker() {
             self.connect_to_peers(&addrs, self.data.clone());
         }
+
+        self.process_cmds().await;
     }
 
     fn collect_trackers(&mut self) {
@@ -1195,19 +1330,14 @@ impl TorrentActor {
     }
 
     fn connect_to_peers(&self, addrs: &[SocketAddr], data: TorrentData) {
-
-        let (sender, receiver) = async_std::sync::channel(100);
-        let pieces_actor = Arc::new(PiecesActor::new(&data, receiver));
-
         for addr in addrs {
             println!("ADDR: {:?}", addr);
 
             let addr = *addr;
             let data = data.clone();
-            let pieces_actor = Arc::clone(&pieces_actor);
-            let pieces_actor_chan = sender.clone();
+            let sender = self._sender.clone();
             task::spawn(async move {
-                let mut peer = match Peer::new(addr, data, pieces_actor, pieces_actor_chan).await {
+                let mut peer = match Peer::new(addr, data, sender).await {
                     Ok(peer) => peer,
                     Err(e) => {
                         println!("PEER ERROR {:?}", e);
@@ -1217,10 +1347,6 @@ impl TorrentActor {
                 peer.start().await;
             });
         }
-
-        task::spawn(async move {
-            pieces_actor.start().await
-        });
     }
 
     fn find_tracker(&mut self) -> Option<Vec<SocketAddr>> {
@@ -1241,6 +1367,107 @@ impl TorrentActor {
         }
         None
     }
+
+    async fn process_cmds(&mut self) {
+        use PeerMessage::*;
+
+        while let Some(msg) = self.receiver.recv().await {
+            match msg {
+                UpdateBitfield { id, update } => {
+                    if self.find_pieces_for_peer(id, &update).await {
+                        let peer = self.peers.get(&id).unwrap();
+                        peer.addr.send(PeerCmd::TasksAvailables).await;
+                    }
+
+                    if let Some(peer) = self.peers.get_mut(&id) {
+                        peer.bitfield.update(update);
+                    };
+                }
+                RemovePeer { id, queue } => {
+                    self.peers.remove(&id);
+
+                    for piece in self.pieces.iter_mut().filter_map(Option::as_mut) {
+                        piece.workers.retain(|p| !Arc::ptr_eq(&p, &queue) );
+                    }
+                }
+                AddPeer { id, queue, addr } => {
+                    self.peers.insert(id, PeerState {
+                        bitfield: BitField::new(self.pieces_detail.num_pieces),
+                        queue_tasks: queue,
+                        addr
+                    });
+                }
+                AddPiece (piece_block) => {
+                    let index = piece_block.piece_index;
+                    let sha1_torrent = self.pieces_detail.sha1_pieces.get(index).map(Arc::clone);
+
+                    if let Some(sha1_torrent) = sha1_torrent {
+                        let sha1 = Sha1::from(&piece_block.buf).digest();
+                        let sha1 = sha1.bytes();
+                        if sha1 == sha1_torrent.as_slice() {
+                            //println!("SHA1 ARE GOOD !! {}", piece_block.piece_index);
+                        } else {
+                            println!("WRONG SHA1 :() {}", piece_block.piece_index);
+                        }
+                    } else {
+                        println!("PIECE RECEIVED BUT NOT FOUND {}", piece_block.piece_index);
+                    }
+
+                    // println!("PIECE RECEIVED {} {}", piece_block.piece_index, piece_block.buf.len());
+                }
+            }
+        }
+    }
+
+    async fn find_pieces_for_peer(&mut self, peer: PeerId, update: &BitFieldUpdate) -> bool {
+        let mut pieces = &mut self.pieces;
+        let nblock_piece = self.pieces_detail.nblocks_piece;
+        let block_size = self.pieces_detail.block_size;
+
+        let queue_peer = self.peers.get_mut(&peer).map(|p| &mut p.queue_tasks).unwrap();
+        let mut queue = queue_peer.write().await;
+
+        let mut found = false;
+
+        match update {
+            BitFieldUpdate::BitField(bitfield) => {
+                let pieces = pieces.iter_mut()
+                                   .enumerate()
+                                   .filter(|(index, p)| p.is_none() && bitfield.get_bit(*index))
+                                   .take(5);
+
+                for (piece, value) in pieces {
+                    for i in 0..nblock_piece {
+                        queue.push_back(PieceToDownload::new(piece, i * block_size, block_size));
+                    }
+                    //println!("[{:?}] PUSHING PIECE={}", peer.id, piece);
+                    value.replace(PieceInfo::new(queue_peer.clone()));
+                    if !found {
+                        found = true;
+                    }
+                }
+            }
+            BitFieldUpdate::Piece(piece) => {
+                let piece = *piece;
+
+                if piece >= pieces.len() {
+                    return false;
+                }
+
+                if pieces.get(piece).unwrap().is_none() {
+                    for i in 0..nblock_piece {
+                        queue.push_back(PieceToDownload::new(piece, i * block_size, block_size));
+                    }
+                    //println!("[{:?}] _PUSHING PIECE={}", peer.id, piece);
+                    pieces.get_mut(piece).unwrap().replace(PieceInfo::new(queue_peer.clone()));
+                    found = true;
+                }
+
+            }
+        }
+
+        found
+    }
 }
 
 enum FilesMessage {
@@ -1254,7 +1481,7 @@ struct FilesActor {
 
 struct SessionInner {
     cmds: Receiver<SessionCommand>,
-    actors: Vec<TorrentActor>
+    actors: Vec<TorrentSupervisor>
 }
 
 use async_std::task;
@@ -1278,7 +1505,7 @@ impl SessionInner {
         match cmd {
             AddTorrent(torrent) => {
                 task::spawn(async {
-                    TorrentActor::new(torrent).start();
+                    TorrentSupervisor::new(torrent).start().await;
                 });
             }
         }
