@@ -600,7 +600,7 @@ use futures::future::{Fuse, FutureExt};
 use std::pin::Pin;
 
 enum PeerWaitEvent {
-    Msg(Result<()>),
+    Msg(Result<usize>),
     Cmd(Option<PeerCmd>),
 }
 
@@ -764,8 +764,10 @@ impl Peer {
 
         loop {
             match self.wait_event(cmds.as_mut()).await {
-                PeerWaitEvent::Msg(Ok(..)) => {
-                    self.dispatch().await?;
+                PeerWaitEvent::Msg(Ok(n)) => {
+                    if n != 0 {
+                        self.dispatch().await?;
+                    } // else Keep Alive
                 }
                 PeerWaitEvent::Cmd(..) => {
                     self.maybe_send_request().await;
@@ -959,7 +961,7 @@ impl Peer {
         //println!("[{}] PIECE COMPLETED {}", self.id, index);
     }
 
-    async fn read_messages(&mut self) -> Result<()> {
+    async fn read_messages(&mut self) -> Result<usize> {
         self.read_exactly(4).await?;
 
         let length = {
