@@ -218,6 +218,8 @@ struct PiecesActor {
 
 type PeerId = usize;
 
+use sha1::Sha1;
+
 impl PiecesActor {
     fn new(data: &TorrentData, channel: async_std::sync::Receiver<PieceActorMessage>) -> PiecesActor {
         let (npieces, nblocks_piece, block_size, files_size, piece_length, last_piece_size) = data.with(|data| {
@@ -289,15 +291,25 @@ impl PiecesActor {
 
                 }
                 AddPiece (piece_block) => {
-                    // let mut pieces = self.pieces.write().await;
-                    // if let Some(Some(piece)) = pieces.get_mut(index as usize) {
-                    //     piece.bytes_downloaded += block.len();
-                    //     if piece.bytes_downloaded == self.block_size {
-                    //         println!("PIECE [{}] FINISHED !", index);
-                    //     }
-                    // };
 
-                    //println!("PIECE RECEIVED {} {} {}", index, begin, block.len());
+                    let sha1_torrent = self.data.with(|data| {
+                        data.pieces.sha1_pieces.get(piece_block.piece_index).map(Arc::clone)
+                    });
+
+                    if let Some(sha1_torrent) = sha1_torrent {
+                        let sha1_this_piece = Sha1::from(&piece_block.buf).digest();
+                        let sha1_this_piece = sha1_this_piece.bytes();
+                        if sha1_this_piece == sha1_torrent.as_slice() {
+                            //println!("SHA1 ARE GOOD !! {}", piece_block.piece_index);
+                        } else {
+                            println!("WRONG SHA1 :() {}", piece_block.piece_index);
+                        }
+                    } else {
+                        println!("PIECE RECEIVED BUT NOT FOUND {}", piece_block.piece_index);
+                    }
+
+
+//                    println!("PIECE RECEIVED {} {}", piece_block.piece_index, piece_block.buf.len());
                 }
             }
         }
@@ -716,7 +728,7 @@ impl Peer {
                 self.send_request(task).await?;
             } else {
                 //self.pieces_actor.get_pieces_to_downloads().await;
-                println!("[{:?}] No More Task ! {} downloaded in {:?}s", self.id, self.nblocks, self.start.map(|s| s.elapsed().as_secs()));
+                //println!("[{:?}] No More Task ! {} downloaded in {:?}s", self.id, self.nblocks, self.start.map(|s| s.elapsed().as_secs()));
                 // Steal others tasks
             }
         }
