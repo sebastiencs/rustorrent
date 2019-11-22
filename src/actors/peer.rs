@@ -16,7 +16,7 @@ use std::net::SocketAddr;
 use crate::bitfield::{BitField, BitFieldUpdate};
 use crate::utils::Map;
 use crate::pieces::{Pieces, PieceToDownload, PieceBuffer};
-use crate::supervisors::torrent::{PeerMessage, Result};
+use crate::supervisors::torrent::{TorrentNotification, Result};
 use crate::errors::TorrentError;
 
 static PEER_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -134,7 +134,7 @@ enum PeerWaitEvent {
 pub struct Peer {
     id: PeerId,
     addr: SocketAddr,
-    supervisor: a_sync::Sender<PeerMessage>,
+    supervisor: a_sync::Sender<TorrentNotification>,
     reader: BufReader<TcpStream>,
     buffer: Vec<u8>,
     /// Are we choked from the peer
@@ -160,7 +160,7 @@ impl Peer {
     pub async fn new(
         addr: SocketAddr,
         pieces_detail: Pieces,
-        supervisor: a_sync::Sender<PeerMessage>,
+        supervisor: a_sync::Sender<TorrentNotification>,
     ) -> Result<Peer> {
         let stream = TcpStream::connect(&addr).await?;
 
@@ -299,7 +299,7 @@ impl Peer {
 
         let (addr, cmds) = a_sync::channel(1000);
 
-        self.supervisor.send(PeerMessage::AddPeer {
+        self.supervisor.send(TorrentNotification::AddPeer {
             id: self.id,
             queue: self.tasks.clone(),
             addr,
@@ -418,7 +418,7 @@ impl Peer {
             Have { piece_index } => {
                 let update = BitFieldUpdate::from(piece_index);
 
-                self.supervisor.send(PeerMessage::UpdateBitfield { id: self.id, update }).await;
+                self.supervisor.send(TorrentNotification::UpdateBitfield { id: self.id, update }).await;
 
                 println!("[{:?}] HAVE {}", self.id, piece_index);
             },
@@ -432,7 +432,7 @@ impl Peer {
 
                 let update = BitFieldUpdate::from(bitfield);
 
-                self.supervisor.send(PeerMessage::UpdateBitfield { id: self.id, update }).await;
+                self.supervisor.send(TorrentNotification::UpdateBitfield { id: self.id, update }).await;
 
                 println!("[{:?}] BITFIELD", self.id);
             },
@@ -489,7 +489,7 @@ impl Peer {
     async fn send_completed(&mut self, index: u32) {
         let piece_buffer = self.pieces_buffer.remove(&(index as usize)).unwrap();
 
-        self.supervisor.send(PeerMessage::AddPiece(piece_buffer)).await;
+        self.supervisor.send(TorrentNotification::AddPiece(piece_buffer)).await;
         //println!("[{}] PIECE COMPLETED {}", self.id, index);
     }
 

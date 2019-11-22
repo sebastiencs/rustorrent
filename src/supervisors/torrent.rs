@@ -5,6 +5,8 @@ use async_std::prelude::*;
 use async_std::task;
 use async_std::sync as a_sync;
 use sha1::Sha1;
+use crossbeam_channel::Sender;
+use slab::Slab;
 
 use std::net::{SocketAddr, ToSocketAddrs};
 
@@ -15,6 +17,7 @@ use crate::pieces::{PieceInfo, Pieces, PieceBuffer, PieceToDownload};
 use crate::session::Tracker;
 use crate::utils::Map;
 use crate::errors::TorrentError;
+use crate::actors::sha1::{Sha1Workers, Sha1Task};
 
 struct PeerState {
     bitfield: BitField,
@@ -22,7 +25,8 @@ struct PeerState {
     addr: a_sync::Sender<PeerCommand>
 }
 
-pub enum PeerMessage {
+/// Message sent to Supervisor
+pub enum TorrentNotification {
     AddPeer {
         id: PeerId,
         queue: PeerTask,
@@ -36,12 +40,16 @@ pub enum PeerMessage {
     UpdateBitfield {
         id: PeerId,
         update: BitFieldUpdate
+    },
+    ResultChecksum {
+        id: usize,
+        valid: bool
     }
 }
 
-impl std::fmt::Debug for PeerMessage {
+impl std::fmt::Debug for TorrentNotification {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        use PeerMessage::*;
+        use TorrentNotification::*;
         match self {
             AddPeer { id, .. } => {
                 f.debug_struct("PeerMessage")
@@ -63,6 +71,12 @@ impl std::fmt::Debug for PeerMessage {
                  .field("UpdateBitfield", &id)
                  .finish()
             }
+            ResultChecksum { id, valid } => {
+                f.debug_struct("PeerMessage")
+                 .field("ResultChecksum", &id)
+                 .field("valid", &valid)
+                 .finish()
+            }
         }
     }
 }
@@ -70,23 +84,27 @@ impl std::fmt::Debug for PeerMessage {
 pub struct TorrentSupervisor {
     metadata: Torrent,
     trackers: Vec<Tracker>,
-    receiver: a_sync::Receiver<PeerMessage>,
+    receiver: a_sync::Receiver<TorrentNotification>,
     // We keep a Sender to not close the channel
     // in case there is no peer
-    _sender: a_sync::Sender<PeerMessage>,
+    my_addr: a_sync::Sender<TorrentNotification>,
 
     pieces_detail: Pieces,
 
     peers: Map<PeerId, PeerState>,
 
     pieces: Vec<Option<PieceInfo>>,
+
+    sha1_workers: Sender<Sha1Task>,
+
+    pending_pieces: Slab<Arc<PieceBuffer>>
 }
 
 pub type Result<T> = std::result::Result<T, TorrentError>;
 
 impl TorrentSupervisor {
-    pub fn new(torrent: Torrent) -> TorrentSupervisor {
-        let (_sender, receiver) = a_sync::channel(100);
+    pub fn new(torrent: Torrent, sha1_workers: Sender<Sha1Task>) -> TorrentSupervisor {
+        let (my_addr, receiver) = a_sync::channel(100);
         let pieces_detail = Pieces::from(&torrent);
 
         let num_pieces = pieces_detail.num_pieces;
@@ -96,11 +114,13 @@ impl TorrentSupervisor {
         TorrentSupervisor {
             metadata: torrent,
             receiver,
-            _sender,
+            my_addr,
             pieces_detail,
             pieces,
             peers: Default::default(),
             trackers: vec![],
+            sha1_workers,
+            pending_pieces: Slab::new(),
         }
     }
 
@@ -124,11 +144,11 @@ impl TorrentSupervisor {
             println!("ADDR: {:?}", addr);
 
             let addr = *addr;
-            let sender = self._sender.clone();
+            let my_addr = self.my_addr.clone();
             let pieces_detail = self.pieces_detail.clone();
 
             task::spawn(async move {
-                let mut peer = match Peer::new(addr, pieces_detail, sender).await {
+                let mut peer = match Peer::new(addr, pieces_detail, my_addr).await {
                     Ok(peer) => peer,
                     Err(e) => {
                         println!("PEER ERROR {:?}", e);
@@ -159,7 +179,7 @@ impl TorrentSupervisor {
     }
 
     async fn process_cmds(&mut self) {
-        use PeerMessage::*;
+        use TorrentNotification::*;
 
         while let Some(msg) = self.receiver.recv().await {
             match msg {
@@ -189,21 +209,21 @@ impl TorrentSupervisor {
                 }
                 AddPiece (piece_block) => {
                     let index = piece_block.piece_index;
-                    let sha1_torrent = self.pieces_detail.sha1_pieces.get(index).map(Arc::clone);
+                    if let Some(sum2) = self.pieces_detail.sha1_pieces.get(index).map(Arc::clone) {
 
-                    if let Some(sha1_torrent) = sha1_torrent {
-                        let sha1 = Sha1::from(&piece_block.buf).digest();
-                        let sha1 = sha1.bytes();
-                        if sha1 == sha1_torrent.as_slice() {
-                            //println!("SHA1 ARE GOOD !! {}", piece_block.piece_index);
-                        } else {
-                            println!("WRONG SHA1 :() {}", piece_block.piece_index);
-                        }
-                    } else {
-                        println!("PIECE RECEIVED BUT NOT FOUND {}", piece_block.piece_index);
+                        let piece_buffer = Arc::new(piece_block);
+                        let addr = self.my_addr.clone();
+
+                        let id = self.pending_pieces.insert(Arc::clone(&piece_buffer));
+
+                        self.sha1_workers.send(Sha1Task::CheckSum { piece_buffer, sum2, id, addr });
                     }
-
-                    println!("[S] PIECE RECEIVED {} {}", piece_block.piece_index, piece_block.buf.len());
+                }
+                ResultChecksum { id, valid } => {
+                    if self.pending_pieces.contains(id) {
+                        let _piece = self.pending_pieces.remove(id);
+                    };
+                    //println!("PIECE CHECKED FROM THE POOL: {}", valid);
                 }
             }
         }

@@ -158,9 +158,12 @@ use std::thread;
 use crate::supervisors::torrent::TorrentSupervisor;
 use async_std::sync as a_sync;
 
+use crate::actors::sha1::{Sha1Workers, Sha1Task};
+
 struct SessionInner {
     cmds: Receiver<SessionCommand>,
-    actors: Vec<TorrentSupervisor>
+    actors: Vec<TorrentSupervisor>,
+    sha1_workers: Sender<Sha1Task>
 }
 
 use async_std::task;
@@ -183,8 +186,9 @@ impl SessionInner {
 
         match cmd {
             AddTorrent(torrent) => {
-                task::spawn(async {
-                    TorrentSupervisor::new(torrent).start().await;
+                let sha1_workers = self.sha1_workers.clone();
+                task::spawn(async move {
+                    TorrentSupervisor::new(torrent, sha1_workers).start().await;
                 });
             }
         }
@@ -203,11 +207,13 @@ pub struct Session {
 impl Session {
     pub fn new() -> Session {
         let (sender, receiver) = unbounded();
+        let sha1_workers = Sha1Workers::new_pool();
 
         let handle = std::thread::spawn(move || {
             let session = SessionInner {
                 cmds: receiver,
-                actors: vec![]
+                actors: vec![],
+                sha1_workers,
             };
             session.start();
         });
