@@ -354,6 +354,7 @@ impl Peer {
             id: self.id,
             queue: self.tasks.clone(),
             addr,
+            socket: self.addr,
         }).await;
 
         self.do_handshake().await?;

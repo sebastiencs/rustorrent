@@ -20,6 +20,7 @@ use crate::errors::TorrentError;
 use crate::actors::sha1::{Sha1Workers, Sha1Task};
 
 struct PeerState {
+    socket: SocketAddr,
     bitfield: BitField,
     queue_tasks: PeerTask,
     addr: a_sync::Sender<PeerCommand>
@@ -30,7 +31,8 @@ pub enum TorrentNotification {
     AddPeer {
         id: PeerId,
         queue: PeerTask,
-        addr: a_sync::Sender<PeerCommand>
+        addr: a_sync::Sender<PeerCommand>,
+        socket: SocketAddr,
     },
     RemovePeer {
         id: PeerId ,
@@ -208,11 +210,12 @@ impl TorrentSupervisor {
                         piece.workers.retain(|p| !Arc::ptr_eq(&p, &queue) );
                     }
                 }
-                AddPeer { id, queue, addr } => {
+                AddPeer { id, queue, addr, socket } => {
                     self.peers.insert(id, PeerState {
                         bitfield: BitField::new(self.pieces_detail.num_pieces),
                         queue_tasks: queue,
-                        addr
+                        addr,
+                        socket,
                     });
                 }
                 AddPiece (piece_block) => {
@@ -234,7 +237,12 @@ impl TorrentSupervisor {
                     //println!("PIECE CHECKED FROM THE POOL: {}", valid);
                 }
                 PeerDiscovered { addrs } => {
-                    println!("PEERS DISCOVERED: {:#?}", addrs);
+                    for addr in &addrs {
+                        let mut peers = self.peers.values();
+                        if peers.position(|p| &p.socket == addr).is_none() {
+                            self.connect_to_peers(&[*addr]);
+                        }
+                    }
                 }
             }
         }
