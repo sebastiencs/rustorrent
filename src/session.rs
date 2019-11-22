@@ -13,7 +13,7 @@ use crate::pieces::Pieces;
 use crate::pieces::PieceToDownload;
 use crate::supervisors::torrent::Result;
 
-fn get_peers_addrs(response: &AnnounceResponse) -> Vec<SocketAddr> {
+pub fn get_peers_addrs(response: &AnnounceResponse) -> Vec<SocketAddr> {
     let mut addrs = Vec::new();
 
     match response.peers6 {
@@ -106,38 +106,6 @@ use url::Url;
 
 use crate::http_client::HttpError;
 use crossbeam_channel::{unbounded, Receiver, Sender};
-
-#[derive(Debug)]
-pub struct Tracker {
-    pub url: Url,
-    pub announce: Option<AnnounceResponse>
-}
-
-impl Tracker {
-    pub fn new(url: Url) -> Tracker {
-        Tracker { url, announce: None }
-    }
-
-    pub fn announce(&mut self, torrent: &Torrent) -> Result<Vec<SocketAddr>> {
-        let query = AnnounceQuery::from(torrent);
-        let response = http_client::get(&self.url, query)?;
-
-        let peers = get_peers_addrs(&response);
-        self.announce = Some(response);
-
-        Ok(peers)
-    }
-}
-
-// enum PeerState {
-//     Connecting,
-//     Handshaking,
-//     Downloading {
-//         piece: usize,
-//         index: usize,
-//     },
-//     Dead
-// }
 
 use sha1::Sha1;
 

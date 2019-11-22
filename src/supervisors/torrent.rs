@@ -14,7 +14,7 @@ use crate::actors::peer::{PeerId, Peer, PeerTask, PeerCommand};
 use crate::metadata::Torrent;
 use crate::bitfield::{BitFieldUpdate, BitField};
 use crate::pieces::{PieceInfo, Pieces, PieceBuffer, PieceToDownload};
-use crate::session::Tracker;
+use crate::actors::tracker::Tracker;
 use crate::utils::Map;
 use crate::errors::TorrentError;
 use crate::actors::sha1::{Sha1Workers, Sha1Task};
@@ -92,8 +92,7 @@ impl std::fmt::Debug for TorrentNotification {
 }
 
 pub struct TorrentSupervisor {
-    metadata: Torrent,
-    trackers: Vec<Tracker>,
+    metadata: Arc<Torrent>,
     receiver: a_sync::Receiver<TorrentNotification>,
     // We keep a Sender to not close the channel
     // in case there is no peer
@@ -122,70 +121,45 @@ impl TorrentSupervisor {
         pieces.resize_with(num_pieces, Default::default);
 
         TorrentSupervisor {
-            metadata: torrent,
+            metadata: Arc::new(torrent),
             receiver,
             my_addr,
             pieces_detail,
             pieces,
             peers: Default::default(),
-            trackers: vec![],
             sha1_workers,
             pending_pieces: Slab::new(),
         }
     }
 
     pub async fn start(&mut self) {
-        self.collect_trackers();
+        let metadata = Arc::clone(&self.metadata);
+        let my_addr = self.my_addr.clone();
 
-        if let Some(addrs) = self.find_tracker() {
-            self.connect_to_peers(&addrs);
-        }
+        task::spawn(async {
+            Tracker::new(my_addr, metadata).start().await;
+        });
 
         self.process_cmds().await;
     }
 
-    fn collect_trackers(&mut self) {
-        let trackers = self.metadata.iter_urls().map(Tracker::new).collect();
-        self.trackers = trackers;
-    }
+    fn connect_to_peers(&self, addr: &SocketAddr) {
+        println!("CONNECTING TO: {:?}", addr);
 
-    fn connect_to_peers(&self, addrs: &[SocketAddr]) {
-        for addr in addrs {
-            println!("ADDR: {:?}", addr);
+        let addr = *addr;
+        let my_addr = self.my_addr.clone();
+        let pieces_detail = self.pieces_detail.clone();
 
-            let addr = *addr;
-            let my_addr = self.my_addr.clone();
-            let pieces_detail = self.pieces_detail.clone();
-
-            task::spawn(async move {
-                let mut peer = match Peer::new(addr, pieces_detail, my_addr).await {
-                    Ok(peer) => peer,
-                    Err(e) => {
-                        println!("PEER ERROR {:?}", e);
-                        return;
-                    }
-                };
-                peer.start().await;
-            });
-        }
-    }
-
-    fn find_tracker(&mut self) -> Option<Vec<SocketAddr>> {
-        let torrent = &self.metadata;
-
-        loop {
-            for tracker in &mut self.trackers {
-                println!("TRYING {:?}", tracker);
-                match tracker.announce(&torrent) {
-                    Ok(peers) => return Some(peers),
-                    Err(e) => {
-                        eprintln!("[Tracker announce] {:?}", e);
-                        continue;
-                    }
-                };
-            }
-        }
-        None
+        task::spawn(async move {
+            let mut peer = match Peer::new(addr, pieces_detail, my_addr).await {
+                Ok(peer) => peer,
+                Err(e) => {
+                    println!("PEER ERROR {:?}", e);
+                    return;
+                }
+            };
+            peer.start().await;
+        });
     }
 
     async fn process_cmds(&mut self) {
@@ -240,7 +214,7 @@ impl TorrentSupervisor {
                     for addr in &addrs {
                         let mut peers = self.peers.values();
                         if peers.position(|p| &p.socket == addr).is_none() {
-                            self.connect_to_peers(&[*addr]);
+                            self.connect_to_peers(addr);
                         }
                     }
                 }
