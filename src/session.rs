@@ -459,6 +459,9 @@ impl<'a> TryFrom<&'a [u8]> for MessagePeer<'a> {
     type Error = TorrentError;
 
     fn try_from(buffer: &'a [u8]) -> Result<MessagePeer> {
+        if buffer.len() == 0 {
+            return Ok(MessagePeer::KeepAlive);
+        }
         let id = buffer[0];
         let buffer = &buffer[1..];
         Ok(match id {
@@ -590,7 +593,7 @@ impl PieceBuffer {
 static PEER_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug)]
-enum PeerCmd {
+enum PeerCommand {
     TasksAvailables
 }
 
@@ -598,8 +601,8 @@ use futures::future::{Fuse, FutureExt};
 use std::pin::Pin;
 
 enum PeerWaitEvent {
-    Msg(Result<usize>),
-    Cmd(Option<PeerCmd>),
+    Peer(Result<usize>),
+    Supervisor(Option<PeerCommand>),
 }
 
 impl Peer {
@@ -716,27 +719,26 @@ impl Peer {
 
     async fn wait_event(
         &mut self,
-        mut cmds: Pin<&mut Fuse<impl Future<Output = Option<PeerCmd>>>>
+        mut cmds: Pin<&mut Fuse<impl Future<Output = Option<PeerCommand>>>>
     ) -> PeerWaitEvent {
-        //use futures::async_await::*;
+        // use futures::async_await::*;
         use futures::task::{Context, Poll};
-        use futures::future;
-        use pin_utils::pin_mut;
+        use futures::{future, pin_mut};
 
         let mut msgs = self.read_messages();
-        pin_mut!(msgs);
+        pin_mut!(msgs); // Pin on the stack
 
         // assert_unpin(&msgs);
         // assert_unpin(&cmds);
-        //assert_fused_future();
+        // assert_fused_future();
 
         let mut fun = |cx: &mut Context<'_>| {
-            match FutureExt::poll_unpin(&mut msgs, cx).map(PeerWaitEvent::Msg) {
+            match FutureExt::poll_unpin(&mut msgs, cx).map(PeerWaitEvent::Peer) {
                 v @ Poll::Ready(_) => return v,
                 _ => {}
             }
 
-            match FutureExt::poll_unpin(&mut cmds, cx).map(PeerWaitEvent::Cmd) {
+            match FutureExt::poll_unpin(&mut cmds, cx).map(PeerWaitEvent::Supervisor) {
                 v @ Poll::Ready(_) => return v,
                 _ => Poll::Pending
             }
@@ -761,16 +763,25 @@ impl Peer {
         let mut cmds = Box::pin(cmds);
 
         loop {
+            use PeerWaitEvent::*;
+
             match self.wait_event(cmds.as_mut()).await {
-                PeerWaitEvent::Msg(Ok(n)) => {
-                    if n != 0 {
-                        self.dispatch().await?;
-                    } // else Keep Alive
+                Peer(Ok(n)) => {
+                    self.dispatch().await?;
                 }
-                PeerWaitEvent::Cmd(..) => {
-                    self.maybe_send_request().await;
+                Supervisor(command) => {
+                    use PeerCommand::*;
+
+                    match command {
+                        Some(TasksAvailables) => {
+                            self.maybe_send_request().await;
+                        }
+                        None => {
+                            // Disconnected
+                        }
+                    }
                 }
-                PeerWaitEvent::Msg(Err(e)) => {
+                Peer(Err(e)) => {
                     eprintln!("[{}] PEER ERROR MSG {:?}", self.id, e);
                     return Err(e);
                 }
@@ -1182,7 +1193,7 @@ enum PeerMessage {
     AddPeer {
         id: PeerId,
         queue: PeerTask,
-        addr: a_sync::Sender<PeerCmd>
+        addr: a_sync::Sender<PeerCommand>
     },
     RemovePeer {
         id: PeerId ,
@@ -1226,7 +1237,7 @@ impl std::fmt::Debug for PeerMessage {
 struct PeerState {
     bitfield: BitField,
     queue_tasks: PeerTask,
-    addr: a_sync::Sender<PeerCmd>
+    addr: a_sync::Sender<PeerCommand>
 }
 
 struct TorrentSupervisor {
@@ -1336,7 +1347,7 @@ impl TorrentSupervisor {
                 UpdateBitfield { id, update } => {
                     if self.find_pieces_for_peer(id, &update).await {
                         let peer = self.peers.get(&id).unwrap();
-                        peer.addr.send(PeerCmd::TasksAvailables).await;
+                        peer.addr.send(PeerCommand::TasksAvailables).await;
                     }
 
                     if let Some(peer) = self.peers.get_mut(&id) {
