@@ -153,6 +153,21 @@ enum PeerWaitEvent {
     Supervisor(Option<PeerCommand>),
 }
 
+use hashbrown::HashMap;
+
+#[derive(Default)]
+struct PeerDetail {
+    extension_ids: HashMap<String, i64>,
+}
+
+impl PeerDetail {
+    fn update_with_extension(&mut self, ext: ExtendedHandshake) {
+        if let Some(m) = ext.m {
+            self.extension_ids = m;
+        };
+    }
+}
+
 pub struct Peer {
     id: PeerId,
     addr: SocketAddr,
@@ -176,6 +191,8 @@ pub struct Peer {
 
     nblocks: usize, // Downloaded
     start: Option<Instant>, // Downloaded,
+
+    peer_detail: PeerDetail
 }
 
 impl Peer {
@@ -204,6 +221,7 @@ impl Peer {
             start: None,
             _tasks: None,
             pieces_buffer: Map::default(),
+            peer_detail: Default::default(),
         })
     }
 
@@ -277,8 +295,18 @@ impl Peer {
             MessagePeer::KeepAlive => {
                 cursor.write_u32::<BigEndian>(0).unwrap();
             }
+            MessagePeer::Extension(ExtendedMessage::Handshake(handshake)) => {
+                let bytes = crate::bencode::ser::to_bytes(&handshake).unwrap();
+                cursor.write_u32::<BigEndian>(2 + bytes.len() as u32).unwrap();
+                cursor.write_u8(20).unwrap();
+                cursor.write_u8(0).unwrap();
+                cursor.write_all(&bytes);
+            }
+            MessagePeer::Extension(ExtendedMessage::Message { id, buffer }) => {
+
+            }
+            //MessagePeer::Extension { .. } => unreachable!()
             MessagePeer::Unknown { .. } => unreachable!(),
-            MessagePeer::Extension { .. } => unreachable!()
         }
 
         cursor.flush();
@@ -379,6 +407,7 @@ impl Peer {
             };
 
             if let Some(task) = task {
+                // println!("[{}] SENT TASK {:?}", self.id, task);
                 self.send_request(task).await?;
             } else {
                 //self.pieces_actor.get_pieces_to_downloads().await;
@@ -501,10 +530,16 @@ impl Peer {
                 println!("KEEP ALICE");
             }
             Extension(ExtendedMessage::Handshake(handshake)) => {
-
+                self.send_extended_handshake().await;
+                //self.maybe_send_request().await;
+                //println!("[{}] EXTENDED HANDSHAKE SENT", self.id);
             }
             Extension(ExtendedMessage::Message { id, buffer }) => {
-
+                if id == 1 {
+                    use crate::extensions::PEXMessage;
+                    let res = crate::de::from_bytes::<PEXMessage>(buffer);
+                    println!("[{}] EXTENDED {:#?}", id, res);
+                }
             }
             Unknown { id, buffer } => {
                 // Check extension
@@ -513,6 +548,18 @@ impl Peer {
             }
         }
         Ok(())
+    }
+
+    async fn send_extended_handshake(&mut self) {
+        let mut extensions = HashMap::new();
+        extensions.insert("ut_pex".to_string(), 1);
+        let handshake = ExtendedHandshake {
+            m: Some(extensions),
+            v: Some(String::from("Rustorrent 0.1")),
+            p: Some(6801),
+            ..Default::default()
+        };
+        self.send_message(MessagePeer::Extension(ExtendedMessage::Handshake(handshake))).await;
     }
 
     async fn send_completed(&mut self, index: u32) {
