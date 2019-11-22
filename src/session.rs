@@ -155,7 +155,7 @@ use std::thread;
 // }
 
 // type PeerAddr = Sender<MessageActor>;
-use crate::supervisors::torrent::{TorrentSupervisor, TorrentData};
+use crate::supervisors::torrent::TorrentSupervisor;
 use async_std::sync as a_sync;
 
 struct SessionInner {

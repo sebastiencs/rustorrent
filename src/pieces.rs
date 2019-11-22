@@ -7,6 +7,8 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct Pieces {
+    /// Info hash
+    pub info_hash: Arc<Vec<u8>>,
     /// Number of pieces
     pub num_pieces: usize,
     /// SHA1 of each piece
@@ -53,6 +55,7 @@ impl From<&Torrent> for Pieces {
         let nblocks_last_piece = ((files_size % piece_length) + block_size - 1) / block_size;
 
         Pieces {
+            info_hash: Arc::clone(&torrent.info_hash),
             num_pieces,
             sha1_pieces,
             block_size,

@@ -67,57 +67,8 @@ impl std::fmt::Debug for PeerMessage {
     }
 }
 
-/// Data shared between peers and torrent actor
-#[derive(Debug)]
-pub struct SharedData {
-    pub torrent: Torrent,
-}
-
-impl SharedData {
-    fn new(torrent: Torrent) -> SharedData {
-        SharedData {
-            torrent,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct TorrentData(Arc<RwLock<SharedData>>);
-
-impl TorrentData {
-    fn new(torrent: Torrent) -> TorrentData {
-        TorrentData(Arc::new(RwLock::new(
-            SharedData::new(torrent)
-        )))
-    }
-
-    fn clone(&self) -> TorrentData {
-        TorrentData(Arc::clone(&self.0))
-    }
-
-    pub fn with<R, F>(&self, mut fun: F) -> R
-    where
-        F: FnMut(&SharedData) -> R
-    {
-        let data = self.0.read();
-        fun(&data)
-    }
-
-    pub fn with_write<R, F>(&self, fun: F) -> R
-    where
-        F: Fn(&mut SharedData) -> R
-    {
-        let mut data = self.0.write();
-        fun(&mut data)
-    }
-
-    pub fn read(&self) -> RwLockReadGuard<SharedData> {
-        self.0.read()
-    }
-}
-
 pub struct TorrentSupervisor {
-    data: TorrentData,
+    metadata: Torrent,
     trackers: Vec<Tracker>,
     receiver: a_sync::Receiver<PeerMessage>,
     // We keep a Sender to not close the channel
@@ -143,14 +94,13 @@ impl TorrentSupervisor {
         pieces.resize_with(num_pieces, Default::default);
 
         TorrentSupervisor {
-            data: TorrentData::new(torrent),
+            metadata: torrent,
             receiver,
             _sender,
             pieces_detail,
             pieces,
             peers: Default::default(),
             trackers: vec![],
-            //queue_map: Default::default()
         }
     }
 
@@ -158,30 +108,27 @@ impl TorrentSupervisor {
         self.collect_trackers();
 
         if let Some(addrs) = self.find_tracker() {
-            self.connect_to_peers(&addrs, self.data.clone());
+            self.connect_to_peers(&addrs);
         }
 
         self.process_cmds().await;
     }
 
     fn collect_trackers(&mut self) {
-        let trackers = self.data.with(|data| {
-            data.torrent.iter_urls().map(Tracker::new).collect()
-        });
+        let trackers = self.metadata.iter_urls().map(Tracker::new).collect();
         self.trackers = trackers;
     }
 
-    fn connect_to_peers(&self, addrs: &[SocketAddr], data: TorrentData) {
+    fn connect_to_peers(&self, addrs: &[SocketAddr]) {
         for addr in addrs {
             println!("ADDR: {:?}", addr);
 
             let addr = *addr;
-            let data = data.clone();
             let sender = self._sender.clone();
             let pieces_detail = self.pieces_detail.clone();
 
             task::spawn(async move {
-                let mut peer = match Peer::new(addr, data, pieces_detail, sender).await {
+                let mut peer = match Peer::new(addr, pieces_detail, sender).await {
                     Ok(peer) => peer,
                     Err(e) => {
                         println!("PEER ERROR {:?}", e);
@@ -194,8 +141,7 @@ impl TorrentSupervisor {
     }
 
     fn find_tracker(&mut self) -> Option<Vec<SocketAddr>> {
-        let data = self.data.read();
-        let torrent = &data.torrent;
+        let torrent = &self.metadata;
 
         loop {
             for tracker in &mut self.trackers {

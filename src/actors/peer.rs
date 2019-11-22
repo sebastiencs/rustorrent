@@ -16,7 +16,7 @@ use std::net::SocketAddr;
 use crate::bitfield::{BitField, BitFieldUpdate};
 use crate::utils::Map;
 use crate::pieces::{Pieces, PieceToDownload, PieceBuffer};
-use crate::supervisors::torrent::{PeerMessage, TorrentData, Result};
+use crate::supervisors::torrent::{PeerMessage, Result};
 use crate::errors::TorrentError;
 
 static PEER_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -134,12 +134,8 @@ enum PeerWaitEvent {
 pub struct Peer {
     id: PeerId,
     addr: SocketAddr,
-    data: TorrentData,
     supervisor: a_sync::Sender<PeerMessage>,
-    //pieces_actor: Arc<PiecesActor>,
-    //pieces_actor_chan: async_std::sync::Sender<PieceActorMessage>,
     reader: BufReader<TcpStream>,
-    //state: PeerState,
     buffer: Vec<u8>,
     /// Are we choked from the peer
     choked: Choke,
@@ -147,24 +143,22 @@ pub struct Peer {
     bitfield: BitField,
     /// List of pieces to download
     tasks: PeerTask,
+    _tasks: Option<VecDeque<PieceToDownload>>,
 
-    /// Small buffer where the downloaded block are kept.
-    /// Once the piece is full, we send this buffer to PieceActor
-    /// and reset this vec.
-    piece_buffer: Map<usize, PieceBuffer>,
+    /// Small buffers where the downloaded blocks are kept.
+    /// Once the piece is full, we send it to TorrentSupervisor
+    /// and remove it here.
+    pieces_buffer: Map<usize, PieceBuffer>,
 
     pieces_detail: Pieces,
 
     nblocks: usize, // Downloaded
     start: Option<Instant>, // Downloaded,
-    _tasks: Option<VecDeque<PieceToDownload>>,
-    npieces: usize,
 }
 
 impl Peer {
     pub async fn new(
         addr: SocketAddr,
-        data: TorrentData,
         pieces_detail: Pieces,
         supervisor: a_sync::Sender<PeerMessage>,
     ) -> Result<Peer> {
@@ -177,9 +171,7 @@ impl Peer {
         Ok(Peer {
             addr,
             supervisor,
-            npieces: pieces_detail.num_pieces,
             pieces_detail,
-            data,
             bitfield,
             id,
             tasks: PeerTask::default(),
@@ -189,7 +181,7 @@ impl Peer {
             nblocks: 0,
             start: None,
             _tasks: None,
-            piece_buffer: Map::default(),
+            pieces_buffer: Map::default(),
         })
     }
 
@@ -429,45 +421,20 @@ impl Peer {
                 self.supervisor.send(PeerMessage::UpdateBitfield { id: self.id, update }).await;
 
                 println!("[{:?}] HAVE {}", self.id, piece_index);
-
-                //self.cmds.recv().await;
-
-                //self.pieces_actor.get_pieces_to_downloads(&self, &update).await;
-
-                // self.update_bitfield(update);
-
-                // if self.am_choked() {
-                //     self.send_message(MessagePeer::Interested).await?;
-                // } else {
-                //     self.maybe_send_request().await?;
-                // }
             },
             BitField (bitfield) => {
                 // Send an Interested ?
 
                 let bitfield = crate::bitfield::BitField::from(
                     bitfield,
-                    self.npieces
-                    //self.data.with(|data| data.pieces.num_pieces)
+                    self.pieces_detail.num_pieces
                 )?;
 
                 let update = BitFieldUpdate::from(bitfield);
 
                 self.supervisor.send(PeerMessage::UpdateBitfield { id: self.id, update }).await;
 
-                //self.cmds.recv().await;
-
                 println!("[{:?}] BITFIELD", self.id);
-
-                //self.pieces_actor.get_pieces_to_downloads(&self, &update).await;
-
-                // self.update_bitfield(update);
-
-                // if self.am_choked() {
-                //     self.send_message(MessagePeer::Interested).await?;
-                // } else {
-                //     self.maybe_send_request().await?;
-                // }
             },
             Request { index, begin, length } => {
                 // Mark this peer as interested
@@ -489,7 +456,7 @@ impl Peer {
                 let piece_size = self.pieces_detail.piece_size(index as usize);
                 let mut is_completed = false;
 
-                self.piece_buffer
+                self.pieces_buffer
                     .entry(index as usize)
                     .and_modify(|p| { p.add_block(begin, block); is_completed = p.is_completed() })
                     .or_insert_with(|| PieceBuffer::new_with_block(index, piece_size, begin, block));
@@ -520,7 +487,7 @@ impl Peer {
     }
 
     async fn send_completed(&mut self, index: u32) {
-        let piece_buffer = self.piece_buffer.remove(&(index as usize)).unwrap();
+        let piece_buffer = self.pieces_buffer.remove(&(index as usize)).unwrap();
 
         self.supervisor.send(PeerMessage::AddPiece(piece_buffer)).await;
         //println!("[{}] PIECE COMPLETED {}", self.id, index);
@@ -572,9 +539,7 @@ impl Peer {
         cursor.write(&[19])?;
         cursor.write(b"BitTorrent protocol")?;
         cursor.write(&[0,0,0,0,0,0,0,0])?;
-        self.data.with(|data| {
-            cursor.write(data.torrent.info_hash.as_ref());
-        });
+        cursor.write(self.pieces_detail.info_hash.as_ref());
         cursor.write(b"-RT1220sJ1Nna5rzWLd8")?;
 
         self.write(&handshake).await?;

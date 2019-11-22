@@ -8,6 +8,7 @@ use serde::forward_to_deserialize_any;
 use serde::Deserialize;
 
 use std::fmt;
+use std::sync::Arc;
 
 #[derive(Debug, PartialEq)]
 pub enum DeserializeError {
@@ -73,7 +74,7 @@ use crate::metadata::Torrent;
 pub fn read_meta<'de>(s: &'de [u8]) -> Result<Torrent> {
     let (meta, info_hash) = from_bytes_with_hash(s)?;
 
-    Ok(Torrent { meta, info_hash })
+    Ok(Torrent { meta, info_hash: Arc::new(info_hash) })
 }
 
 // 4b3ea6a5b1e62537dceb67230248ff092a723e4d
