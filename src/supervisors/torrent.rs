@@ -44,6 +44,9 @@ pub enum TorrentNotification {
     ResultChecksum {
         id: usize,
         valid: bool
+    },
+    PeerDiscovered {
+        addrs: Vec<SocketAddr>
     }
 }
 
@@ -52,29 +55,34 @@ impl std::fmt::Debug for TorrentNotification {
         use TorrentNotification::*;
         match self {
             AddPeer { id, .. } => {
-                f.debug_struct("PeerMessage")
+                f.debug_struct("TorrentNotification")
                  .field("AddPeer", &id)
                  .finish()
             }
             RemovePeer { id, .. } => {
-                f.debug_struct("PeerMessage")
+                f.debug_struct("TorrentNotification")
                  .field("RemovePeer", &id)
                  .finish()
             }
             AddPiece(piece) => {
-                f.debug_struct("PeerMessage")
+                f.debug_struct("TorrentNotification")
                  .field("AddPiece", &piece.piece_index)
                  .finish()
             }
             UpdateBitfield { id, .. } => {
-                f.debug_struct("PeerMessage")
+                f.debug_struct("TorrentNotification")
                  .field("UpdateBitfield", &id)
                  .finish()
             }
             ResultChecksum { id, valid } => {
-                f.debug_struct("PeerMessage")
+                f.debug_struct("TorrentNotification")
                  .field("ResultChecksum", &id)
                  .field("valid", &valid)
+                 .finish()
+            }
+            PeerDiscovered { addrs } => {
+                f.debug_struct("TorrentNotification")
+                 .field("addrs", &addrs)
                  .finish()
             }
         }
@@ -224,6 +232,9 @@ impl TorrentSupervisor {
                         let _piece = self.pending_pieces.remove(id);
                     };
                     //println!("PIECE CHECKED FROM THE POOL: {}", valid);
+                }
+                PeerDiscovered { addrs } => {
+                    println!("PEERS DISCOVERED: {:#?}", addrs);
                 }
             }
         }

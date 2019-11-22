@@ -54,33 +54,73 @@ pub struct ExtendedHandshake {
     pub complete_ago: Option<i64>
 }
 
-// {
-//   added: <one or more contacts in IPv4 compact format (string)>
-//   added.f: <optional, bit-flags, 1 byte per added IPv4 peer (string)>
-//   added6: <one or more contacts IPv6 compact format (string)>,
-//   added6.f: <optional, bit-flags, 1 byte per added IPv6 peer (string)>,
-//   dropped: <one or more contacts in IPv6 compact format (string)>,
-//   dropped6: <one or more contacts in IPv6 compact format (string)>
-// }
+use crate::bencode::PtrBuf;
 
-use crate::bencode::{CompactIpv4, CompactIpv6};
+use std::net::SocketAddr;
 
+// We only deserialize the struct with pointers so we avoid
+// too many allocations
+// See the Into<Vec<SocketAddr>>> implementation below
 #[derive(Deserialize, Debug)]
-pub struct PEXMessage {
+pub struct PEXMessage<'a> {
     /// <one or more contacts in IPv4 compact format (string)>
-    added: Option<CompactIpv4>,
+    #[serde(borrow)]
+    added: Option<PtrBuf<'a>>,
     /// <optional, bit-flags, 1 byte per added IPv4 peer (string)>
-    #[serde(rename = "added.f")]
-    added_flags: Option<ByteBuf>,
+    #[serde(rename = "added.f", borrow)]
+    added_flags: Option<PtrBuf<'a>>,
     /// <one or more contacts IPv6 compact format (string)>,
-    added6: Option<CompactIpv6>,
+    #[serde(borrow)]
+    added6: Option<PtrBuf<'a>>,
     /// added6.f: <optional, bit-flags, 1 byte per added IPv6 peer (string)>,
-    #[serde(rename = "added6.f")]
-    added6_flags: Option<ByteBuf>,
+    #[serde(rename = "added6.f", borrow)]
+    added6_flags: Option<PtrBuf<'a>>,
     /// <one or more contacts in IPv6 compact format (string)>,
-    dropped: Option<CompactIpv4>,
+    #[serde(borrow)]
+    dropped: Option<PtrBuf<'a>>,
     /// <one or more contacts in IPv6 compact format (string)>
-    dropped6: Option<CompactIpv6>,
+    #[serde(borrow)]
+    dropped6: Option<PtrBuf<'a>>,
+}
+
+use std::io::Cursor;
+use byteorder::BigEndian;
+use byteorder::ReadBytesExt;
+use std::net::{SocketAddrV4, SocketAddrV6, Ipv4Addr, Ipv6Addr};
+
+use std::sync::Arc;
+
+impl<'a> Into<Vec<SocketAddr>> for PEXMessage<'a> {
+    fn into(self) -> Vec<SocketAddr> {
+        let mut length = self.added.as_ref().map(|a| a.slice.len() / 6).unwrap_or(0);
+        length += self.added6.as_ref().map(|a| a.slice.len() / 18).unwrap_or(0);
+
+        // 1 alloc
+        let mut addrs = Vec::with_capacity(length);
+
+        if let Some(PtrBuf { slice }) = self.added {
+            for chunk in slice.chunks_exact(6) {
+                let mut cursor = Cursor::new(&chunk[..]);
+                let ipv4 = cursor.read_u32::<BigEndian>().unwrap();
+                let port = cursor.read_u16::<BigEndian>().unwrap();
+                addrs.push(SocketAddrV4::new(Ipv4Addr::from(ipv4), port).into());
+            }
+        };
+
+        if let Some(PtrBuf { slice }) = self.added6 {
+            for chunk in slice.chunks_exact(18) {
+                let mut cursor = Cursor::new(chunk);
+                let mut addr: [u16; 8] = [0; 8];
+                addr.iter_mut().for_each(|a| {
+                    *a = cursor.read_u16::<BigEndian>().unwrap();
+                });
+                let port = cursor.read_u16::<BigEndian>().unwrap();
+                addrs.push(SocketAddrV6::new(Ipv6Addr::from(addr), port, 0, 0).into());
+            }
+        };
+
+        addrs
+    }
 }
 
 #[derive(Debug)]

@@ -18,7 +18,7 @@ use crate::utils::Map;
 use crate::pieces::{Pieces, PieceToDownload, PieceBuffer};
 use crate::supervisors::torrent::{TorrentNotification, Result};
 use crate::errors::TorrentError;
-use crate::extensions::{ExtendedMessage, ExtendedHandshake};
+use crate::extensions::{ExtendedMessage, ExtendedHandshake, PEXMessage};
 
 static PEER_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -536,9 +536,11 @@ impl Peer {
             }
             Extension(ExtendedMessage::Message { id, buffer }) => {
                 if id == 1 {
-                    use crate::extensions::PEXMessage;
-                    let res = crate::de::from_bytes::<PEXMessage>(buffer);
-                    println!("[{}] EXTENDED {:#?}", id, res);
+                    if let Ok(addrs) = crate::de::from_bytes::<PEXMessage>(buffer) {
+                        self.supervisor.send(TorrentNotification::PeerDiscovered {
+                            addrs: addrs.into()
+                        }).await;
+                    };
                 }
             }
             Unknown { id, buffer } => {
