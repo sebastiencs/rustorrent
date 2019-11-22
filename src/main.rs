@@ -13,6 +13,7 @@ mod pieces;
 mod supervisors;
 mod errors;
 mod extensions;
+mod bencode;
 
 // use async_std::task;
 use std::io::{self, Read};

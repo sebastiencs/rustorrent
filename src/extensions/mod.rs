@@ -5,40 +5,52 @@ use serde_bytes::ByteBuf;
 
 use std::collections::HashMap;
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ExtendedHandshake {
     /// Dictionary of supported extension messages which maps names of
     /// extensions to an extended message ID
+    #[serde(skip_serializing_if = "Option::is_none")]
     m: Option<HashMap<String, i64>>,
     /// Client name and version (as a utf-8 string). This is a much
     /// more reliable way of identifying the client than relying on
     /// the peer id encoding.
+    #[serde(skip_serializing_if = "Option::is_none")]
     v: Option<String>,
     /// The number of outstanding request messages this client supports
     /// without dropping any. The default in in libtorrent is 250.
+    #[serde(skip_serializing_if = "Option::is_none")]
     reqq: Option<i64>,
     /// Local TCP listen port. Allows each side to learn about the TCP
     /// port number of the other side. Note that there is no need for
     /// the receiving side of the connection to send this extension
     /// message, since its port number is already known.
+    #[serde(skip_serializing_if = "Option::is_none")]
     p: Option<i64>,
     /// A string containing the compact representation of the ip address
     /// this peer sees you as
+    #[serde(skip_serializing_if = "Option::is_none")]
     yourip: Option<ByteBuf>,
     /// If this peer has an IPv4 interface, this is the compact
     /// representation of that address (4 bytes). The client may prefer
     /// to connect back via the IPv6 address.
+    #[serde(skip_serializing_if = "Option::is_none")]
     ipv4: Option<ByteBuf>,
     /// If this peer has an IPv6 interface, this is the compact
     /// representation of that address (16 bytes). The client may prefer
     /// to connect back via the IPv6 address.
+    #[serde(skip_serializing_if = "Option::is_none")]
     ipv6: Option<ByteBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     metadata_size: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     upload_only: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     ut_holepunch: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     lt_donthave: Option<i64>,
     /// the time when this peer last saw a complete copy
 	/// of this torrent
+    #[serde(skip_serializing_if = "Option::is_none")]
     complete_ago: Option<i64>
 }
 
