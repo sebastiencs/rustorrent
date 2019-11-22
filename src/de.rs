@@ -61,7 +61,7 @@ where
         let mut slice = unsafe { std::slice::from_raw_parts(de.start_info, len) };
         sha1::Sha1::from(&slice[..]).digest().bytes().to_vec()
     } else {
-        eprintln!("START={:?} END={:?}", de.start_info, de.end_info);
+        //eprintln!("START={:?} END={:?}", de.start_info, de.end_info);
 
         return Err(DeserializeError::InfoHashMissing);
     };
@@ -164,12 +164,12 @@ impl<'de> Deserializer<'de> {
         self.skip(len)?;
 
         if s == b"info" {
-            println!("INFO FOUND: {:?}", String::from_utf8(s.to_vec()));
+            //println!("INFO FOUND: {:?}", String::from_utf8(s.to_vec()));
             self.start_info = self.input.as_ptr();
             self.info_depth = 1;
         }
 
-        println!("STRING={:?}", String::from_utf8((&s[0..std::cmp::min(100, s.len())]).to_vec()));
+        //println!("STRING={:?}", String::from_utf8((&s[0..std::cmp::min(100, s.len())]).to_vec()));
 
         Ok(s)
     }
@@ -191,11 +191,11 @@ impl<'a, 'de> serde::de::Deserializer<'de> for &'a mut Deserializer<'de> {
             }
             b'l' => {
                 self.consume()?;
-                println!("FOUND LIST {:?}", &self.input[..10]);
+                //println!("FOUND LIST {:?}", &self.input[..10]);
                 visitor.visit_seq(BencAccess::new(self))
             },
             b'd' => {
-                println!("FOUND DICT", );
+                //println!("FOUND DICT", );
                 self.consume()?;
                 visitor.visit_map(BencAccess::new(self))
             },
@@ -230,7 +230,7 @@ impl<'a, 'de> BencAccess<'a, 'de> {
         if de.info_depth >= 1 {
             de.info_depth += 1;
             let s = de.input;
-            println!("DEPTH[NEW]={:?} {:?}", de.info_depth, String::from_utf8((&s[0..std::cmp::min(50, s.len())]).to_vec()));
+            //println!("DEPTH[NEW]={:?} {:?}", de.info_depth, String::from_utf8((&s[0..std::cmp::min(50, s.len())]).to_vec()));
         }
         BencAccess { de }
     }
@@ -247,11 +247,11 @@ impl<'a, 'de> MapAccess<'de> for BencAccess<'a, 'de> {
             let _ = self.de.consume();
             self.de.info_depth -= 1;
             if self.de.info_depth == 1 {
-                println!("FOUND END !");
+                //println!("FOUND END !");
                 self.de.end_info = self.de.input.as_ptr();
             }
             let s = self.de.input;
-            println!("DEPTH[END_DICT]={:?} {:?}", self.de.info_depth, String::from_utf8((&s[0..std::cmp::min(50, s.len())]).to_vec()));
+            //println!("DEPTH[END_DICT]={:?} {:?}", self.de.info_depth, String::from_utf8((&s[0..std::cmp::min(50, s.len())]).to_vec()));
             return Ok(None)
         }
 
@@ -281,7 +281,7 @@ impl<'a, 'de> SeqAccess<'de> for BencAccess<'a, 'de> {
                 self.de.info_depth -= 1;
             }
             let s = self.de.input;
-            println!("DEPTH[END_LIST]={:?} {:?}", self.de.info_depth, String::from_utf8((&s[0..std::cmp::min(50, s.len())]).to_vec()));
+            //println!("DEPTH[END_LIST]={:?} {:?}", self.de.info_depth, String::from_utf8((&s[0..std::cmp::min(50, s.len())]).to_vec()));
             // println!("DEPTH={}", self.de.info_depth);
             return Ok(None);
         }

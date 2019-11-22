@@ -18,6 +18,7 @@ use crate::utils::Map;
 use crate::pieces::{Pieces, PieceToDownload, PieceBuffer};
 use crate::supervisors::torrent::{TorrentNotification, Result};
 use crate::errors::TorrentError;
+use crate::extensions::{ExtendedMessage, ExtendedHandshake};
 
 static PEER_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -50,7 +51,11 @@ enum MessagePeer<'a> {
         length: u32,
     },
     Port(u16),
-    Unknown(u8)
+    Extension(ExtendedMessage<'a>),
+    Unknown {
+        id: u8,
+        buffer: &'a [u8]
+    }
 }
 
 impl<'a> TryFrom<&'a [u8]> for MessagePeer<'a> {
@@ -106,7 +111,24 @@ impl<'a> TryFrom<&'a [u8]> for MessagePeer<'a> {
 
                 MessagePeer::Port(port)
             }
-            x => MessagePeer::Unknown(x)
+            20 => {
+                let mut cursor = Cursor::new(buffer);
+                let id = cursor.read_u8()?;
+
+                match id {
+                    0 => {
+                        let handshake = crate::de::from_bytes(&buffer[1..])?;
+                        MessagePeer::Extension(ExtendedMessage::Handshake(handshake))
+                    }
+                    _ => {
+                        MessagePeer::Extension(ExtendedMessage::Message {
+                            id,
+                            buffer: &buffer[1..]
+                        })
+                    }
+                }
+            }
+            id => MessagePeer::Unknown { id, buffer }
         })
     }
 }
@@ -255,7 +277,8 @@ impl Peer {
             MessagePeer::KeepAlive => {
                 cursor.write_u32::<BigEndian>(0).unwrap();
             }
-            MessagePeer::Unknown (_) => unreachable!()
+            MessagePeer::Unknown { .. } => unreachable!(),
+            MessagePeer::Extension { .. } => unreachable!()
         }
 
         cursor.flush();
@@ -477,10 +500,16 @@ impl Peer {
             KeepAlive => {
                 println!("KEEP ALICE");
             }
-            Unknown (x) => {
+            Extension(ExtendedMessage::Handshake(handshake)) => {
+
+            }
+            Extension(ExtendedMessage::Message { id, buffer }) => {
+
+            }
+            Unknown { id, buffer } => {
                 // Check extension
                 // Disconnect
-                println!("UNKNOWN {:?}", x);
+                println!("UNKNOWN {:?} {}", id, String::from_utf8_lossy(buffer));
             }
         }
         Ok(())
@@ -536,9 +565,13 @@ impl Peer {
 
         let mut cursor = Cursor::new(&mut handshake[..]);
 
+        let mut reserved: [u8; 8] = [0,0,0,0,0,0,0,0];
+
+        reserved[5] |= 0x10; // Support Extension Protocol
+
         cursor.write(&[19])?;
         cursor.write(b"BitTorrent protocol")?;
-        cursor.write(&[0,0,0,0,0,0,0,0])?;
+        cursor.write(&reserved[..])?;
         cursor.write(self.pieces_detail.info_hash.as_ref());
         cursor.write(b"-RT1220sJ1Nna5rzWLd8")?;
 
@@ -550,7 +583,7 @@ impl Peer {
 
         // TODO: Check the info hash and send to other TorrentSupervisor if necessary
 
-        println!("HANDSHAKE DONE", );
+        println!("[{}] HANDSHAKE DONE", self.id);
 
         Ok(())
     }

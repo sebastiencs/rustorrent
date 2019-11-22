@@ -12,6 +12,7 @@ mod actors;
 mod pieces;
 mod supervisors;
 mod errors;
+mod extensions;
 
 // use async_std::task;
 use std::io::{self, Read};
