@@ -1,7 +1,23 @@
 use crate::utils::FromSlice;
-use crate::session::TorrentError;
-use crate::session::Result;
-use crate::session::BitFieldUpdate;
+use crate::errors::TorrentError;
+use crate::supervisors::torrent::Result;
+
+pub enum BitFieldUpdate {
+    BitField(BitField),
+    Piece(usize)
+}
+
+impl From<u32> for BitFieldUpdate {
+    fn from(p: u32) -> BitFieldUpdate {
+        BitFieldUpdate::Piece(p as usize)
+    }
+}
+
+impl From<BitField> for BitFieldUpdate {
+    fn from(b: BitField) -> BitFieldUpdate {
+        BitFieldUpdate::BitField(b)
+    }
+}
 
 #[derive(Debug)]
 pub struct BitField {

@@ -9,6 +9,9 @@ mod session;
 mod bitfield;
 mod utils;
 mod actors;
+mod pieces;
+mod supervisors;
+mod errors;
 
 // use async_std::task;
 use std::io::{self, Read};
