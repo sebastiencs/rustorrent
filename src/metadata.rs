@@ -151,6 +151,36 @@ impl<'a> Iterator for UrlIterator<'a> {
 }
 
 impl Torrent {
+    pub fn get_urls_tiers(&self) -> Vec<Vec<Arc<Url>>> {
+        let mut found = false;
+
+        if let Some(list) = &self.meta.announce_list {
+            let mut vec = Vec::with_capacity(list.len());
+
+            for tier in list.iter().filter(|l| !l.is_empty()) {
+                let mut tier_vec = Vec::with_capacity(tier.len());
+
+                for url_str in tier {
+                    if let Ok(url) = url_str.parse() {
+                        found = true;
+                        tier_vec.push(Arc::new(url));
+                    };
+                }
+
+                vec.push(tier_vec);
+            }
+
+            if found {
+                return vec;
+            }
+        }
+
+        match self.meta.announce.parse() {
+            Ok(url) => vec![vec![Arc::new(url)]],
+            _ => vec![]
+        }
+    }
+
     pub fn iter_urls(&self) -> UrlIterator {
         let mut vec = vec![];
 

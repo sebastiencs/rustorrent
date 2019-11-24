@@ -1,5 +1,7 @@
 use std::io::prelude::*;
-use std::net::TcpStream;
+//use std::net::TcpStream;
+use async_std::net::{SocketAddr, TcpStream};
+use async_std::prelude::*;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -193,39 +195,42 @@ use std::time::Duration;
 use std::net::ToSocketAddrs;
 use std::convert::TryInto;
 
-fn try_addr(sockaddr: std::vec::IntoIter<std::net::SocketAddr>) -> Result<TcpStream> {
-    let mut last_err = None;
-    for addr in sockaddr {
-        match TcpStream::connect_timeout(
-            &addr,
-            Duration::from_secs(5)
-        ) {
-            Ok(stream) => return Ok(stream),
-            Err(e) => last_err = Some(Err(e))
-        }
-    }
-    match last_err {
-        Some(e) => e?,
-        _ => Err(HttpError::HostResolution)?
-    }
-}
+// fn try_addr(sockaddr: std::vec::IntoIter<std::net::SocketAddr>) -> Result<TcpStream> {
+//     let mut last_err = None;
+//     for addr in sockaddr {
+//         match TcpStream::connect_timeout(
+//             &addr,
+//             Duration::from_secs(5)
+//         ) {
+//             Ok(stream) => return Ok(stream),
+//             Err(e) => last_err = Some(Err(e))
+//         }
+//     }
+//     match last_err {
+//         Some(e) => e?,
+//         _ => Err(HttpError::HostResolution)?
+//     }
+// }
 
-fn send<T: DeserializeOwned>(url: Url, query: impl ToQuery) -> Result<T> {
-    let sockaddr = (
-        url.host_str().ok_or(HttpError::HostResolution)?,
-        url.port().unwrap_or(80)
-    ).to_socket_addrs()?;
+//fn send<T: DeserializeOwned>(url: &Url, query: impl ToQuery) -> Result<T> {
+async fn send<T: DeserializeOwned>(url: &Url, query: impl ToQuery, addr: &SocketAddr) -> Result<T> {
+    // let sockaddr = (
+    //     url.host_str().ok_or(HttpError::HostResolution)?,
+    //     url.port().unwrap_or(80)
+    // ).to_socket_addrs()?;
 
-    let mut stream = try_addr(sockaddr)?;
+    // let mut stream = try_addr(sockaddr)?;
 
-    let req = format_request(&url, query);
+    let mut stream = TcpStream::connect(addr).await?;
+
+    let req = format_request(url, query);
 
     println!("REQ {}", req);
 
-    stream.write_all(req.as_bytes())?;
-    stream.flush()?;
+    stream.write(req.as_bytes()).await?;
+    stream.flush().await?;
 
-    let (buffer, state) = read_response(stream)?;
+    let (buffer, state) = read_response(stream).await?;
 
     let response = &buffer[state.header_length.unwrap()..];
 
@@ -380,7 +385,7 @@ impl Default for ReadingState {
 
 const BUFFER_READ_SIZE: usize = 64;
 
-fn read_response(mut stream: TcpStream) -> Result<(Vec<u8>, ReadingState)> {
+async fn read_response(mut stream: TcpStream) -> Result<(Vec<u8>, ReadingState)> {
     let mut buffer = Vec::with_capacity(BUFFER_READ_SIZE);
 
     unsafe { buffer.set_len(BUFFER_READ_SIZE); }
@@ -395,7 +400,7 @@ fn read_response(mut stream: TcpStream) -> Result<(Vec<u8>, ReadingState)> {
             }
         }
 
-        match stream.read(&mut buffer[state.offset..]) {
+        match stream.read(&mut buffer[state.offset..]).await {
             Ok(0) => break,
             Ok(n) => {
                 state.offset += n;
@@ -423,15 +428,15 @@ fn read_response(mut stream: TcpStream) -> Result<(Vec<u8>, ReadingState)> {
     Ok((buffer, state))
 }
 
-pub fn get<R, T, Q>(url: T, query: Q) -> Result<R>
+pub async fn get<R, Q>(url: &Url, query: Q, addr: &SocketAddr) -> Result<R>
 where
-    T: AsRef<str>,
+    // T: AsRef<str>,
     Q: ToQuery,
     R: DeserializeOwned
 {
-    let url: Url = url.as_ref().parse().unwrap();
+    // let url: Url = url.as_ref().parse().unwrap();
 
     println!("URL: {:?} {:?} {:?} {:?}", url, url.host(), url.port(), url.scheme());
 
-    send(url, query)
+    send(url, query, addr).await
 }
