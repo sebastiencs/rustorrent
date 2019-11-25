@@ -96,7 +96,7 @@ impl ATracker {
     }
 
     async fn resolve_and_start(&mut self) {
-        let addrs = self.resolve_url().await;
+        let addrs = self.resolve_host().await;
         let addrs_len = addrs.len();
 
         if addrs_len == 0 {
@@ -140,15 +140,15 @@ impl ATracker {
         }
     }
 
-    async fn resolve_url(&mut self) -> Vec<Arc<SocketAddr>> {
+    async fn resolve_host(&mut self) -> Vec<Arc<SocketAddr>> {
         let host = self.data.url.host_str().unwrap();
         let port = self.data.url.port().unwrap_or(80);
 
         (host, port)
             .to_socket_addrs()
             .await
-            .map(|s| s.map(Arc::new).collect::<Vec<_>>())
-            .unwrap_or_else(|_| vec![])
+            .map(|a| a.map(Arc::new).collect())
+            .unwrap_or_else(|_| Vec::new())
     }
 }
 
