@@ -469,23 +469,27 @@ impl Peer {
                 println!("NOT INTERESTED", );
             },
             Have { piece_index } => {
+                use TorrentNotification::UpdateBitfield;
+                
                 let update = BitFieldUpdate::from(piece_index);
 
-                self.supervisor.send(TorrentNotification::UpdateBitfield { id: self.id, update }).await;
+                self.supervisor.send(UpdateBitfield { id: self.id, update }).await;
 
                 println!("[{:?}] HAVE {}", self.id, piece_index);
             },
             BitField (bitfield) => {
                 // Send an Interested ?
+                use crate::bitfield::BitField;
+                use TorrentNotification::UpdateBitfield;
 
-                let bitfield = crate::bitfield::BitField::from(
+                let bitfield = BitField::from(
                     bitfield,
                     self.pieces_detail.num_pieces
                 )?;
 
                 let update = BitFieldUpdate::from(bitfield);
 
-                self.supervisor.send(TorrentNotification::UpdateBitfield { id: self.id, update }).await;
+                self.supervisor.send(UpdateBitfield { id: self.id, update }).await;
 
                 println!("[{:?}] BITFIELD", self.id);
             },
@@ -506,13 +510,19 @@ impl Peer {
 
                 self.nblocks += block.len();
 
-                let piece_size = self.pieces_detail.piece_size(index as usize);
+                let piece_size = self.pieces_detail
+                                     .piece_size(index as usize);
                 let mut is_completed = false;
 
                 self.pieces_buffer
                     .entry(index as usize)
-                    .and_modify(|p| { p.add_block(begin, block); is_completed = p.is_completed() })
-                    .or_insert_with(|| PieceBuffer::new_with_block(index, piece_size, begin, block));
+                    .and_modify(|p| {
+                        p.add_block(begin, block);
+                        is_completed = p.is_completed();
+                    })
+                    .or_insert_with(|| {
+                        PieceBuffer::new_with_block(index, piece_size, begin, block)
+                    });
 
                 if is_completed {
                     self.send_completed(index).await;

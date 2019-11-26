@@ -64,60 +64,40 @@ impl HttpConnection {
 
 struct ATracker {
     data: Arc<TrackerData>,
-    addr: Option<Arc<SocketAddr>>,
+    addrs: Vec<Arc<SocketAddr>>,
 }
 
 impl ATracker {
     fn new(data: Arc<TrackerData>) -> ATracker {
-        ATracker { data, addr: None }
-    }
-
-    fn new_with_socket(data: Arc<TrackerData>, addr: Arc<SocketAddr>) -> ATracker {
-        ATracker { data, addr: Some(addr) }
-    }
-
-    async fn start(&mut self) {
-        let addr = self.addr.take().expect("Tracker::start() called without resolving url");
-        let data = Arc::clone(&self.data);
-
-        let connection = Self::new_connection(data, addr);
-        println!("CONNECTING TO {:?} {:?}", self.data.url, self.addr);
-        let peer_addrs = match connection.announce().await {
-            Ok(addrs) => addrs,
-            Err(e) => {
-                println!("ANNOUNCE FAILED {:?}", e);
-                return;
-            }
-        };
-        println!("PEERS FOUND ! {:?}\nLENGTH = {:?}", peer_addrs, peer_addrs.len());
-        // self.data.supervisor.send(TorrentNotification::PeerDiscovered {
-        //     addrs
-        // }).await;
+        ATracker { data, addrs: Vec::new() }
     }
 
     async fn resolve_and_start(&mut self) {
-        let addrs = self.resolve_host().await;
-        let addrs_len = addrs.len();
+        self.addrs = self.resolve_host().await;
 
-        if addrs_len == 0 {
+        let addrs = self.addrs.as_slice();
+
+        if addrs.is_empty() {
             // Resolving url was unsucessfull
-        } else if addrs_len == 1 {
-            // 1 address is resolved
-            // Let's connect to the tracker in this task
-            self.addr = addrs.get(0).cloned();
-            println!("SELF_ADDR = {:?}", self.addr);
-            self.start().await;
-        } else {
-            // Multiple addresses are resolved
-            // We spawn a task for each ip as some ip might be unresponsive
-            for addr in &addrs {
-                let addr = Arc::clone(addr);
-                let data = Arc::clone(&self.data);
-                task::spawn(async move {
-                    println!("SPAWN NEW TASK WITH {:?}", addr);
-                    Self::new_with_socket(data, addr).start().await;
-                });
-            }
+        }
+
+        for addr in addrs {
+            let data = Arc::clone(&self.data);
+            let connection = Self::new_connection(data, Arc::clone(addr));
+            
+            println!("CONNECTING TO {:?} {:?}", self.data.url, addr);
+            let peer_addrs = match connection.announce().await {
+                Ok(addrs) => addrs,
+                Err(e) => {
+                    println!("ANNOUNCE FAILED {:?}", e);
+                    continue;
+                }
+            };
+
+            println!("PEERS FOUND ! {:?}\nLENGTH = {:?}", peer_addrs, peer_addrs.len());
+            // self.data.supervisor.send(TorrentNotification::PeerDiscovered {
+            //     addrs
+            // }).await;
         }
     }
 
