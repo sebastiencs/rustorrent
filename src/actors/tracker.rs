@@ -94,7 +94,7 @@ impl ATracker {
         let addrs = self.addrs.as_slice();
 
         if addrs.is_empty() {
-            self.send_to_supervistor(HostUnresolved).await;
+            self.send_to_supervisor(HostUnresolved).await;
             return;
         }
 
@@ -117,7 +117,7 @@ impl ATracker {
 
             println!("PEERS FOUND ! {:?}\nLENGTH = {:?}", peer_addrs, peer_addrs.len());
 
-            self.send_to_supervistor(Found).await;
+            self.send_to_supervisor(Found).await;
             self.send_addrs(peer_addrs).await;
             self.last_addr = Some(Arc::clone(addr));
 
@@ -125,13 +125,13 @@ impl ATracker {
         }
 
         if let Some(e) = last_error {
-            self.send_to_supervistor(NotResponding).await;
+            self.send_to_supervisor(NotResponding).await;
         } else {
-            self.send_to_supervistor(HostUnresolved).await;
+            self.send_to_supervisor(HostUnresolved).await;
         }
     }
 
-    async fn send_to_supervistor(&self, msg: TrackerMessage) {
+    async fn send_to_supervisor(&self, msg: TrackerMessage) {
         self.tracker_supervisor.send(msg).await;
     }
 
@@ -223,7 +223,7 @@ impl Tracker {
                 for url in tier.iter().filter(Self::is_scheme_supported) {
 
                     let data = Arc::new(TrackerData::from((&self, url)));
-                    let sender = self._sender.clone();
+                    let sender = self._sender.clone();                    
                     task::spawn(async move {
                         ATracker::new(data, sender).resolve_and_start().await
                     });
