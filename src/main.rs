@@ -14,6 +14,7 @@ mod supervisors;
 mod errors;
 mod extensions;
 mod bencode;
+mod udp_ext;
 
 // use async_std::task;
 use std::io::{self, Read};

@@ -36,3 +36,29 @@ impl std::hash::Hasher for NoHash {
 }
 
 pub type Map<K, V> = std::collections::HashMap<K, V, NoHash>;
+
+use async_std::net::SocketAddr;
+use byteorder::{BigEndian, ReadBytesExt};
+use std::io::Cursor;
+use std::net::{SocketAddrV4, SocketAddrV6, Ipv4Addr, Ipv6Addr};
+
+pub fn ipv4_from_slice(slice: &[u8], output: &mut Vec<SocketAddr>) {
+    for chunk in slice.chunks_exact(6) {
+        let mut cursor = Cursor::new(&chunk[..]);
+        let ipv4 = cursor.read_u32::<BigEndian>().unwrap();
+        let port = cursor.read_u16::<BigEndian>().unwrap();
+        output.push(SocketAddrV4::new(Ipv4Addr::from(ipv4), port).into());
+    }
+}
+
+pub fn ipv6_from_slice(slice: &[u8], output: &mut Vec<SocketAddr>) {
+    for chunk in slice.chunks_exact(18) {
+        let mut cursor = Cursor::new(chunk);
+        let mut addr: [u16; 8] = [0; 8];
+        addr.iter_mut().for_each(|a| {
+            *a = cursor.read_u16::<BigEndian>().unwrap();
+        });
+        let port = cursor.read_u16::<BigEndian>().unwrap();
+        output.push(SocketAddrV6::new(Ipv6Addr::from(addr), port, 0, 0).into());
+    }
+}
