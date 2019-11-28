@@ -94,6 +94,7 @@ use crate::de::{DeserializeError, from_bytes};
 pub enum HttpError {
     ResponseCode(String),
     Malformed,
+    MissingContentLength,
     Deserialize(DeserializeError),
     HostResolution,
     IO(std::io::Error),
@@ -195,31 +196,8 @@ use std::time::Duration;
 use std::net::ToSocketAddrs;
 use std::convert::TryInto;
 
-// fn try_addr(sockaddr: std::vec::IntoIter<std::net::SocketAddr>) -> Result<TcpStream> {
-//     let mut last_err = None;
-//     for addr in sockaddr {
-//         match TcpStream::connect_timeout(
-//             &addr,
-//             Duration::from_secs(5)
-//         ) {
-//             Ok(stream) => return Ok(stream),
-//             Err(e) => last_err = Some(Err(e))
-//         }
-//     }
-//     match last_err {
-//         Some(e) => e?,
-//         _ => Err(HttpError::HostResolution)?
-//     }
-// }
-
 //fn send<T: DeserializeOwned>(url: &Url, query: impl ToQuery) -> Result<T> {
 async fn send<T: DeserializeOwned>(url: &Url, query: impl ToQuery, addr: &SocketAddr) -> Result<T> {
-    // let sockaddr = (
-    //     url.host_str().ok_or(HttpError::HostResolution)?,
-    //     url.port().unwrap_or(80)
-    // ).to_socket_addrs()?;
-
-    // let mut stream = try_addr(sockaddr)?;
 
     let mut stream = TcpStream::connect(addr).await?;
 
@@ -230,9 +208,7 @@ async fn send<T: DeserializeOwned>(url: &Url, query: impl ToQuery, addr: &Socket
     stream.write(req.as_bytes()).await?;
     stream.flush().await?;
 
-    let (buffer, state) = read_response(stream).await?;
-
-    let response = &buffer[state.header_length.unwrap()..];
+    let response = read_response(stream).await?;
 
     println!("DATA {:x?}", String::from_utf8_lossy(&response));
 
@@ -241,201 +217,59 @@ async fn send<T: DeserializeOwned>(url: &Url, query: impl ToQuery, addr: &Socket
     Ok(value)
 }
 
-use memchr::{memchr, memrchr2};
+use memchr::memchr;
+use async_std::io::BufReader;
 
-fn get_content_length(buf: &[u8], state: &mut ReadingState) {
-    // We skip the 1st line
-    let mut buf = match memchr(b'\n', buf) {
-        Some(index) => &buf[std::cmp::min(index + 1, buf.len())..],
-        _ => return
-    };
+async fn read_response(stream: TcpStream) -> Result<Vec<u8>> {
+    let mut reader = BufReader::with_capacity(4 * 1024, stream);
 
-    loop {
-        let line = match memchr(b'\n', buf) {
-            Some(index) => &buf[..index],
-            _ => return
-        };
+    let mut content_length = None;
 
-        // We convert the line to a string to later compare it lowercased
-        let line = match std::str::from_utf8(line) {
-            Ok(line) => line.to_lowercase(),
-            _ => {
-                state.valid_headers = false;
-                return;
-            }
-        };
+    // String containing headers
+    let mut string = String::with_capacity(1024);
 
-        let len = line.len();
-        let line = line.trim();
-
-        if line.starts_with("content-length:") {
-            let value = match memrchr2(b':', b' ', line.as_bytes()) {
-                Some(index) => &line[index..],
-                _ => return
-            };
-
-            match value.trim().parse() {
-                Ok(value) => {
-                    state.content_length = Some(value);
-                    return;
-                },
-                _ => {
-                    state.valid_headers = false;
-                    return;
-                }
-            };
-        }
-
-        if line.is_empty() { return }
-
-        buf = &buf[std::cmp::min(len + 1, buf.len())..];
-    }
-}
-
-fn get_header_length(buf: &[u8], state: &mut ReadingState) -> usize {
-    let start = buf.as_ptr();
-
-    // We skip the 1st line
-    let mut buf = match memchr(b'\n', buf) {
-        Some(index) => &buf[std::cmp::min(index + 1, buf.len())..],
-        _ => return 0
-    };
+    // First line with HTTP code
+    // TODO: Check code
+    reader.read_line(&mut string).await?;
 
     loop {
-        let line = match memchr(b'\n', buf) {
-            Some(index) => &buf[..index],
-            _ => return 0
+        string.clear();
+        reader.read_line(&mut string).await?;
+
+        if string == "\r\n" {
+            break; // End of headers
+        }
+
+        let index = match memchr(b':', string.as_bytes()) {
+            Some(index) => index,
+            _ => return Err(HttpError::Malformed)
         };
 
-        if !line.is_empty() && line[0] == b'\r' {
-            let length = line.as_ptr() as usize - start as usize + 2;
-            state.header_length = Some(length);
-            return length;
+        let name = &string[..index].trim().to_lowercase();
+        let value = &string[index + 1..].trim();
+
+        if name == "content-length" {
+            content_length = Some(value.parse().map_err(|_| HttpError::Malformed)?);
         }
-
-        buf = match memchr(b'\n', buf) {
-            Some(index) => &buf[std::cmp::min(index + 1, buf.len())..],
-            _ => return 0
-        };
     }
-}
 
-fn check_http_code(buf: &[u8]) -> Result<()> {
-    let line = match memchr(b'\n', buf) {
-        Some(index) => &buf[..index],
-        _ => return Err(HttpError::Malformed)
+    let content_length = match content_length {
+        Some(content_length) => content_length,
+        _ => return Err(HttpError::MissingContentLength)
     };
 
-    let line = match std::str::from_utf8(line) {
-        Ok(line) => line.trim(),
-        _ => return Err(HttpError::Malformed)
-    };
+    let mut buffer = Vec::with_capacity(content_length as usize);
 
-    if line.contains("200") {
-        Ok(())
-    } else {
-        println!("BUFFER: {:?}\n", String::from_utf8_lossy(buf));
-        Err(HttpError::ResponseCode(line.to_owned()))
-    }
-}
+    reader.take(content_length).read_to_end(&mut buffer).await?;
 
-fn stopper(buf: &[u8], state: &mut ReadingState) -> bool {
-    if !state.valid_headers {
-        return false;
-    }
-
-    if state.content_length.is_none() {
-        get_content_length(buf, state);
-    }
-
-    if state.header_length.is_none() {
-        get_header_length(buf, state);
-    }
-
-    match (state.header_length, state.content_length) {
-        (Some(header), Some(content)) => {
-            if header + content == state.offset {
-                return true;
-            }
-        }
-        _ => {}
-    }
-
-    false
-}
-
-#[derive(Debug)]
-struct ReadingState {
-    offset: usize,
-    valid_headers: bool,
-    header_length: Option<usize>,
-    content_length: Option<usize>,
-}
-
-impl Default for ReadingState {
-    fn default() -> ReadingState {
-        ReadingState {
-            offset: 0,
-            valid_headers: true,
-            header_length: None,
-            content_length: None,
-        }
-    }
-}
-
-const BUFFER_READ_SIZE: usize = 64;
-
-async fn read_response(mut stream: TcpStream) -> Result<(Vec<u8>, ReadingState)> {
-    let mut buffer = Vec::with_capacity(BUFFER_READ_SIZE);
-
-    unsafe { buffer.set_len(BUFFER_READ_SIZE); }
-
-    let mut state = ReadingState::default();
-
-    loop {
-        if state.offset == buffer.len() {
-            buffer.reserve(BUFFER_READ_SIZE);
-            unsafe {
-                buffer.set_len(buffer.capacity());
-            }
-        }
-
-        match stream.read(&mut buffer[state.offset..]).await {
-            Ok(0) => break,
-            Ok(n) => {
-                state.offset += n;
-                if stopper(&buffer, &mut state) {
-                    break;
-                }
-            }
-            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(e) => return Err(HttpError::IO(e))
-        }
-    }
-
-    unsafe {
-        buffer.set_len(state.offset);
-    }
-
-    //println!("DATA {:x?}", String::from_utf8_lossy(&buffer));
-
-    if state.header_length.is_none() && get_header_length(&buffer, &mut state) == 0 {
-        return Err(HttpError::Malformed);
-    }
-
-    check_http_code(&buffer)?;
-
-    Ok((buffer, state))
+    Ok(buffer)
 }
 
 pub async fn get<R, Q>(url: &Url, query: Q, addr: &SocketAddr) -> Result<R>
 where
-    // T: AsRef<str>,
     Q: ToQuery,
     R: DeserializeOwned
 {
-    // let url: Url = url.as_ref().parse().unwrap();
-
     println!("URL: {:?} {:?} {:?} {:?}", url, url.host(), url.port(), url.scheme());
 
     send(url, query, addr).await
