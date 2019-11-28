@@ -14,12 +14,13 @@ use crate::metadata::Torrent;
 use crate::supervisors::torrent::{Result, TorrentNotification};
 use crate::http_client::{self, AnnounceQuery, AnnounceResponse};
 use crate::session::get_peers_addrs;
-use crate::actors::tracker_udp::{write_message, read_response, Action, ConnectRequest, ConnectResponse, AnnounceRequest};
+use crate::actors::tracker_udp::{Action, ConnectRequest, ConnectResponse, AnnounceRequest, ScrapeRequest, ScrapeResponse};
 use crate::errors::TorrentError;
 
 #[async_trait]
 trait TrackerConnection {
     async fn announce(&mut self) -> Result<Vec<SocketAddr>>;
+    async fn scrape(&mut self) -> Result<()>;
 }
 
 pub struct UdpState {
@@ -93,7 +94,7 @@ impl UdpConnection {
 
         let transaction_id = rand::random();
 
-        self.write_message(ConnectRequest::new(transaction_id).into());
+        self.write_to_buffer(ConnectRequest::new(transaction_id).into());
 
         let mut tried = 0;
 
@@ -131,7 +132,7 @@ impl UdpConnection {
         }
     }
 
-    pub fn write_message(&mut self, msg: super::tracker_udp::TrackerMessage) -> usize {
+    pub fn write_to_buffer(&mut self, msg: super::tracker_udp::TrackerMessage) -> usize {
         use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
         use std::io::Cursor;
         use super::tracker_udp::TrackerMessage;
@@ -162,6 +163,13 @@ impl UdpConnection {
                 (&mut buffer[96..]).write_u16::<BigEndian>(req.port).unwrap();
                 98
             }
+            TrackerMessage::ScrapeReq(req) => {
+                (&mut buffer[0..]).write_u64::<BigEndian>(req.connection_id).unwrap();
+                (&mut buffer[8..]).write_u32::<BigEndian>((&req.action).into()).unwrap();
+                (&mut buffer[12..]).write_u32::<BigEndian>(req.transaction_id).unwrap();
+                (&mut buffer[16..]).write_all(&req.info_hash[..]).unwrap();
+                36
+            }
             _ => unreachable!()
         }
     }
@@ -187,6 +195,7 @@ impl UdpConnection {
                 let seeders = cursor.read_u32::<BigEndian>()?;
                 let slice_addrs = &buffer[cursor.position() as usize..];
 
+                // TODO: When available, use the function UdpSocket::peer_addr
                 let addrs = if self.addr.is_ipv4() {
                     let mut addrs = Vec::with_capacity(slice_addrs.len() / 6);
                     crate::utils::ipv4_from_slice(slice_addrs, &mut addrs);
@@ -196,13 +205,21 @@ impl UdpConnection {
                     crate::utils::ipv6_from_slice(slice_addrs, &mut addrs);
                     addrs
                 };
-                //let ip_port_slice = &self.buffer[cursor.position() as usize..];
                 Ok(TrackerMessage::AnnounceResp(AnnounceResponse {
                     action, transaction_id, interval, leechers, seeders, addrs
                 }))
             }
             Action::Scrape => {
-                unreachable!()
+                let complete = cursor.read_u32::<BigEndian>()?;
+                let downloaded = cursor.read_u32::<BigEndian>()?;
+                let incomplete = cursor.read_u32::<BigEndian>()?;
+
+                Ok(TrackerMessage::ScrapeResp(ScrapeResponse {
+                    action, transaction_id, complete, downloaded, incomplete
+                }))
+            }
+            Action::Error => {
+                unreachable!() // TODO
             }
         }
     }
@@ -224,11 +241,25 @@ impl TrackerConnection for UdpConnection {
         }
 
         let req = AnnounceRequest::from(&*self).into();
-        let n = self.write_message(req);
+        let n = self.write_to_buffer(req);
 
         let resp: super::tracker_udp::AnnounceResponse = self.get_response(n).await?;
 
         Ok(resp.addrs)
+    }
+
+    async fn scrape(&mut self) -> Result<()> {
+        if self.state.is_none() {
+            self.connect().await?;
+            self.buffer = smallvec![0; 16 * 1024];
+        }
+
+        let req = ScrapeRequest::from(&*self).into();
+        let n = self.write_to_buffer(req);
+
+        let resp: ScrapeResponse = self.get_response(n).await?;
+
+        Ok(())
     }
 }
 
@@ -241,6 +272,10 @@ impl TrackerConnection for HttpConnection {
         let peers = get_peers_addrs(&response);
 
         Ok(peers)
+    }
+
+    async fn scrape(&mut self) -> Result<()> {
+        Ok(())
     }
 }
 

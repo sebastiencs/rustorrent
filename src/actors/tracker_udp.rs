@@ -14,7 +14,8 @@ use crate::errors::TorrentError;
 pub enum Action {
     Connect,
     Announce,
-    Scrape
+    Scrape,
+    Error
 }
 
 impl TryFrom<u32> for Action {
@@ -25,6 +26,7 @@ impl TryFrom<u32> for Action {
             0 => Ok(Action::Connect),
             1 => Ok(Action::Announce),
             2 => Ok(Action::Scrape),
+            3 => Ok(Action::Error),
             _ => Err(TorrentError::InvalidInput)
         }
     }
@@ -36,6 +38,7 @@ impl Into<u32> for &Action {
             Action::Connect => 0,
             Action::Announce => 1,
             Action::Scrape => 2,
+            Action::Error => 3,
         }
     }
 }
@@ -116,6 +119,14 @@ pub struct AnnounceRequest {
     pub port: u16,
 }
 
+#[derive(Debug)]
+pub struct ScrapeRequest {
+    pub connection_id: u64,
+    pub action: Action,
+    pub transaction_id: u32,
+    pub info_hash: Arc<Vec<u8>>, // TODO: Handle more hash
+}
+
 use crate::actors::tracker::UdpConnection;
 
 impl<'a> From<&'a UdpConnection> for AnnounceRequest {
@@ -140,6 +151,19 @@ impl<'a> From<&'a UdpConnection> for AnnounceRequest {
     }
 }
 
+impl<'a> From<&'a UdpConnection> for ScrapeRequest {
+    fn from(c: &'a UdpConnection) -> ScrapeRequest {
+        let metadata = &c.data.metadata;
+        let state = c.state.as_ref().unwrap();
+        ScrapeRequest {
+            connection_id: state.connection_id,
+            action: Action::Scrape,
+            transaction_id: state.transaction_id,
+            info_hash: Arc::clone(&metadata.info_hash),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct AnnounceResponse {
     pub action: Action,
@@ -148,7 +172,16 @@ pub struct AnnounceResponse {
     pub leechers: u32,
     pub seeders: u32,
     pub addrs: Vec<SocketAddr>,
-    //pub ip_port_slice: &'a [u8],
+}
+
+#[derive(Debug)]
+pub struct ScrapeResponse {
+    pub action: Action,
+    pub transaction_id: u32,
+    // TODO: Handle more torrent
+    pub complete: u32,
+    pub downloaded: u32,
+    pub incomplete: u32,
 }
 
 #[derive(Debug)]
@@ -157,6 +190,8 @@ pub enum TrackerMessage {
     ConnectResp(ConnectResponse),
     AnnounceReq(AnnounceRequest),
     AnnounceResp(AnnounceResponse),
+    ScrapeReq(ScrapeRequest),
+    ScrapeResp(ScrapeResponse),
 }
 
 impl TryFrom<TrackerMessage> for ConnectResponse {
@@ -164,6 +199,16 @@ impl TryFrom<TrackerMessage> for ConnectResponse {
     fn try_from(msg: TrackerMessage) -> Result<ConnectResponse> {
         match msg {
             TrackerMessage::ConnectResp(res) => Ok(res),
+            _ => Err(TorrentError::InvalidInput)
+        }
+    }
+}
+
+impl TryFrom<TrackerMessage> for ScrapeResponse {
+    type Error = TorrentError;
+    fn try_from(msg: TrackerMessage) -> Result<ScrapeResponse> {
+        match msg {
+            TrackerMessage::ScrapeResp(res) => Ok(res),
             _ => Err(TorrentError::InvalidInput)
         }
     }
@@ -201,60 +246,13 @@ impl From<AnnounceResponse> for TrackerMessage {
     }
 }
 
-//pub fn write_message(msg: TrackerMessage, buffer: &mut Vec<u8>) {
-pub fn write_message(msg: TrackerMessage, buffer: &mut [u8]) -> usize {
-    match msg {
-        TrackerMessage::ConnectReq(req) => {
-            let mut cursor = Cursor::new(buffer);
-            cursor.write_u64::<BigEndian>(req.protocol_id).unwrap();
-            cursor.write_u32::<BigEndian>((&req.action).into()).unwrap();
-            cursor.write_u32::<BigEndian>(req.transaction_id).unwrap();
-            cursor.position() as usize
-        }
-        TrackerMessage::AnnounceReq(req) => {
-            let mut cursor = Cursor::new(buffer);
-            cursor.write_u64::<BigEndian>(req.connection_id).unwrap();
-            cursor.write_u32::<BigEndian>((&req.action).into()).unwrap();
-            cursor.write_u32::<BigEndian>(req.transaction_id).unwrap();
-            cursor.write_all(&req.info_hash[..]).unwrap();
-            cursor.write_all(req.peer_id.as_bytes()).unwrap();
-            cursor.write_u64::<BigEndian>(req.downloaded).unwrap();
-            cursor.write_u64::<BigEndian>(req.left).unwrap();
-            cursor.write_u64::<BigEndian>(req.uploaded).unwrap();
-            cursor.write_u32::<BigEndian>((&req.event).into()).unwrap();
-            cursor.write_u32::<BigEndian>(req.ip_address).unwrap();
-            cursor.write_u32::<BigEndian>(req.key).unwrap();
-            cursor.write_u32::<BigEndian>(req.num_want).unwrap();
-            cursor.write_u16::<BigEndian>(req.port).unwrap();
-            cursor.position() as usize
-        }
-        _ => unreachable!()
+impl From<ScrapeRequest> for TrackerMessage {
+    fn from(r: ScrapeRequest) -> TrackerMessage {
+        TrackerMessage::ScrapeReq(r)
     }
 }
-
-pub fn read_response(buffer: &[u8]) -> Result<TrackerMessage> {
-    let mut cursor = Cursor::new(buffer);
-    let action = cursor.read_u32::<BigEndian>()?.try_into()?;
-    let transaction_id = cursor.read_u32::<BigEndian>()?;
-    match action {
-        Action::Connect => {
-            let connection_id = cursor.read_u64::<BigEndian>()?;
-            Ok(TrackerMessage::ConnectResp(ConnectResponse {
-                action, transaction_id, connection_id
-            }))
-        }
-        Action::Announce => {
-            unreachable!()
-            // let interval = cursor.read_u32::<BigEndian>()?;
-            // let leechers = cursor.read_u32::<BigEndian>()?;
-            // let seeders = cursor.read_u32::<BigEndian>()?;
-            // let ip_port_slice = &buffer[cursor.position() as usize..];
-            // Ok(TrackerMessage::AnnounceResp(AnnounceResponse {
-            //     action, transaction_id, interval, leechers, seeders, ip_port_slice
-            // }))
-        }
-        Action::Scrape => {
-            unreachable!()
-        }
+impl From<ScrapeResponse> for TrackerMessage {
+    fn from(r: ScrapeResponse) -> TrackerMessage {
+        TrackerMessage::ScrapeResp(r)
     }
 }
