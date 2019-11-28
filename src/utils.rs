@@ -62,3 +62,20 @@ pub fn ipv6_from_slice(slice: &[u8], output: &mut Vec<SocketAddr>) {
         output.push(SocketAddrV6::new(Ipv6Addr::from(addr), port, 0, 0).into());
     }
 }
+
+use async_std::net::{TcpStream, ToSocketAddrs};
+use std::time::Duration;
+use async_trait::async_trait;
+use async_std::io::{self, Result};
+
+#[async_trait]
+pub trait ConnectTimeout {
+    async fn connect_timeout(addr: &SocketAddr, timeout: Duration) -> io::Result<TcpStream>;
+}
+
+#[async_trait]
+impl ConnectTimeout for TcpStream {
+    async fn connect_timeout(addr: &SocketAddr, timeout: Duration) -> io::Result<TcpStream> {
+        io::timeout(timeout, async move { TcpStream::connect(addr).await }).await
+    }
+}

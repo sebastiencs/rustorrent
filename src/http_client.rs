@@ -195,11 +195,11 @@ fn format_request<T: ToQuery>(url: &Url, query: T) -> String {
 use std::time::Duration;
 use std::net::ToSocketAddrs;
 use std::convert::TryInto;
+use crate::utils::ConnectTimeout;
 
-//fn send<T: DeserializeOwned>(url: &Url, query: impl ToQuery) -> Result<T> {
 async fn send<T: DeserializeOwned>(url: &Url, query: impl ToQuery, addr: &SocketAddr) -> Result<T> {
 
-    let mut stream = TcpStream::connect(addr).await?;
+    let mut stream = TcpStream::connect_timeout(addr, Duration::from_secs(5)).await?;
 
     let req = format_request(url, query);
 
