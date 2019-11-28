@@ -14,7 +14,7 @@ use crate::actors::peer::{PeerId, Peer, PeerTask, PeerCommand};
 use crate::metadata::Torrent;
 use crate::bitfield::{BitFieldUpdate, BitField};
 use crate::pieces::{PieceInfo, Pieces, PieceBuffer, PieceToDownload};
-use crate::actors::tracker::Tracker;
+use crate::supervisors::tracker::TrackerSupervisor;
 use crate::utils::Map;
 use crate::errors::TorrentError;
 use crate::actors::sha1::{Sha1Workers, Sha1Task};
@@ -137,7 +137,7 @@ impl TorrentSupervisor {
         let my_addr = self.my_addr.clone();
 
         task::spawn(async {
-            Tracker::new(my_addr, metadata).start().await;
+            TrackerSupervisor::new(my_addr, metadata).start().await;
         });
 
         self.process_cmds().await;

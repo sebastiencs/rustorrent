@@ -1,28 +1,19 @@
 use async_std::sync::{Sender, Receiver, channel};
 use async_std::net::{SocketAddr, ToSocketAddrs, TcpStream};
 use async_trait::async_trait;
-
-use std::sync::Arc;
-//use std::io::prelude::*;
-//use std::io::Cursor;
-
-use crate::metadata::Torrent;
-use crate::supervisors::torrent::Result as TResult;
-//use crate::http_client::{self, AnnounceQuery};
-//use crate::session::get_peers_addrs;
-use crate::errors::TorrentError;
-
-use super::{TrackerConnection, TrackerData};
-
-//use std::net::TcpStream;
-// use async_std::net::{SocketAddr, TcpStream};
 use async_std::prelude::*;
-
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-pub async fn peers_from_dict(peers: &[Peer], addrs: &mut Vec<SocketAddr>) {
+use std::sync::Arc;
+
+use crate::metadata::Torrent;
+use crate::supervisors::torrent::Result;
+use crate::errors::TorrentError;
+use super::{TrackerConnection, TrackerData};
+
+async fn peers_from_dict(peers: &[Peer], addrs: &mut Vec<SocketAddr>) {
     for peer in peers {
         if let Ok(s_addrs) = (peer.ip.as_str(), peer.port).to_socket_addrs().await {
             for addr in s_addrs {
@@ -32,7 +23,7 @@ pub async fn peers_from_dict(peers: &[Peer], addrs: &mut Vec<SocketAddr>) {
     }
 }
 
-pub async fn get_peers_addrs(response: &AnnounceResponse) -> Vec<SocketAddr> {
+async fn get_peers_addrs(response: &AnnounceResponse) -> Vec<SocketAddr> {
     let mut addrs = Vec::new();
 
     match response.peers6 {
@@ -151,8 +142,6 @@ impl From<DeserializeError> for HttpError {
         HttpError::Deserialize(e)
     }
 }
-
-type Result<T> = std::result::Result<T, HttpError>;
 
 pub trait Escaped {
     fn escape(&self) -> String;
@@ -278,7 +267,7 @@ async fn read_response(stream: TcpStream) -> Result<Vec<u8>> {
 
         let index = match memchr(b':', string.as_bytes()) {
             Some(index) => index,
-            _ => return Err(HttpError::Malformed)
+            _ => return Err(HttpError::Malformed.into())
         };
 
         let name = &string[..index].trim().to_lowercase();
@@ -291,7 +280,7 @@ async fn read_response(stream: TcpStream) -> Result<Vec<u8>> {
 
     let content_length = match content_length {
         Some(content_length) => content_length,
-        _ => return Err(HttpError::MissingContentLength)
+        _ => return Err(HttpError::MissingContentLength.into())
     };
 
     let mut buffer = Vec::with_capacity(content_length as usize);
@@ -318,7 +307,7 @@ pub struct HttpConnection {
 
 #[async_trait]
 impl TrackerConnection for HttpConnection {
-    async fn announce(&mut self, connected_addr: &mut usize) -> TResult<Vec<SocketAddr>> {
+    async fn announce(&mut self, connected_addr: &mut usize) -> Result<Vec<SocketAddr>> {
         let query = AnnounceQuery::from(self.data.metadata.as_ref());
         let mut last_err = None;
         for (index, addr) in self.addr.iter().enumerate() {
@@ -334,12 +323,12 @@ impl TrackerConnection for HttpConnection {
             return Ok(peers);
         }
         match last_err {
-            Some(e) => Err(e.into()),
+            Some(e) => Err(e),
             _ => Err(TorrentError::Unresponsive)
         }
     }
 
-    async fn scrape(&mut self) -> TResult<()> {
+    async fn scrape(&mut self) -> Result<()> {
         Ok(())
     }
 }

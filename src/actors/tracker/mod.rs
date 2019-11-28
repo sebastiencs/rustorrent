@@ -2,18 +2,17 @@
 mod udp;
 pub mod http;
 
-use url::Url;
-use async_std::sync::{Sender, Receiver, channel};
-use async_std::{task, future};
+use async_std::sync::Sender;
+use async_std::task;
 use async_std::net::{SocketAddr, ToSocketAddrs};
 use async_trait::async_trait;
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::metadata::Torrent;
 use crate::supervisors::torrent::{Result, TorrentNotification};
 use crate::errors::TorrentError;
+use crate::supervisors::tracker::{TrackerData, TrackerMessage};
 
 #[async_trait]
 trait TrackerConnection {
@@ -21,13 +20,7 @@ trait TrackerConnection {
     async fn scrape(&mut self) -> Result<()>;
 }
 
-enum TrackerMessage {
-    Found,
-    HostUnresolved,
-    ErrorOccured(TorrentError)
-}
-
-struct ATracker {
+pub struct Tracker {
     data: Arc<TrackerData>,
     /// All addresses the host were resolved to
     /// When we're connected to an address, it is moved to the first position
@@ -36,12 +29,12 @@ struct ATracker {
     tracker_supervisor: Sender<TrackerMessage>,
 }
 
-impl ATracker {
-    fn new(data: Arc<TrackerData>, tracker_supervisor: Sender<TrackerMessage>) -> ATracker {
-        ATracker { data, addrs: Vec::new(), tracker_supervisor }
+impl Tracker {
+    pub fn new(data: Arc<TrackerData>, tracker_supervisor: Sender<TrackerMessage>) -> Tracker {
+        Tracker { data, addrs: Vec::new(), tracker_supervisor }
     }
 
-    async fn start(&mut self) {
+    pub async fn start(&mut self) {
         loop {
             self.resolve_and_start().await;
 
@@ -53,25 +46,6 @@ impl ATracker {
     fn set_connected_addr(&mut self, index: usize) {
         if index != 0 {
             self.addrs.swap(0, index);
-        }
-    }
-
-    async fn connect_and_request(&mut self) -> Result<Vec<SocketAddr>> {
-        let data = Arc::clone(&self.data);
-        let mut connection = Self::new_connection(data, self.addrs.clone());
-
-        let mut connected_index = 0;
-
-        match connection.announce(&mut connected_index).await {
-            Ok(addrs) if !addrs.is_empty() => {
-                self.set_connected_addr(connected_index);
-                Ok(addrs)
-            },
-            Ok(empty) => Ok(empty),
-            Err(e) => {
-                println!("ANNOUNCE FAILED {:?}", e);
-                Err(e)
-            }
         }
     }
 
@@ -98,6 +72,25 @@ impl ATracker {
             }
             Err(e) => {
                 self.send_to_supervisor(ErrorOccured(e)).await;
+            }
+        }
+    }
+
+    async fn connect_and_request(&mut self) -> Result<Vec<SocketAddr>> {
+        let data = Arc::clone(&self.data);
+        let mut connection = Self::new_connection(data, self.addrs.clone());
+
+        let mut connected_index = 0;
+
+        match connection.announce(&mut connected_index).await {
+            Ok(addrs) if !addrs.is_empty() => {
+                self.set_connected_addr(connected_index);
+                Ok(addrs)
+            },
+            Ok(empty) => Ok(empty),
+            Err(e) => {
+                println!("ANNOUNCE FAILED {:?}", e);
+                Err(e)
             }
         }
     }
@@ -135,81 +128,8 @@ impl ATracker {
     }
 }
 
-impl Drop for ATracker {
-    fn drop(&mut self) {
-        println!("ATRACKER DROPPED !", );
-    }
-}
-
-pub struct TrackerData {
-    pub metadata: Arc<Torrent>,
-    pub supervisor: Sender<TorrentNotification>,
-    pub url: Arc<Url>
-}
-
-impl From<(&Tracker, &Arc<Url>)> for TrackerData {
-    fn from((tracker, url): (&Tracker, &Arc<Url>)) -> TrackerData {
-        TrackerData {
-            metadata: Arc::clone(&tracker.metadata),
-            supervisor: tracker.supervisor.clone(),
-            url: Arc::clone(url),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct Tracker {
-    metadata: Arc<Torrent>,
-    supervisor: Sender<TorrentNotification>,
-    urls: Vec<Vec<Arc<Url>>>,
-    recv: Receiver<TrackerMessage>,
-    _sender: Sender<TrackerMessage>,
-}
-
-impl Tracker {
-    pub fn new(
-        supervisor: Sender<TorrentNotification>,
-        metadata: Arc<Torrent>
-    ) -> Tracker
-    {
-        let urls = metadata.get_urls_tiers();
-        let (_sender, recv) = channel(10);
-        Tracker { supervisor, metadata, urls, recv, _sender }
-    }
-
-    fn is_scheme_supported(url: &&Arc<Url>) -> bool {
-        match url.scheme() {
-            "http" | "udp" => true,
-            _ => false
-        }
-    }
-
-    pub async fn start(self) {
-        use TrackerMessage::*;
-
-        for tier in self.urls.as_slice() {
-
-            for url in tier.iter().filter(Self::is_scheme_supported) {
-
-                let data = Arc::new(TrackerData::from((&self, url)));
-                let sender = self._sender.clone();
-
-                task::spawn(async move {
-                    ATracker::new(data, sender).start().await
-                });
-
-                let duration = Duration::from_secs(15);
-                match future::timeout(duration, self.recv.recv()).await {
-                    Ok(Some(Found)) => return,
-                    _ => {}// TODO: Handle other cases
-                }
-            }
-        }
-    }
-}
-
 impl Drop for Tracker {
     fn drop(&mut self) {
-        println!("TRACKER DROPPED !", );
+        println!("ATRACKER DROPPED !", );
     }
 }
