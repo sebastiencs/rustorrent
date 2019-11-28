@@ -285,7 +285,9 @@ async fn read_response(stream: TcpStream) -> Result<Vec<u8>> {
 
     let mut buffer = Vec::with_capacity(content_length as usize);
 
-    reader.take(content_length).read_to_end(&mut buffer).await?;
+    reader.take(content_length)
+          .read_to_end(&mut buffer)
+          .await?;
 
     Ok(buffer)
 }

@@ -103,7 +103,7 @@ impl Tracker {
     async fn send_addrs(&self, addrs: Vec<SocketAddr>) {
         use TorrentNotification::PeerDiscovered;
 
-        //self.data.supervisor.send(PeerDiscovered { addrs }).await;
+        self.data.supervisor.send(PeerDiscovered { addrs }).await;
     }
 
     fn new_connection(
