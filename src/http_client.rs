@@ -182,7 +182,7 @@ fn format_host(url: &Url) -> String {
     }
 }
 
-fn format_request<T: ToQuery>(url: &Url, query: T) -> String {
+fn format_request<T: ToQuery>(url: &Url, query: &T) -> String {
     format!(
         "GET {}?{} HTTP/1.1\r\n{}\r\n{}\r\n\r\n",
         url.path(),
@@ -197,7 +197,7 @@ use std::net::ToSocketAddrs;
 use std::convert::TryInto;
 use crate::utils::ConnectTimeout;
 
-async fn send<T: DeserializeOwned>(url: &Url, query: impl ToQuery, addr: &SocketAddr) -> Result<T> {
+async fn send<T: DeserializeOwned, Q: ToQuery>(url: &Url, query: &Q, addr: &SocketAddr) -> Result<T> {
 
     let mut stream = TcpStream::connect_timeout(addr, Duration::from_secs(5)).await?;
 
@@ -265,7 +265,7 @@ async fn read_response(stream: TcpStream) -> Result<Vec<u8>> {
     Ok(buffer)
 }
 
-pub async fn get<R, Q>(url: &Url, query: Q, addr: &SocketAddr) -> Result<R>
+pub async fn get<R, Q>(url: &Url, query: &Q, addr: &SocketAddr) -> Result<R>
 where
     Q: ToQuery,
     R: DeserializeOwned

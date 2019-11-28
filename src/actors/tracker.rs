@@ -19,7 +19,7 @@ use crate::errors::TorrentError;
 
 #[async_trait]
 trait TrackerConnection {
-    async fn announce(&mut self) -> Result<Vec<SocketAddr>>;
+    async fn announce(&mut self, addr: &mut Arc<SocketAddr>) -> Result<Vec<SocketAddr>>;
     async fn scrape(&mut self) -> Result<()>;
 }
 
@@ -34,17 +34,21 @@ use smallvec::{SmallVec, smallvec};
 
 pub struct UdpConnection {
     pub data: Arc<TrackerData>,
-    pub addr: Arc<SocketAddr>,
+    pub addrs: Vec<Arc<SocketAddr>>,
     pub state: Option<UdpState>,
     /// 16 bytes is just enough to send/receive Connect
     /// We allocate more after this request
     /// This avoid to allocate when the tracker is unreachable
     buffer: SmallVec<[u8; 16]>,
+    current_addr: usize,
+    /// true if we tried to connect to all [`addrs`]
+    /// This avoid to give up when there are remaining addresses
+    all_addrs_tried: bool,
 }
 
 struct HttpConnection {
     data: Arc<TrackerData>,
-    addr: Arc<SocketAddr>,
+    addr: Vec<Arc<SocketAddr>>,
 }
 
 use async_std::net::UdpSocket;
@@ -54,13 +58,28 @@ use async_std::io::ErrorKind;
 
 impl UdpConnection {
 
+    fn next_addr(&mut self) -> Arc<SocketAddr> {
+        if (self.current_addr >= self.addrs.len()) {
+            self.all_addrs_tried = true;
+            self.current_addr = 0;
+        }
+        let addr = Arc::clone(&self.addrs[self.current_addr]);
+        self.current_addr += 1;
+        addr
+    }
+
+    fn current_addr(&self) -> &Arc<SocketAddr> {
+        &self.addrs[self.current_addr]
+    }
+
     async fn get_response<T>(&mut self, send_size: usize) -> Result<T>
     where
         T: TryFrom<super::tracker_udp::TrackerMessage, Error = TorrentError>
     {
-        let mut tried = 0;
+        let mut attempts = 0;
 
         loop {
+            println!("RETRY {:?} {:?}", attempts, self.addrs);
             if self.id_expired() {
                 self.connect().await?;
             }
@@ -69,12 +88,15 @@ impl UdpConnection {
 
             socket.send(&self.buffer[..send_size]).await?;
 
-            let timeout = Duration::from_secs(15 * 2u64.pow(tried));
+            let timeout = Duration::from_secs(10);
 
             let n = match socket.recv_timeout(&mut self.buffer, timeout).await {
                 Ok(n) => n,
                 Err(e) if e.kind() == ErrorKind::TimedOut => {
-                    tried += 1;
+                    if attempts == 6 {
+                        return Err(TorrentError::Unresponsive);
+                    }
+                    attempts += 1;
                     continue;
                 }
                 Err(e) => Err(e)?
@@ -89,30 +111,30 @@ impl UdpConnection {
     }
 
     async fn connect(&mut self) -> Result<ConnectResponse> {
-        let socket = UdpSocket::bind("0.0.0.0:0").await?;
+        let mut attempts = 0;
 
-        socket.connect(self.addr.as_ref()).await?;
-
-        let mut tried = 0;
-
-        let rng = rand::thread_rng();
-
-        // We don't use Self::get_response here because it would make a
-        // recursion
-        // https://rust-lang.github.io/async-book/07_workarounds/05_recursion.html
         loop {
-            let transaction_id = rng.gen();
+            let socket = UdpSocket::bind("0:0").await?;
+
+            socket.connect(self.next_addr().as_ref()).await?;
+
+            println!("RETRY CONNECT {:?} {:?}", self.addrs, socket.local_addr());
+
+            let transaction_id = rand::random();
 
             self.write_to_buffer(ConnectRequest::new(transaction_id).into());
 
             socket.send(&self.buffer[..16]).await?;
 
-            let timeout = Duration::from_secs(15 * 2u64.pow(tried));
+            let timeout = Duration::from_secs(10);
 
             let n = match socket.recv_timeout(&mut self.buffer, timeout).await {
                 Ok(n) => n,
                 Err(e) if e.kind() == ErrorKind::TimedOut => {
-                    tried += 1;
+                    if attempts >= 6 && self.all_addrs_tried {
+                        return Err(TorrentError::Unresponsive);
+                    }
+                    attempts += 1;
                     continue;
                 }
                 Err(e) => Err(e)?
@@ -199,7 +221,7 @@ impl UdpConnection {
                 let slice_addrs = &buffer[cursor.position() as usize..];
 
                 // TODO: When available, use the function UdpSocket::peer_addr
-                let addrs = if self.addr.is_ipv4() {
+                let addrs = if self.current_addr().is_ipv4() {
                     let mut addrs = Vec::with_capacity(slice_addrs.len() / 6);
                     crate::utils::ipv4_from_slice(slice_addrs, &mut addrs);
                     addrs
@@ -237,7 +259,7 @@ impl UdpConnection {
 
 #[async_trait]
 impl TrackerConnection for UdpConnection {
-    async fn announce(&mut self) -> Result<Vec<SocketAddr>> {
+    async fn announce(&mut self, addr: &mut Arc<SocketAddr>) -> Result<Vec<SocketAddr>> {
         if self.state.is_none() {
             self.connect().await?;
             self.buffer = smallvec![0; 16 * 1024];
@@ -247,6 +269,8 @@ impl TrackerConnection for UdpConnection {
         let n = self.write_to_buffer(req);
 
         let resp: super::tracker_udp::AnnounceResponse = self.get_response(n).await?;
+
+        *addr = self.current_addr().clone();
 
         Ok(resp.addrs)
     }
@@ -268,13 +292,25 @@ impl TrackerConnection for UdpConnection {
 
 #[async_trait]
 impl TrackerConnection for HttpConnection {
-    async fn announce(&mut self) -> Result<Vec<SocketAddr>> {
+    async fn announce(&mut self, connected_addr: &mut Arc<SocketAddr>) -> Result<Vec<SocketAddr>> {
         let query = AnnounceQuery::from(self.data.metadata.as_ref());
-        let response = http_client::get(&self.data.url, query, self.addr.as_ref()).await?;
-
-        let peers = get_peers_addrs(&response);
-
-        Ok(peers)
+        let mut last_err = None;
+        for addr in &self.addr {
+            let response = match http_client::get(&self.data.url, &query, addr).await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    last_err = Some(e);
+                    continue;
+                }
+            };
+            *connected_addr = addr.clone();
+            let peers = get_peers_addrs(&response);
+            return Ok(peers);
+        }
+        match last_err {
+            Some(e) => Err(e.into()),
+            _ => Err(TorrentError::Unresponsive)
+        }
     }
 
     async fn scrape(&mut self) -> Result<()> {
@@ -285,17 +321,17 @@ impl TrackerConnection for HttpConnection {
 impl UdpConnection {
     fn new(
         data: Arc<TrackerData>,
-        addr: Arc<SocketAddr>
+        addrs: Vec<Arc<SocketAddr>>
     ) -> Box<dyn TrackerConnection + Send + Sync>
     {
-        Box::new(Self { data, addr, state: None, buffer: smallvec![0; 16] })
+        Box::new(Self { data, addrs, state: None, buffer: smallvec![0; 16], current_addr: 0, all_addrs_tried: false })
     }
 }
 
 impl HttpConnection {
     fn new(
         data: Arc<TrackerData>,
-        addr: Arc<SocketAddr>,
+        addr: Vec<Arc<SocketAddr>>,
     ) -> Box<dyn TrackerConnection + Send + Sync>
     {
         Box::new(Self { data, addr })
@@ -311,59 +347,71 @@ enum TrackerMessage {
 struct ATracker {
     data: Arc<TrackerData>,
     /// All addresses the host were resolved to
+    /// When we're connected to an address, it is moved to the first position
+    /// so later requests will use this address first.
     addrs: Vec<Arc<SocketAddr>>,
-    /// Last address we were connected to
-    /// It's one of `addrs`
-    last_addr: Option<Arc<SocketAddr>>,
     tracker_supervisor: Sender<TrackerMessage>,
 }
 
 impl ATracker {
     fn new(data: Arc<TrackerData>, tracker_supervisor: Sender<TrackerMessage>) -> ATracker {
-        ATracker { data, addrs: Vec::new(), last_addr: None, tracker_supervisor }
+        ATracker { data, addrs: Vec::new(), tracker_supervisor }
+    }
+
+    fn set_connected_addr(&mut self, addr: Arc<SocketAddr>) {
+        match self.addrs.iter().position(|a| a == &addr) {
+            Some(pos) if pos != 0 => {
+                // Put the address we were connected to in first position
+                // So later requests will use this address first
+                self.addrs.swap(0, pos);
+            }
+            _ => {}
+        }
+    }
+
+    async fn connect_and_request(&mut self) -> Result<Vec<SocketAddr>> {
+        let data = Arc::clone(&self.data);
+        let mut connection = Self::new_connection(data, self.addrs.clone());
+
+        let mut addr = self.addrs.first().unwrap().clone();
+
+        match connection.announce(&mut addr).await {
+            Ok(addrs) if !addrs.is_empty() => {
+                self.set_connected_addr(addr);
+                Ok(addrs)
+            },
+            Ok(empty) => Ok(empty),
+            Err(e) => {
+                println!("ANNOUNCE FAILED {:?}", e);
+                Err(e)
+            }
+        }
     }
 
     async fn resolve_and_start(&mut self) {
         use TrackerMessage::*;
 
         self.addrs = self.resolve_host().await;
-        let addrs = self.addrs.as_slice();
 
-        if addrs.is_empty() {
+        println!("RESOLVED ADDRS {:?}", self.addrs);
+
+        if self.addrs.is_empty() {
             self.send_to_supervisor(HostUnresolved).await;
             return;
         }
 
-        let mut last_error = None;
-
-        for addr in addrs {
-            let data = Arc::clone(&self.data);
-            let mut connection = Self::new_connection(data, Arc::clone(addr));
-
-            println!("CONNECTING TO {:?} {:?}", self.data.url, addr);
-            let peer_addrs = match connection.announce().await {
-                Ok(addrs) if !addrs.is_empty() => addrs,
-                Ok(_) => continue,
-                Err(e) => {
-                    println!("ANNOUNCE FAILED {:?}", e);
-                    last_error = Some(e);
-                    continue;
-                }
-            };
-
-            println!("PEERS FOUND ! {:?}\nLENGTH = {:?}", peer_addrs, peer_addrs.len());
-
-            self.send_to_supervisor(Found).await;
-            self.send_addrs(peer_addrs).await;
-            self.last_addr = Some(Arc::clone(addr));
-
-            return;
-        }
-
-        if let Some(e) = last_error {
-            self.send_to_supervisor(ErrorOccured(e)).await;
-        } else {
-            self.send_to_supervisor(HostUnresolved).await;
+        match self.connect_and_request().await {
+            Ok(peer_addrs) => {
+                println!("PEERS FOUND ! {:?}\nLENGTH = {:?}", peer_addrs, peer_addrs.len());
+                self.send_to_supervisor(Found).await;
+                self.send_addrs(peer_addrs).await;
+            }
+            Err(TorrentError::Unresponsive) => {
+                self.send_to_supervisor(HostUnresolved).await;
+            }
+            Err(e) => {
+                self.send_to_supervisor(ErrorOccured(e)).await;
+            }
         }
     }
 
@@ -379,7 +427,7 @@ impl ATracker {
 
     fn new_connection(
         data: Arc<TrackerData>,
-        addr: Arc<SocketAddr>,
+        addr: Vec<Arc<SocketAddr>>,
     ) -> Box<dyn TrackerConnection + Send + Sync>
     {
         match data.url.scheme() {

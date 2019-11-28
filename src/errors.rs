@@ -9,6 +9,7 @@ pub enum TorrentError {
     Deserialization(DeserializeError),
     InvalidInput,
     Http(HttpError),
+    Unresponsive,
     IO(std::io::Error),
     IOAsync(async_std::io::Error)
 }
