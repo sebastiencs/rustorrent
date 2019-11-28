@@ -38,6 +38,7 @@ pub struct UdpConnection {
     pub state: Option<UdpState>,
     /// 16 bytes is just enough to send/receive Connect
     /// We allocate more after this request
+    /// This avoid to allocate when the tracker is unreachable
     buffer: SmallVec<[u8; 16]>,
 }
 
@@ -92,16 +93,18 @@ impl UdpConnection {
 
         socket.connect(self.addr.as_ref()).await?;
 
-        let transaction_id = rand::random();
-
-        self.write_to_buffer(ConnectRequest::new(transaction_id).into());
-
         let mut tried = 0;
+
+        let rng = rand::thread_rng();
 
         // We don't use Self::get_response here because it would make a
         // recursion
         // https://rust-lang.github.io/async-book/07_workarounds/05_recursion.html
         loop {
+            let transaction_id = rng.gen();
+
+            self.write_to_buffer(ConnectRequest::new(transaction_id).into());
+
             socket.send(&self.buffer[..16]).await?;
 
             let timeout = Duration::from_secs(15 * 2u64.pow(tried));
@@ -468,84 +471,6 @@ impl Tracker {
             }
         }
     }
-
-    // async fn request_trackers(&self) -> bool {
-    //     for url in &self.urls {
-    //         println!("== URL => {:?}", url);
-    //         match url.scheme() {
-    //             "http" => {
-    //                 println!("== GOING HTTP");
-    //                 match self.announce(&self.metadata, url) {
-    //                     Ok(addrs) => {
-    //                         self.supervisor.send(TorrentNotification::PeerDiscovered {
-    //                             addrs
-    //                         }).await;
-    //                         return true;
-    //                     }
-    //                     Err(e) => {
-    //                         eprintln!("HTTP ERROR {:?}", e);
-    //                     }
-    //                 }
-    //             }
-    //             "udp" => {
-    //                 let mut buffer = Vec::with_capacity(16 * 1024);
-    //                 write_message(ConnectRequest {
-    //                     protocol_id: 0x41727101980,
-    //                     action: Action::Connect,
-    //                     transaction_id: 0x4242
-    //                 }.into(), &mut buffer);
-
-    //                 println!("UDP TRYING {:?}", url);
-
-    //                 use std::net::UdpSocket;
-
-    //                 let socket = UdpSocket::bind("0.0.0.0:6888").expect("couldn't bind to address");
-
-    //                 let sockaddr = (
-    //                     url.host_str().unwrap(),
-    //                     url.port().unwrap_or(80)
-    //                 ).to_socket_addrs().unwrap();//.collect::<Vec<_>>();
-
-    //                 println!("SOCKADDR={:?}", sockaddr);
-
-    //                 socket.connect((
-    //                     url.host_str().unwrap(),
-    //                     url.port().unwrap_or(80)
-    //                 )).expect("connect function failed");
-
-    //                 println!("CONNECT DONE", );
-
-    //                 socket.send(&buffer).unwrap();
-
-    //                 println!("BUFFER SENT", );
-
-    //                 socket.set_read_timeout(Some(std::time::Duration::from_secs(5))).expect("set_read_timeout call failed");
-
-    //                 match socket.recv(&mut buffer) {
-    //                     Ok(read) => {
-    //                         let buf = &buffer[..read];
-    //                         let resp = read_response(buf);
-    //                         println!("RESPONSE {:?}", resp);
-    //                     }
-    //                     Err(e) => {
-    //                         println!("ERROR UDP {:?}", e);
-    //                     }
-    //                 }
-    //             }
-    //             _ => {}
-    //         }
-    //     }
-    //     false
-    // }
-
-    // pub fn announce(&self, torrent: &Torrent, url: &Url) -> Result<Vec<SocketAddr>> {
-    //     let query = AnnounceQuery::from(torrent);
-    //     let response = http_client::get(url, query)?;
-
-    //     let peers = get_peers_addrs(&response);
-
-    //     Ok(peers)
-    // }
 }
 
 impl Drop for Tracker {
