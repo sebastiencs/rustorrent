@@ -1,26 +1,262 @@
+use std::io::Cursor;
+use std::convert::TryFrom;
+use std::io::Write;
+use std::convert::TryInto;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use url::Url;
 use async_std::sync::{Sender, Receiver, channel};
 use async_std::{task, future};
 use async_std::net::{SocketAddr, ToSocketAddrs};
 use async_trait::async_trait;
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use std::convert::{TryFrom, TryInto};
-use std::io::Write;
-
-use crate::metadata::Torrent;
-use crate::supervisors::torrent::{Result, TorrentNotification};
-use crate::http_client::{self, AnnounceQuery, AnnounceResponse};
-use crate::session::get_peers_addrs;
-use crate::actors::tracker_udp::{Action, ConnectRequest, ConnectResponse, AnnounceRequest, ScrapeRequest, ScrapeResponse};
+use crate::supervisors::torrent::Result;
 use crate::errors::TorrentError;
+use super::{TrackerData, TrackerConnection};
 
-#[async_trait]
-trait TrackerConnection {
-    async fn announce(&mut self, connected_addr: &mut usize) -> Result<Vec<SocketAddr>>;
-    async fn scrape(&mut self) -> Result<()>;
+#[derive(Debug)]
+pub enum Action {
+    Connect,
+    Announce,
+    Scrape,
+    Error
+}
+
+impl TryFrom<u32> for Action {
+    type Error = TorrentError;
+
+    fn try_from(n :u32) -> Result<Action> {
+        match n {
+            0 => Ok(Action::Connect),
+            1 => Ok(Action::Announce),
+            2 => Ok(Action::Scrape),
+            3 => Ok(Action::Error),
+            _ => Err(TorrentError::InvalidInput)
+        }
+    }
+}
+
+impl Into<u32> for &Action {
+    fn into(self) -> u32 {
+        match self {
+            Action::Connect => 0,
+            Action::Announce => 1,
+            Action::Scrape => 2,
+            Action::Error => 3,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ConnectRequest {
+    pub protocol_id: u64,
+    pub action: Action,
+    pub transaction_id: u32
+}
+
+impl ConnectRequest {
+    pub fn new(transaction_id: u32) -> ConnectRequest {
+        ConnectRequest {
+            transaction_id,
+            protocol_id: 0x41727101980,
+            action: Action::Connect,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ConnectResponse {
+    pub action: Action,
+    pub transaction_id: u32,
+    pub connection_id: u64,
+}
+
+#[derive(Debug)]
+pub enum Event {
+    None,
+    Completed,
+    Started,
+    Stopped
+}
+
+impl TryFrom<u32> for Event {
+    type Error = TorrentError;
+
+    fn try_from(n :u32) -> Result<Event> {
+        match n {
+            0 => Ok(Event::None),
+            1 => Ok(Event::Completed),
+            2 => Ok(Event::Started),
+            3 => Ok(Event::Stopped),
+            _ => Err(TorrentError::InvalidInput)
+        }
+    }
+}
+
+impl Into<u32> for &Event {
+    fn into(self) -> u32 {
+        match self {
+            Event::None => 0,
+            Event::Completed => 1,
+            Event::Started => 2,
+            Event::Stopped => 3,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct AnnounceRequest {
+    pub connection_id: u64,
+    pub action: Action,
+    pub transaction_id: u32,
+    pub info_hash: Arc<Vec<u8>>,
+//    pub info_hash: [u8; 20],
+    pub peer_id: String,
+//    pub peer_id: [u8; 20],
+    pub downloaded: u64,
+    pub left: u64,
+    pub uploaded: u64,
+    pub event: Event,
+    pub ip_address: u32,
+    pub key: u32,
+    pub num_want: u32,
+    pub port: u16,
+}
+
+#[derive(Debug)]
+pub struct ScrapeRequest {
+    pub connection_id: u64,
+    pub action: Action,
+    pub transaction_id: u32,
+    pub info_hash: Arc<Vec<u8>>, // TODO: Handle more hash
+}
+
+impl<'a> From<&'a UdpConnection> for AnnounceRequest {
+    fn from(c: &'a UdpConnection) -> AnnounceRequest {
+        let metadata = &c.data.metadata;
+        let state = c.state.as_ref().unwrap();
+        AnnounceRequest {
+            connection_id: state.connection_id,
+            action: Action::Announce,
+            transaction_id: state.transaction_id,
+            info_hash: Arc::clone(&metadata.info_hash),
+            peer_id: "-RT1220sJ1Nna5rzWLd8".to_owned(),
+            downloaded: 0,
+            left: metadata.files_total_size() as u64,
+            uploaded: 0,
+            event: Event::Started,
+            ip_address: 0,
+            key: 0,
+            num_want: 100,
+            port: 6881,
+        }
+    }
+}
+
+impl<'a> From<&'a UdpConnection> for ScrapeRequest {
+    fn from(c: &'a UdpConnection) -> ScrapeRequest {
+        let metadata = &c.data.metadata;
+        let state = c.state.as_ref().unwrap();
+        ScrapeRequest {
+            connection_id: state.connection_id,
+            action: Action::Scrape,
+            transaction_id: state.transaction_id,
+            info_hash: Arc::clone(&metadata.info_hash),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct AnnounceResponse {
+    pub action: Action,
+    pub transaction_id: u32,
+    pub interval: u32,
+    pub leechers: u32,
+    pub seeders: u32,
+    pub addrs: Vec<SocketAddr>,
+}
+
+#[derive(Debug)]
+pub struct ScrapeResponse {
+    pub action: Action,
+    pub transaction_id: u32,
+    // TODO: Handle more torrent
+    pub complete: u32,
+    pub downloaded: u32,
+    pub incomplete: u32,
+}
+
+#[derive(Debug)]
+pub enum TrackerMessage {
+    ConnectReq(ConnectRequest),
+    ConnectResp(ConnectResponse),
+    AnnounceReq(AnnounceRequest),
+    AnnounceResp(AnnounceResponse),
+    ScrapeReq(ScrapeRequest),
+    ScrapeResp(ScrapeResponse),
+}
+
+impl TryFrom<TrackerMessage> for ConnectResponse {
+    type Error = TorrentError;
+    fn try_from(msg: TrackerMessage) -> Result<ConnectResponse> {
+        match msg {
+            TrackerMessage::ConnectResp(res) => Ok(res),
+            _ => Err(TorrentError::InvalidInput)
+        }
+    }
+}
+
+impl TryFrom<TrackerMessage> for ScrapeResponse {
+    type Error = TorrentError;
+    fn try_from(msg: TrackerMessage) -> Result<ScrapeResponse> {
+        match msg {
+            TrackerMessage::ScrapeResp(res) => Ok(res),
+            _ => Err(TorrentError::InvalidInput)
+        }
+    }
+}
+
+impl TryFrom<TrackerMessage> for AnnounceResponse {
+    type Error = TorrentError;
+    fn try_from(msg: TrackerMessage) -> Result<AnnounceResponse> {
+        match msg {
+            TrackerMessage::AnnounceResp(res) => Ok(res),
+            _ => Err(TorrentError::InvalidInput)
+        }
+    }
+}
+
+impl From<ConnectRequest> for TrackerMessage {
+    fn from(r: ConnectRequest) -> TrackerMessage {
+        TrackerMessage::ConnectReq(r)
+    }
+}
+impl From<ConnectResponse> for TrackerMessage {
+    fn from(r: ConnectResponse) -> TrackerMessage {
+        TrackerMessage::ConnectResp(r)
+    }
+}
+impl From<AnnounceRequest> for TrackerMessage {
+    fn from(r: AnnounceRequest) -> TrackerMessage {
+        TrackerMessage::AnnounceReq(r)
+    }
+}
+impl From<AnnounceResponse> for TrackerMessage {
+    fn from(r: AnnounceResponse) -> TrackerMessage {
+        TrackerMessage::AnnounceResp(r)
+    }
+}
+impl From<ScrapeRequest> for TrackerMessage {
+    fn from(r: ScrapeRequest) -> TrackerMessage {
+        TrackerMessage::ScrapeReq(r)
+    }
+}
+impl From<ScrapeResponse> for TrackerMessage {
+    fn from(r: ScrapeResponse) -> TrackerMessage {
+        TrackerMessage::ScrapeResp(r)
+    }
 }
 
 pub struct UdpState {
@@ -47,17 +283,27 @@ pub struct UdpConnection {
     all_addrs_tried: bool,
 }
 
-struct HttpConnection {
-    data: Arc<TrackerData>,
-    addr: Vec<Arc<SocketAddr>>,
-}
-
 use async_std::net::UdpSocket;
 use rand::prelude::*;
 use crate::udp_ext::WithTimeout;
 use async_std::io::ErrorKind;
 
 impl UdpConnection {
+    pub fn new(
+        data: Arc<TrackerData>,
+        addrs: Vec<Arc<SocketAddr>>
+    ) -> Box<dyn TrackerConnection + Send + Sync>
+    {
+        Box::new(Self {
+            data,
+            addrs,
+            state: None,
+            buffer: smallvec![0; 16],
+            current_addr: 0,
+            all_addrs_tried: false
+        })
+    }
+
     fn next_addr(&mut self) -> &Arc<SocketAddr> {
         if (self.current_addr >= self.addrs.len()) {
             self.all_addrs_tried = true;
@@ -74,7 +320,7 @@ impl UdpConnection {
 
     async fn get_response<T>(&mut self, send_size: usize) -> Result<T>
     where
-        T: TryFrom<super::tracker_udp::TrackerMessage, Error = TorrentError>
+        T: TryFrom<TrackerMessage, Error = TorrentError>
     {
         let mut attempts = 0;
 
@@ -157,10 +403,10 @@ impl UdpConnection {
         }
     }
 
-    pub fn write_to_buffer(&mut self, msg: super::tracker_udp::TrackerMessage) -> usize {
+    pub fn write_to_buffer(&mut self, msg: TrackerMessage) -> usize {
         use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
         use std::io::Cursor;
-        use super::tracker_udp::TrackerMessage;
+        use TrackerMessage;
 
         let mut buffer = &mut self.buffer;;
 
@@ -199,8 +445,8 @@ impl UdpConnection {
         }
     }
 
-    pub fn read_response(&self, buffer: &[u8]) -> Result<super::tracker_udp::TrackerMessage> {
-        use super::tracker_udp::{TrackerMessage, AnnounceResponse};
+    pub fn read_response(&self, buffer: &[u8]) -> Result<TrackerMessage> {
+        use {TrackerMessage, AnnounceResponse};
         use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
         use std::io::Cursor;
 
@@ -268,7 +514,7 @@ impl TrackerConnection for UdpConnection {
         let req = AnnounceRequest::from(&*self).into();
         let n = self.write_to_buffer(req);
 
-        let resp: super::tracker_udp::AnnounceResponse = self.get_response(n).await?;
+        let resp: AnnounceResponse = self.get_response(n).await?;
 
         *addr = self.current_addr;
 
@@ -287,246 +533,5 @@ impl TrackerConnection for UdpConnection {
         let resp: ScrapeResponse = self.get_response(n).await?;
 
         Ok(())
-    }
-}
-
-#[async_trait]
-impl TrackerConnection for HttpConnection {
-    async fn announce(&mut self, connected_addr: &mut usize) -> Result<Vec<SocketAddr>> {
-        let query = AnnounceQuery::from(self.data.metadata.as_ref());
-        let mut last_err = None;
-        for (index, addr) in self.addr.iter().enumerate() {
-            let response = match http_client::get(&self.data.url, &query, addr).await {
-                Ok(resp) => resp,
-                Err(e) => {
-                    last_err = Some(e);
-                    continue;
-                }
-            };
-            *connected_addr = index;
-            let peers = get_peers_addrs(&response);
-            return Ok(peers);
-        }
-        match last_err {
-            Some(e) => Err(e.into()),
-            _ => Err(TorrentError::Unresponsive)
-        }
-    }
-
-    async fn scrape(&mut self) -> Result<()> {
-        Ok(())
-    }
-}
-
-impl UdpConnection {
-    fn new(
-        data: Arc<TrackerData>,
-        addrs: Vec<Arc<SocketAddr>>
-    ) -> Box<dyn TrackerConnection + Send + Sync>
-    {
-        Box::new(Self { data, addrs, state: None, buffer: smallvec![0; 16], current_addr: 0, all_addrs_tried: false })
-    }
-}
-
-impl HttpConnection {
-    fn new(
-        data: Arc<TrackerData>,
-        addr: Vec<Arc<SocketAddr>>,
-    ) -> Box<dyn TrackerConnection + Send + Sync>
-    {
-        Box::new(Self { data, addr })
-    }
-}
-
-enum TrackerMessage {
-    Found,
-    HostUnresolved,
-    ErrorOccured(TorrentError)
-}
-
-struct ATracker {
-    data: Arc<TrackerData>,
-    /// All addresses the host were resolved to
-    /// When we're connected to an address, it is moved to the first position
-    /// so later requests will use this address first.
-    addrs: Vec<Arc<SocketAddr>>,
-    tracker_supervisor: Sender<TrackerMessage>,
-}
-
-impl ATracker {
-    fn new(data: Arc<TrackerData>, tracker_supervisor: Sender<TrackerMessage>) -> ATracker {
-        ATracker { data, addrs: Vec::new(), tracker_supervisor }
-    }
-
-    fn set_connected_addr(&mut self, index: usize) {
-        if index != 0 {
-            self.addrs.swap(0, index);
-        }
-    }
-
-    async fn connect_and_request(&mut self) -> Result<Vec<SocketAddr>> {
-        let data = Arc::clone(&self.data);
-        let mut connection = Self::new_connection(data, self.addrs.clone());
-
-        let mut connected_index = 0;
-
-        match connection.announce(&mut connected_index).await {
-            Ok(addrs) if !addrs.is_empty() => {
-                self.set_connected_addr(connected_index);
-                Ok(addrs)
-            },
-            Ok(empty) => Ok(empty),
-            Err(e) => {
-                println!("ANNOUNCE FAILED {:?}", e);
-                Err(e)
-            }
-        }
-    }
-
-    async fn start(&mut self) {
-        loop {
-            self.resolve_and_start().await;
-
-            // TODO: Use interval from announce response
-            task::sleep(Duration::from_secs(120)).await;
-        }
-    }
-
-    async fn resolve_and_start(&mut self) {
-        use TrackerMessage::*;
-
-        self.addrs = self.resolve_host().await;
-
-        println!("RESOLVED ADDRS {:?}", self.addrs);
-
-        if self.addrs.is_empty() {
-            self.send_to_supervisor(HostUnresolved).await;
-            return;
-        }
-
-        match self.connect_and_request().await {
-            Ok(peer_addrs) => {
-                println!("PEERS FOUND ! {:?}\nLENGTH = {:?}", peer_addrs, peer_addrs.len());
-                self.send_to_supervisor(Found).await;
-                self.send_addrs(peer_addrs).await;
-            }
-            Err(TorrentError::Unresponsive) => {
-                self.send_to_supervisor(HostUnresolved).await;
-            }
-            Err(e) => {
-                self.send_to_supervisor(ErrorOccured(e)).await;
-            }
-        }
-    }
-
-    async fn send_to_supervisor(&self, msg: TrackerMessage) {
-        self.tracker_supervisor.send(msg).await;
-    }
-
-    async fn send_addrs(&self, addrs: Vec<SocketAddr>) {
-        use TorrentNotification::PeerDiscovered;
-
-        self.data.supervisor.send(PeerDiscovered { addrs }).await;
-    }
-
-    fn new_connection(
-        data: Arc<TrackerData>,
-        addr: Vec<Arc<SocketAddr>>,
-    ) -> Box<dyn TrackerConnection + Send + Sync>
-    {
-        match data.url.scheme() {
-            "http" => HttpConnection::new(data, addr),
-            "udp" => UdpConnection::new(data, addr),
-            _ => panic!("scheme was already checked")
-        }
-    }
-
-    async fn resolve_host(&mut self) -> Vec<Arc<SocketAddr>> {
-        let host = self.data.url.host_str().unwrap();
-        let port = self.data.url.port().unwrap_or(80);
-
-        (host, port).to_socket_addrs()
-                    .await
-                    .map(|a| a.map(Arc::new).collect())
-                    .unwrap_or_else(|_| Vec::new())
-    }
-}
-
-impl Drop for ATracker {
-    fn drop(&mut self) {
-        println!("ATRACKER DROPPED !", );
-    }
-}
-
-pub struct TrackerData {
-    pub metadata: Arc<Torrent>,
-    pub supervisor: Sender<TorrentNotification>,
-    pub url: Arc<Url>
-}
-
-impl From<(&Tracker, &Arc<Url>)> for TrackerData {
-    fn from((tracker, url): (&Tracker, &Arc<Url>)) -> TrackerData {
-        TrackerData {
-            metadata: Arc::clone(&tracker.metadata),
-            supervisor: tracker.supervisor.clone(),
-            url: Arc::clone(url),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct Tracker {
-    metadata: Arc<Torrent>,
-    supervisor: Sender<TorrentNotification>,
-    urls: Vec<Vec<Arc<Url>>>,
-    recv: Receiver<TrackerMessage>,
-    _sender: Sender<TrackerMessage>,
-}
-
-impl Tracker {
-    pub fn new(
-        supervisor: Sender<TorrentNotification>,
-        metadata: Arc<Torrent>
-    ) -> Tracker
-    {
-        let urls = metadata.get_urls_tiers();
-        let (_sender, recv) = channel(10);
-        Tracker { supervisor, metadata, urls, recv, _sender }
-    }
-
-    fn is_scheme_supported(url: &&Arc<Url>) -> bool {
-        match url.scheme() {
-            "http" | "udp" => true,
-            _ => false
-        }
-    }
-
-    pub async fn start(self) {
-        use TrackerMessage::*;
-
-        for tier in self.urls.as_slice() {
-
-            for url in tier.iter().filter(Self::is_scheme_supported) {
-
-                let data = Arc::new(TrackerData::from((&self, url)));
-                let sender = self._sender.clone();
-
-                task::spawn(async move {
-                    ATracker::new(data, sender).start().await
-                });
-
-                let duration = Duration::from_secs(15);
-                match future::timeout(duration, self.recv.recv()).await {
-                    Ok(Some(Found)) => return,
-                    _ => {}// TODO: Handle other cases
-                }
-            }
-        }
-    }
-}
-
-impl Drop for Tracker {
-    fn drop(&mut self) {
-        println!("TRACKER DROPPED !", );
     }
 }

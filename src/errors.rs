@@ -2,7 +2,7 @@
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
 use crate::de::DeserializeError;
-use crate::http_client::HttpError;
+use crate::actors::tracker::http::HttpError;
 
 #[derive(Debug)]
 pub enum TorrentError {

@@ -1,26 +1,67 @@
-use std::io::prelude::*;
+use async_std::sync::{Sender, Receiver, channel};
+use async_std::net::{SocketAddr, ToSocketAddrs, TcpStream};
+use async_trait::async_trait;
+
+use std::sync::Arc;
+//use std::io::prelude::*;
+//use std::io::Cursor;
+
+use crate::metadata::Torrent;
+use crate::supervisors::torrent::Result as TResult;
+//use crate::http_client::{self, AnnounceQuery};
+//use crate::session::get_peers_addrs;
+use crate::errors::TorrentError;
+
+use super::{TrackerConnection, TrackerData};
+
 //use std::net::TcpStream;
-use async_std::net::{SocketAddr, TcpStream};
+// use async_std::net::{SocketAddr, TcpStream};
 use async_std::prelude::*;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-// // http://www.ietf.org/rfc/rfc2396.txt
-// // section 2.3
-// static char const unreserved_chars[] =
-// // when determining if a url needs encoding
-// // % should be ok
-// 	"%+"
-// // reserved
-// 	";?:@=&,$/"
-// // unreserved (special characters) ' excluded,
-// // since some buggy trackers fail with those
-// 	"-_!.~*()"
-// // unreserved (alphanumerics)
-// 	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-// 	"0123456789";
+pub async fn peers_from_dict(peers: &[Peer], addrs: &mut Vec<SocketAddr>) {
+    for peer in peers {
+        if let Ok(s_addrs) = (peer.ip.as_str(), peer.port).to_socket_addrs().await {
+            for addr in s_addrs {
+                addrs.push(addr);
+            }
+        }
+    }
+}
+
+pub async fn get_peers_addrs(response: &AnnounceResponse) -> Vec<SocketAddr> {
+    let mut addrs = Vec::new();
+
+    match response.peers6 {
+        Some(Peers6::Binary(ref bin)) => {
+            addrs.reserve(bin.len() / 18);
+            crate::utils::ipv6_from_slice(bin, &mut addrs);
+        }
+        Some(Peers6::Dict(ref peers)) => {
+            addrs.reserve(peers.len());
+            peers_from_dict(peers, &mut addrs).await;
+        }
+        None => {}
+    }
+
+    match response.peers {
+        Some(Peers::Binary(ref bin)) => {
+            addrs.reserve(bin.len() / 6);
+            crate::utils::ipv4_from_slice(bin, &mut addrs);
+        }
+        Some(Peers::Dict(ref peers)) => {
+            addrs.reserve(peers.len());
+            peers_from_dict(peers, &mut addrs).await;
+        }
+        None => {}
+    }
+
+    println!("ADDRS: {:#?}", addrs);
+    addrs
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct AnnounceQuery<'a> {
@@ -33,8 +74,6 @@ pub struct AnnounceQuery<'a> {
     pub event: String,
     pub compact: i64
 }
-
-use crate::metadata::Torrent;
 
 impl<'a> From<&'a Torrent> for AnnounceQuery<'a> {
     fn from(torrent: &'a Torrent) -> AnnounceQuery {
@@ -167,8 +206,6 @@ pub fn escape_str<T: AsRef<[u8]>>(s: T) -> String {
         }
     }
 
-    println!("RESULT: {:?}", String::from_utf8(result.clone()));
-
     String::from_utf8(result).unwrap()
 }
 
@@ -193,8 +230,7 @@ fn format_request<T: ToQuery>(url: &Url, query: &T) -> String {
 }
 
 use std::time::Duration;
-use std::net::ToSocketAddrs;
-use std::convert::TryInto;
+//use std::convert::TryInto;
 use crate::utils::ConnectTimeout;
 
 async fn send<T: DeserializeOwned, Q: ToQuery>(url: &Url, query: &Q, addr: &SocketAddr) -> Result<T> {
@@ -265,7 +301,7 @@ async fn read_response(stream: TcpStream) -> Result<Vec<u8>> {
     Ok(buffer)
 }
 
-pub async fn get<R, Q>(url: &Url, query: &Q, addr: &SocketAddr) -> Result<R>
+pub async fn http_get<R, Q>(url: &Url, query: &Q, addr: &SocketAddr) -> Result<R>
 where
     Q: ToQuery,
     R: DeserializeOwned
@@ -273,4 +309,47 @@ where
     println!("URL: {:?} {:?} {:?} {:?}", url, url.host(), url.port(), url.scheme());
 
     send(url, query, addr).await
+}
+
+pub struct HttpConnection {
+    data: Arc<TrackerData>,
+    addr: Vec<Arc<SocketAddr>>,
+}
+
+#[async_trait]
+impl TrackerConnection for HttpConnection {
+    async fn announce(&mut self, connected_addr: &mut usize) -> TResult<Vec<SocketAddr>> {
+        let query = AnnounceQuery::from(self.data.metadata.as_ref());
+        let mut last_err = None;
+        for (index, addr) in self.addr.iter().enumerate() {
+            let response = match http_get(&self.data.url, &query, addr).await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    last_err = Some(e);
+                    continue;
+                }
+            };
+            *connected_addr = index;
+            let peers = get_peers_addrs(&response).await;
+            return Ok(peers);
+        }
+        match last_err {
+            Some(e) => Err(e.into()),
+            _ => Err(TorrentError::Unresponsive)
+        }
+    }
+
+    async fn scrape(&mut self) -> TResult<()> {
+        Ok(())
+    }
+}
+
+impl HttpConnection {
+    pub fn new(
+        data: Arc<TrackerData>,
+        addr: Vec<Arc<SocketAddr>>,
+    ) -> Box<dyn TrackerConnection + Send + Sync>
+    {
+        Box::new(Self { data, addr })
+    }
 }

@@ -3,7 +3,6 @@ use serde::{Serialize, Deserialize};
 use async_std::task;
 
 mod de;
-mod http_client;
 mod metadata;
 mod session;
 mod bitfield;
