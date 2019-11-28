@@ -598,6 +598,7 @@ dependencies = [
 name = "rustorrent"
 version = "0.1.0"
 dependencies = [
+ "ahash 0.2.18 (registry+https://github.com/rust-lang/crates.io-index)",
  "async-std 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "async-trait 0.1.18 (registry+https://github.com/rust-lang/crates.io-index)",
  "byteorder 1.3.2 (registry+https://github.com/rust-lang/crates.io-index)",

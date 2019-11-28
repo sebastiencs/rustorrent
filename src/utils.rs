@@ -1,4 +1,15 @@
 
+use async_std::net::SocketAddr;
+use async_std::net::TcpStream;
+use async_trait::async_trait;
+use async_std::io;
+use byteorder::{BigEndian, ReadBytesExt};
+
+use std::time::Duration;
+use std::io::Cursor;
+use std::net::{SocketAddrV4, SocketAddrV6, Ipv4Addr, Ipv6Addr};
+use std::convert::TryInto;
+
 pub trait FromSlice<T> {
     fn from_slice(slice: &[T]) -> Vec<T>;
 }
@@ -27,8 +38,14 @@ impl std::hash::Hasher for NoHash {
     fn finish(&self) -> u64 {
         self.0 as u64
     }
-    fn write(&mut self, _: &[u8]) {
-        unreachable!()
+    fn write(&mut self, slice: &[u8]) {
+        self.0 = match slice.len() {
+            8 => u64::from_ne_bytes(slice.try_into().unwrap()) as usize,
+            4 => u32::from_ne_bytes(slice.try_into().unwrap()) as usize,
+            2 => u16::from_ne_bytes(slice.try_into().unwrap()) as usize,
+            1 => u8::from_ne_bytes(slice.try_into().unwrap()) as usize,
+            _ => unreachable!()
+        };
     }
     fn write_usize(&mut self, n: usize) {
         self.0 = n
@@ -36,11 +53,6 @@ impl std::hash::Hasher for NoHash {
 }
 
 pub type Map<K, V> = std::collections::HashMap<K, V, NoHash>;
-
-use async_std::net::SocketAddr;
-use byteorder::{BigEndian, ReadBytesExt};
-use std::io::Cursor;
-use std::net::{SocketAddrV4, SocketAddrV6, Ipv4Addr, Ipv6Addr};
 
 pub fn ipv4_from_slice(slice: &[u8], output: &mut Vec<SocketAddr>) {
     for chunk in slice.chunks_exact(6) {
@@ -62,11 +74,6 @@ pub fn ipv6_from_slice(slice: &[u8], output: &mut Vec<SocketAddr>) {
         output.push(SocketAddrV6::new(Ipv6Addr::from(addr), port, 0, 0).into());
     }
 }
-
-use async_std::net::{TcpStream, ToSocketAddrs};
-use std::time::Duration;
-use async_trait::async_trait;
-use async_std::io::{self, Result};
 
 #[async_trait]
 pub trait ConnectTimeout {

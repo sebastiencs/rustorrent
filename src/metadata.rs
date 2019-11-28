@@ -2,8 +2,10 @@ use serde::{Serialize, Deserialize};
 use smallvec::SmallVec;
 use url::Url;
 
+use std::hash::{Hash, Hasher};
 use std::iter::Iterator;
 use std::sync::Arc;
+use std::ops::Deref;
 
 type StackVec<T> = SmallVec<[T; 16]>;
 
@@ -150,8 +152,41 @@ impl<'a> Iterator for UrlIterator<'a> {
     }
 }
 
+#[derive(Debug)]
+pub struct TrackerUrl {
+    url: Url,
+    hash: UrlHash
+}
+
+impl Deref for TrackerUrl {
+    type Target = Url;
+
+    fn deref(&self) -> &Url {
+        &self.url
+    }
+}
+
+#[derive(Debug, Copy, PartialEq, Eq, Hash, Clone)]
+pub struct UrlHash(u64);
+
+impl TrackerUrl {
+    fn new(url: Url) -> TrackerUrl {
+        let mut hasher = ahash::AHasher::new_with_keys(12345, 4242);
+        url.hash(&mut hasher);
+        let hash = UrlHash(hasher.finish());
+
+        TrackerUrl { url, hash }
+    }
+
+    pub fn hash(&self) -> UrlHash {
+        self.hash
+    }
+}
+
+use crate::supervisors::tracker::TrackerSupervisor;
+
 impl Torrent {
-    pub fn get_urls_tiers(&self) -> Vec<Vec<Arc<Url>>> {
+    pub fn get_urls_tiers(&self) -> Vec<Vec<Arc<TrackerUrl>>> {
         let mut found = false;
 
         if let Some(list) = &self.meta.announce_list {
@@ -163,7 +198,9 @@ impl Torrent {
                 for url_str in tier {
                     if let Ok(url) = url_str.parse() {
                         found = true;
-                        tier_vec.push(Arc::new(url));
+                        if TrackerSupervisor::is_scheme_supported(&url) {
+                            tier_vec.push(Arc::new(TrackerUrl::new(url)));
+                        }
                     };
                 }
 
@@ -176,7 +213,7 @@ impl Torrent {
         }
 
         match self.meta.announce.parse() {
-            Ok(url) => vec![vec![Arc::new(url)]],
+            Ok(url) => vec![vec![Arc::new(TrackerUrl::new(url))]],
             _ => vec![]
         }
     }

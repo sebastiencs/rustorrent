@@ -13,6 +13,7 @@ use std::time::Duration;
 use crate::supervisors::torrent::{Result, TorrentNotification};
 use crate::errors::TorrentError;
 use crate::supervisors::tracker::{TrackerData, TrackerMessage};
+use crate::metadata::UrlHash;
 
 #[async_trait]
 trait TrackerConnection {
@@ -26,11 +27,11 @@ pub struct Tracker {
     /// When we're connected to an address, it is moved to the first position
     /// so later requests will use this address first.
     addrs: Vec<Arc<SocketAddr>>,
-    tracker_supervisor: Sender<TrackerMessage>,
+    tracker_supervisor: Sender<(UrlHash, TrackerMessage)>,
 }
 
 impl Tracker {
-    pub fn new(data: Arc<TrackerData>, tracker_supervisor: Sender<TrackerMessage>) -> Tracker {
+    pub fn new(data: Arc<TrackerData>, tracker_supervisor: Sender<(UrlHash, TrackerMessage)>) -> Tracker {
         Tracker { data, addrs: Vec::new(), tracker_supervisor }
     }
 
@@ -96,7 +97,7 @@ impl Tracker {
     }
 
     async fn send_to_supervisor(&self, msg: TrackerMessage) {
-        self.tracker_supervisor.send(msg).await;
+        self.tracker_supervisor.send((self.data.url.hash(), msg)).await;
     }
 
     async fn send_addrs(&self, addrs: Vec<SocketAddr>) {

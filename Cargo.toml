@@ -28,6 +28,7 @@ num_cpus = "1"
 slab = "0.4"
 async-trait = "0.1"
 rand = "0.7"
+ahash = { version = "0.2", default-features = false }
 
 futures =  { version = "0.3", default-features = false }
 #futures = "0.3"
