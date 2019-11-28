@@ -19,7 +19,7 @@ use crate::errors::TorrentError;
 
 #[async_trait]
 trait TrackerConnection {
-    async fn announce(&mut self, addr: &mut Arc<SocketAddr>) -> Result<Vec<SocketAddr>>;
+    async fn announce(&mut self, connected_addr: &mut usize) -> Result<Vec<SocketAddr>>;
     async fn scrape(&mut self) -> Result<()>;
 }
 
@@ -259,7 +259,7 @@ impl UdpConnection {
 
 #[async_trait]
 impl TrackerConnection for UdpConnection {
-    async fn announce(&mut self, addr: &mut Arc<SocketAddr>) -> Result<Vec<SocketAddr>> {
+    async fn announce(&mut self, addr: &mut usize) -> Result<Vec<SocketAddr>> {
         if self.state.is_none() {
             self.connect().await?;
             self.buffer = smallvec![0; 16 * 1024];
@@ -270,7 +270,7 @@ impl TrackerConnection for UdpConnection {
 
         let resp: super::tracker_udp::AnnounceResponse = self.get_response(n).await?;
 
-        *addr = self.current_addr().clone();
+        *addr = self.current_addr;
 
         Ok(resp.addrs)
     }
@@ -292,10 +292,10 @@ impl TrackerConnection for UdpConnection {
 
 #[async_trait]
 impl TrackerConnection for HttpConnection {
-    async fn announce(&mut self, connected_addr: &mut Arc<SocketAddr>) -> Result<Vec<SocketAddr>> {
+    async fn announce(&mut self, connected_addr: &mut usize) -> Result<Vec<SocketAddr>> {
         let query = AnnounceQuery::from(self.data.metadata.as_ref());
         let mut last_err = None;
-        for addr in &self.addr {
+        for (index, addr) in self.addr.iter().enumerate() {
             let response = match http_client::get(&self.data.url, &query, addr).await {
                 Ok(resp) => resp,
                 Err(e) => {
@@ -303,7 +303,7 @@ impl TrackerConnection for HttpConnection {
                     continue;
                 }
             };
-            *connected_addr = addr.clone();
+            *connected_addr = index;
             let peers = get_peers_addrs(&response);
             return Ok(peers);
         }
@@ -358,14 +358,9 @@ impl ATracker {
         ATracker { data, addrs: Vec::new(), tracker_supervisor }
     }
 
-    fn set_connected_addr(&mut self, addr: Arc<SocketAddr>) {
-        match self.addrs.iter().position(|a| a == &addr) {
-            Some(pos) if pos != 0 => {
-                // Put the address we were connected to in first position
-                // So later requests will use this address first
-                self.addrs.swap(0, pos);
-            }
-            _ => {}
+    fn set_connected_addr(&mut self, index: usize) {
+        if index != 0 {
+            self.addrs.swap(0, index);
         }
     }
 
@@ -373,11 +368,11 @@ impl ATracker {
         let data = Arc::clone(&self.data);
         let mut connection = Self::new_connection(data, self.addrs.clone());
 
-        let mut addr = self.addrs.first().unwrap().clone();
+        let mut connected_index = 0;
 
-        match connection.announce(&mut addr).await {
+        match connection.announce(&mut connected_index).await {
             Ok(addrs) if !addrs.is_empty() => {
-                self.set_connected_addr(addr);
+                self.set_connected_addr(connected_index);
                 Ok(addrs)
             },
             Ok(empty) => Ok(empty),
