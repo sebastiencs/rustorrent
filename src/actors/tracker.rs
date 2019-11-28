@@ -43,6 +43,7 @@ pub struct UdpConnection {
     current_addr: usize,
     /// true if we tried to connect to all [`addrs`]
     /// This avoid to give up when there are remaining addresses
+    /// even after some delay
     all_addrs_tried: bool,
 }
 
@@ -57,13 +58,12 @@ use crate::udp_ext::WithTimeout;
 use async_std::io::ErrorKind;
 
 impl UdpConnection {
-
-    fn next_addr(&mut self) -> Arc<SocketAddr> {
+    fn next_addr(&mut self) -> &Arc<SocketAddr> {
         if (self.current_addr >= self.addrs.len()) {
             self.all_addrs_tried = true;
             self.current_addr = 0;
         }
-        let addr = Arc::clone(&self.addrs[self.current_addr]);
+        let addr = &self.addrs[self.current_addr];
         self.current_addr += 1;
         addr
     }
@@ -383,6 +383,15 @@ impl ATracker {
         }
     }
 
+    async fn start(&mut self) {
+        loop {
+            self.resolve_and_start().await;
+
+            // TODO: Use interval from announce response
+            task::sleep(Duration::from_secs(120)).await;
+        }
+    }
+
     async fn resolve_and_start(&mut self) {
         use TrackerMessage::*;
 
@@ -503,7 +512,7 @@ impl Tracker {
                 let sender = self._sender.clone();
 
                 task::spawn(async move {
-                    ATracker::new(data, sender).resolve_and_start().await
+                    ATracker::new(data, sender).start().await
                 });
 
                 let duration = Duration::from_secs(15);
