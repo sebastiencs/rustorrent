@@ -194,14 +194,14 @@ impl TorrentSupervisor {
                 }
                 AddPiece (piece_block) => {
                     let index = piece_block.piece_index;
-                    if let Some(sum2) = self.pieces_detail.sha1_pieces.get(index).map(Arc::clone) {
+                    if let Some(sum_metadata) = self.pieces_detail.sha1_pieces.get(index).map(Arc::clone) {
 
                         let piece_buffer = Arc::new(piece_block);
                         let addr = self.my_addr.clone();
 
                         let id = self.pending_pieces.insert(Arc::clone(&piece_buffer));
 
-                        self.sha1_workers.send(Sha1Task::CheckSum { piece_buffer, sum2, id, addr });
+                        self.sha1_workers.send(Sha1Task::CheckSum { piece_buffer, sum_metadata, id, addr });
                     }
                 }
                 ResultChecksum { id, valid } => {

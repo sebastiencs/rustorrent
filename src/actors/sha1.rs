@@ -11,14 +11,38 @@ use crate::supervisors::torrent::TorrentNotification;
 
 pub enum Sha1Task {
     CheckSum {
+        /// Piece downloaded from a peer
         piece_buffer: Arc<PieceBuffer>,
-        sum2: Arc<Vec<u8>>,
+        /// Sum in the metadata file
+        sum_metadata: Arc<Vec<u8>>,
         id: usize,
         addr: a_sync::Sender<TorrentNotification>,
     }
 }
 
 use std::thread;
+
+use packed_simd::u128x1;
+
+#[allow(clippy::cast_ptr_alignment)]
+#[inline(never)]
+pub fn compare_sum(sum1: &[u8], sum2: &[u8]) -> bool {
+    if sum1.len() == 20 && sum2.len() == 20 {
+        unsafe {
+            let first1 = u128x1::from_slice_unaligned(&*(sum1 as *const [u8] as *const [u128]));
+            let first2 = u128x1::from_slice_unaligned(&*(sum2 as *const [u8] as *const [u128]));
+
+            let sum1: *const u32 = sum1.as_ptr().offset(16) as *const u32;
+            let sum2: *const u32 = sum2.as_ptr().offset(16) as *const u32;
+
+            first1 == first2 && *sum1 == *sum2
+        }
+    }
+    else {
+        panic!("Sums have 20 bytes")
+    }
+}
+
 
 #[derive(Default, Debug)]
 struct Sha1Worker {
@@ -39,11 +63,12 @@ impl Sha1Worker {
 
     fn process(&mut self, task: Sha1Task) {
         match task {
-            Sha1Task::CheckSum { piece_buffer, sum2, id, addr } => {
+            Sha1Task::CheckSum { piece_buffer, sum_metadata, id, addr } => {
                 let sha1 = Sha1::from(piece_buffer.buf.as_slice()).digest();
                 let sha1 = sha1.bytes();
 
-                let valid = &sha1[..] == sum2.as_slice();
+                let valid = compare_sum(&sha1[..], sum_metadata.as_slice());
+//                let valid = &sha1[..] == sum_metadata.as_slice();
 
                 self.send_result(id, valid, addr);
             }
@@ -102,5 +127,79 @@ impl Sha1Workers {
         }
 
         handles
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compare_sum;
+
+    #[test]
+    fn compare_sum_simd() {
+        let vec1 = vec![5; 20];
+        let vec2 = vec1.clone();
+        assert_eq!(compare_sum(&vec1, &vec2), vec1 == vec2)
+    }
+
+    #[test]
+    fn compare_sum_simd_slice() {
+        let full = [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1];
+        assert_eq!(compare_sum(&full, &full), full == full);
+
+        let slice = [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0];
+        assert_eq!(compare_sum(&slice, &full), slice == full);
+
+        let slice = [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1];
+        assert_eq!(compare_sum(&slice, &full), slice == full);
+
+        let slice = [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0];
+        assert_eq!(compare_sum(&slice, &full), slice == full);
+
+        let slice = [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0];
+        assert_eq!(compare_sum(&full, &slice), full == slice);
+
+        // test with the 17th byte
+        let slice = [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,1,1,1];
+        assert_eq!(compare_sum(&slice, &full), slice == full);
+        assert_eq!(compare_sum(&slice, &slice), slice == slice);
+
+        // test with the 16th byte
+        let slice = [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,1,1,1,1];
+        assert_eq!(compare_sum(&slice, &full), slice == full);
+        assert_eq!(compare_sum(&slice, &slice), slice == slice);
+    }
+
+    #[test]
+    #[should_panic]
+    fn compare_sum_simd_short() {
+        let vec1 = vec![5; 19];
+        let vec2 = vec1.clone();
+        compare_sum(&vec1, &vec2);
+    }
+
+    #[test]
+    #[should_panic]
+    fn compare_sum_simd_different_size() {
+        let vec1 = vec![5; 20];
+        let mut vec2 = vec1.clone();
+        vec2.push(1);
+        compare_sum(&vec1, &vec2);
+    }
+
+    #[test]
+    #[should_panic]
+    fn compare_sum_simd_different_size2() {
+        let vec1 = vec![5; 19];
+        let mut vec2 = vec1.clone();
+        vec2.push(1);
+        compare_sum(&vec1, &vec2);
+    }
+
+    #[test]
+    #[should_panic]
+    fn compare_sum_simd_big() {
+        let vec1 = vec![5; 21];
+        let vec2 = vec1.clone();
+        compare_sum(&vec1, &vec2);
     }
 }

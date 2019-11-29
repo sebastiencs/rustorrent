@@ -2,23 +2,24 @@ use serde::{Serialize, Deserialize};
 // use smallvec::SmallVec;
 use async_std::task;
 
-mod de;
-mod metadata;
-mod session;
-mod bitfield;
-mod utils;
-mod actors;
-mod pieces;
-mod supervisors;
-mod errors;
-mod extensions;
-mod bencode;
-mod udp_ext;
+// mod de;
+// mod metadata;
+// mod session;
+// mod bitfield;
+// mod utils;
+// mod actors;
+// mod pieces;
+// mod supervisors;
+// mod errors;
+// mod extensions;
+// mod bencode;
+// mod udp_ext;
 
 // use async_std::task;
 use std::io::{self, Read};
 
-use session::Session;
+use rustorrent::session::Session;
+use rustorrent::de;
 
 //fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
 fn main() {

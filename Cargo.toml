@@ -35,3 +35,7 @@ futures =  { version = "0.3", default-features = false }
 async-std = { version = "1", features = ["unstable"] }
 # async-std = "1"
 # surf = "1.0.3"
+
+# TODO: Make it optional
+packed_simd = { version = "0.3.3" }
+#packed_simd = { version = "0.3.3", features = ["into_bits"] }
