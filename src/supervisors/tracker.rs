@@ -1,5 +1,5 @@
 use url::Url;
-use async_std::sync::{Sender, Receiver, channel, RwLock};
+use async_std::sync::{Sender, Receiver, channel};
 use async_std::{task, future};
 
 use std::sync::Arc;
@@ -11,8 +11,8 @@ use crate::errors::TorrentError;
 use crate::actors::tracker::Tracker;
 
 #[derive(Debug)]
-pub enum TrackerMessage {
-    Found,
+pub enum TrackerStatus {
+    FoundPeers(usize),
     HostUnresolved,
     ErrorOccured(TorrentError)
 }
@@ -35,15 +35,15 @@ impl From<(&TrackerSupervisor, &Arc<TrackerUrl>)> for TrackerData {
 
 #[derive(Debug)]
 pub struct TrackerState {
-    last_msg: TrackerMessage,
-    last_msg_time: Instant
+    last_status: TrackerStatus,
+    last_status_time: Instant
 }
 
-impl From<TrackerMessage> for TrackerState {
-    fn from(msg: TrackerMessage) -> TrackerState {
+impl From<(Instant, TrackerStatus)> for TrackerState {
+    fn from((instant, msg): (Instant, TrackerStatus)) -> TrackerState {
         TrackerState {
-            last_msg: msg,
-            last_msg_time: Instant::now()
+            last_status: msg,
+            last_status_time: instant
         }
     }
 }
@@ -54,12 +54,16 @@ use crate::utils::Map;
 #[derive(Debug)]
 pub struct TrackerSupervisor {
     metadata: Arc<Torrent>,
+    /// [`TorrentSupervisor`]
     supervisor: Sender<TorrentNotification>,
+    /// List of urls, by tier
     urls: Vec<Vec<Arc<TrackerUrl>>>,
-    recv: Receiver<(UrlHash, TrackerMessage)>,
-    _sender: Sender<(UrlHash, TrackerMessage)>,
-
-    tracker_states: Arc<RwLock<Map<UrlHash, TrackerState>>>,
+    recv: Receiver<(UrlHash, Instant, TrackerStatus)>,
+    /// Keep a sender to not close the channel
+    _sender: Sender<(UrlHash, Instant, TrackerStatus)>,
+    /// Urls are already hashed so we can move it everywhere just by copy
+    /// Otherwise we would have to clone an Arc<Url> in every messages etc.
+    tracker_states: Map<UrlHash, TrackerState>,
 }
 
 impl TrackerSupervisor {
@@ -87,29 +91,39 @@ impl TrackerSupervisor {
         }
     }
 
-    pub async fn start(self) {
+    pub async fn start(mut self) {
         self.loop_until_connected().await;
         self.wait_on_tracker_msg().await
     }
 
-    async fn loop_until_connected(&self) {
-        for tier in self.urls.as_slice() {
-            for url in tier.iter() {
+    async fn loop_until_connected(&mut self) {
+        let mut pending_status = Vec::with_capacity(10);
+
+        'outer: for tier in self.urls.as_slice() {
+            for url in tier.as_slice() {
                 self.spawn_tracker(url).await;
 
+                // We wait 15 secs, if we aren't connected to this tracker
+                // we spawn another actor
                 let duration = Duration::from_secs(15);
                 match future::timeout(duration, self.recv.recv()).await {
-                    Ok(Some((url, TrackerMessage::Found))) => {
-                        self.update_state(url, TrackerMessage::Found).await;
+                    Ok(Some((url, instant, TrackerStatus::FoundPeers(n)))) => {
+                        pending_status.push((url, instant, TrackerStatus::FoundPeers(n)));
                         // 1 is connected, stop the loop
-                        return;
+                        break 'outer;
                     },
-                    Ok(Some((url, msg))) => {
-                        self.update_state(url, msg).await;
+                    Ok(Some((url, instant, msg))) => {
+                        pending_status.push((url, instant, msg));
                     }
                     _ => {} // We loop on urls until connected to one
                 }
             }
+        }
+
+        // We update the state outside the loop to make the
+        // borrow checker happy
+        for (url, instant, status) in pending_status {
+            self.update_state(url, instant, status)
         }
     }
 
@@ -122,20 +136,18 @@ impl TrackerSupervisor {
         });
     }
 
-    async fn update_state(&self, url: UrlHash, msg: TrackerMessage) {
-        let msg = msg.into();
+    fn update_state(&mut self, url: UrlHash, instant: Instant, msg: TrackerStatus) {
+        let msg = (instant, msg).into();
 
         self.tracker_states
-            .write()
-            .await
             .insert(url, msg);
     }
 
-    async fn wait_on_tracker_msg(&self) {
-        while let Some((url, msg)) = self.recv.recv().await {
-            self.update_state(url, msg).await;
+    async fn wait_on_tracker_msg(&mut self) {
+        while let Some((url, instant, msg)) = self.recv.recv().await {
+            self.update_state(url, instant, msg);
 
-            if !self.is_one_connected().await {
+            if !self.is_one_active() {
                 self.try_another_tracker().await;
             }
         }
@@ -143,8 +155,7 @@ impl TrackerSupervisor {
 
     async fn try_another_tracker(&self) {
         let spawned = {
-            let states = self.tracker_states.read().await;
-            states.keys().copied().collect::<Vec<_>>()
+            self.tracker_states.keys().copied().collect::<Vec<_>>()
         };
 
         for tier in self.urls.as_slice() {
@@ -157,11 +168,14 @@ impl TrackerSupervisor {
         }
     }
 
-    async fn is_one_connected(&self) -> bool {
-        let states = self.tracker_states.read().await;
-        for state in states.values() {
-            if let TrackerMessage::Found = state.last_msg {
-                return true;
+    fn is_one_active(&self) -> bool {
+        for state in self.tracker_states.values() {
+            if let TrackerStatus::FoundPeers(n) = state.last_status {
+                // We consider the tracker active if it found at least 2
+                // peer addresses
+                if n > 1 {
+                    return true;
+                }
             }
         }
         false

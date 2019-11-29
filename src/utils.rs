@@ -52,6 +52,7 @@ impl std::hash::Hasher for NoHash {
     }
 }
 
+/// A map, without hashing
 pub type Map<K, V> = std::collections::HashMap<K, V, NoHash>;
 
 pub fn ipv4_from_slice(slice: &[u8], output: &mut Vec<SocketAddr>) {

@@ -8,11 +8,11 @@ use async_std::net::{SocketAddr, ToSocketAddrs};
 use async_trait::async_trait;
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::supervisors::torrent::{Result, TorrentNotification};
 use crate::errors::TorrentError;
-use crate::supervisors::tracker::{TrackerData, TrackerMessage};
+use crate::supervisors::tracker::{TrackerData, TrackerStatus};
 use crate::metadata::UrlHash;
 
 #[async_trait]
@@ -27,11 +27,11 @@ pub struct Tracker {
     /// When we're connected to an address, it is moved to the first position
     /// so later requests will use this address first.
     addrs: Vec<Arc<SocketAddr>>,
-    tracker_supervisor: Sender<(UrlHash, TrackerMessage)>,
+    tracker_supervisor: Sender<(UrlHash, Instant, TrackerStatus)>,
 }
 
 impl Tracker {
-    pub fn new(data: Arc<TrackerData>, tracker_supervisor: Sender<(UrlHash, TrackerMessage)>) -> Tracker {
+    pub fn new(data: Arc<TrackerData>, tracker_supervisor: Sender<(UrlHash, Instant, TrackerStatus)>) -> Tracker {
         Tracker { data, addrs: Vec::new(), tracker_supervisor }
     }
 
@@ -51,7 +51,7 @@ impl Tracker {
     }
 
     async fn resolve_and_start(&mut self) {
-        use TrackerMessage::*;
+        use TrackerStatus::*;
 
         self.addrs = self.resolve_host().await;
 
@@ -65,7 +65,6 @@ impl Tracker {
         match self.connect_and_request().await {
             Ok(peer_addrs) => {
                 println!("PEERS FOUND ! {:?}\nLENGTH = {:?}", peer_addrs, peer_addrs.len());
-                self.send_to_supervisor(Found).await;
                 self.send_addrs(peer_addrs).await;
             }
             Err(TorrentError::Unresponsive) => {
@@ -96,13 +95,15 @@ impl Tracker {
         }
     }
 
-    async fn send_to_supervisor(&self, msg: TrackerMessage) {
-        self.tracker_supervisor.send((self.data.url.hash(), msg)).await;
+    async fn send_to_supervisor(&self, msg: TrackerStatus) {
+        self.tracker_supervisor.send((self.data.url.hash(), Instant::now(), msg)).await;
     }
 
     async fn send_addrs(&self, addrs: Vec<SocketAddr>) {
         use TorrentNotification::PeerDiscovered;
+        use TrackerStatus::*;
 
+        self.send_to_supervisor(FoundPeers(addrs.len())).await;
         self.data.supervisor.send(PeerDiscovered { addrs }).await;
     }
 
