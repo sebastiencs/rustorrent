@@ -3,6 +3,7 @@ use core::arch::x86_64::{
     __m128i,
     _mm_add_epi32,
     _mm_extract_epi32,
+    _mm_load_si128,
     _mm_loadu_si128,
     _mm_set_epi64x,
     _mm_set_epi32,
@@ -12,6 +13,7 @@ use core::arch::x86_64::{
     _mm_sha1rnds4_epu32,
     _mm_shuffle_epi32,
     _mm_shuffle_epi8,
+    _mm_store_si128,
     _mm_storeu_si128,
     _mm_xor_si128,
 };
@@ -20,7 +22,7 @@ use core::arch::x86_64::{
 #[allow(non_snake_case)]
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sha,sse2,ssse3,sse4.1")]
-unsafe fn process_blocks(state: &mut [u32; 5], data: &[u8]) {
+unsafe fn process_blocks(state: &mut State, data: &[u8]) {
     let (
         mut ABCD, mut ABCD_SAVE, mut E0, mut E0_SAVE,
         mut E1, mut MSG0, mut MSG1, mut MSG2, mut MSG3
@@ -29,8 +31,8 @@ unsafe fn process_blocks(state: &mut [u32; 5], data: &[u8]) {
     let MASK = _mm_set_epi64x(0x0001_0203_0405_0607, 0x0809_0a0b_0c0d_0e0f);
 
     // Load initial values
-    ABCD = _mm_loadu_si128(state.as_ptr() as *const __m128i);
-    E0 = _mm_set_epi32(state[4] as i32, 0, 0, 0);
+    ABCD = _mm_load_si128(state.as_ptr());
+    E0 = _mm_set_epi32(state.s4 as i32, 0, 0, 0);
     ABCD = _mm_shuffle_epi32(ABCD, 0x1B);
 
     for data in data.chunks_exact(64) {
@@ -201,11 +203,11 @@ unsafe fn process_blocks(state: &mut [u32; 5], data: &[u8]) {
 
     // Save state
     ABCD = _mm_shuffle_epi32(ABCD, 0x1B);
-    _mm_storeu_si128(state.as_ptr() as *mut __m128i, ABCD);
-    state[4] = _mm_extract_epi32(E0, 3) as u32;
+    _mm_store_si128(state.as_ptr() as *mut __m128i, ABCD);
+    state.s4 = _mm_extract_epi32(E0, 3) as u32;
 }
 
-#[repr(align(16))]
+#[repr(C, align(16))]
 struct State {
     s0: u32,
     s1: u32,
@@ -230,23 +232,27 @@ impl State {
     fn as_mut_ptr(&mut self) -> *mut __m128i {
         self as *mut State as *mut __m128i
     }
+
+    fn as_ptr(&self) -> *const __m128i {
+        self as *const State as *const __m128i
+    }
 }
 
 fn compute_sha1(data: &[u8]) -> [u8; 20] {
 
-    let mut state = [
-        0x6745_2301,
-        0xEFCD_AB89,
-        0x98BA_DCFE,
-        0x1032_5476,
-        0xC3D2_E1F0
-    ];
+    // let mut state = [
+    //     0x6745_2301,
+    //     0xEFCD_AB89,
+    //     0x98BA_DCFE,
+    //     0x1032_5476,
+    //     0xC3D2_E1F0
+    // ];
 
-    let mut state2 = State::default();
+    let mut state = State::default();
 
-    println!("ALIGN: {:?}", std::mem::align_of_val(&state2));
-    println!("ALIGN DATA: {:?}", std::mem::align_of_val(data));
-    println!("DATA: {:?} ALIGN {:?}", data.as_ptr() as usize, data.as_ptr() as usize % 16);
+    // println!("ALIGN: {:?}", std::mem::align_of_val(&state2));
+    // println!("ALIGN DATA: {:?}", std::mem::align_of_val(data));
+    // println!("DATA: {:?} ALIGN {:?}", data.as_ptr() as usize, data.as_ptr() as usize % 16);
 
     let nblock = data.len() / 64;
 
@@ -282,26 +288,26 @@ fn compute_sha1(data: &[u8]) -> [u8; 20] {
     }
 
     [
-        (state[0] >> 24) as u8,
-        (state[0] >> 16) as u8,
-        (state[0] >>  8) as u8,
-        (state[0] >>  0) as u8,
-        (state[1] >> 24) as u8,
-        (state[1] >> 16) as u8,
-        (state[1] >>  8) as u8,
-        (state[1] >>  0) as u8,
-        (state[2] >> 24) as u8,
-        (state[2] >> 16) as u8,
-        (state[2] >>  8) as u8,
-        (state[2] >>  0) as u8,
-        (state[3] >> 24) as u8,
-        (state[3] >> 16) as u8,
-        (state[3] >>  8) as u8,
-        (state[3] >>  0) as u8,
-        (state[4] >> 24) as u8,
-        (state[4] >> 16) as u8,
-        (state[4] >>  8) as u8,
-        (state[4] >>  0) as u8,
+        (state.s0 >> 24) as u8,
+        (state.s0 >> 16) as u8,
+        (state.s0 >>  8) as u8,
+        (state.s0 >>  0) as u8,
+        (state.s1 >> 24) as u8,
+        (state.s1 >> 16) as u8,
+        (state.s1 >>  8) as u8,
+        (state.s1 >>  0) as u8,
+        (state.s2 >> 24) as u8,
+        (state.s2 >> 16) as u8,
+        (state.s2 >>  8) as u8,
+        (state.s2 >>  0) as u8,
+        (state.s3 >> 24) as u8,
+        (state.s3 >> 16) as u8,
+        (state.s3 >>  8) as u8,
+        (state.s3 >>  0) as u8,
+        (state.s4 >> 24) as u8,
+        (state.s4 >> 16) as u8,
+        (state.s4 >>  8) as u8,
+        (state.s4 >>  0) as u8,
     ]
 }
 
