@@ -14,15 +14,16 @@ use core::arch::x86_64::{
     _mm_shuffle_epi32,
     _mm_shuffle_epi8,
     _mm_store_si128,
-    _mm_storeu_si128,
+//    _mm_storeu_si128,
     _mm_xor_si128,
 };
 
-//#[allow(clippy::cast_ptr_alignment, non_snake_case)]
-#[allow(non_snake_case)]
+#[allow(clippy::cast_ptr_alignment, non_snake_case)]
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sha,sse2,ssse3,sse4.1")]
-unsafe fn process_blocks(state: &mut State, data: &[u8]) {
+//unsafe fn process_blocks(state: &mut State, data: &[u8]) {
+//unsafe fn process_blocks(state: &mut State, data: Chain<ChunksExact<'_, u8>, ChunksExact<'_, u8>>) {
+unsafe fn process_blocks<'b>(state: &mut State, blocks: impl Iterator<Item = &'b [u8]>) {
     let (
         mut ABCD, mut ABCD_SAVE, mut E0, mut E0_SAVE,
         mut E1, mut MSG0, mut MSG1, mut MSG2, mut MSG3
@@ -35,20 +36,20 @@ unsafe fn process_blocks(state: &mut State, data: &[u8]) {
     E0 = _mm_set_epi32(state.s4 as i32, 0, 0, 0);
     ABCD = _mm_shuffle_epi32(ABCD, 0x1B);
 
-    for data in data.chunks_exact(64) {
+    for block in blocks {
 
         ABCD_SAVE = ABCD;
         E0_SAVE = E0;
 
         // Rounds 0-3
-        MSG0 = _mm_loadu_si128(data.as_ptr() as *const __m128i);
+        MSG0 = _mm_loadu_si128(block.as_ptr() as *const __m128i);
         MSG0 = _mm_shuffle_epi8(MSG0, MASK);
         E0 = _mm_add_epi32(E0, MSG0);
         E1 = ABCD;
         ABCD = _mm_sha1rnds4_epu32(ABCD, E0, 0);
 
         // Rounds 4-7
-        MSG1 = _mm_loadu_si128(data.as_ptr().offset(16) as *const __m128i);
+        MSG1 = _mm_loadu_si128(block.as_ptr().offset(16) as *const __m128i);
         MSG1 = _mm_shuffle_epi8(MSG1, MASK);
         E1 = _mm_sha1nexte_epu32(E1, MSG1);
         E0 = ABCD;
@@ -56,7 +57,7 @@ unsafe fn process_blocks(state: &mut State, data: &[u8]) {
         MSG0 = _mm_sha1msg1_epu32(MSG0, MSG1);
 
         // Rounds 8-11
-        MSG2 = _mm_loadu_si128(data.as_ptr().offset(32) as *const __m128i);
+        MSG2 = _mm_loadu_si128(block.as_ptr().offset(32) as *const __m128i);
         MSG2 = _mm_shuffle_epi8(MSG2, MASK);
         E0 = _mm_sha1nexte_epu32(E0, MSG2);
         E1 = ABCD;
@@ -65,7 +66,7 @@ unsafe fn process_blocks(state: &mut State, data: &[u8]) {
         MSG0 = _mm_xor_si128(MSG0, MSG2);
 
         // Rounds 12-15
-        MSG3 = _mm_loadu_si128(data.as_ptr().offset(48) as *const __m128i);
+        MSG3 = _mm_loadu_si128(block.as_ptr().offset(48) as *const __m128i);
         MSG3 = _mm_shuffle_epi8(MSG3, MASK);
         E1 = _mm_sha1nexte_epu32(E1, MSG3);
         E0 = ABCD;
@@ -203,7 +204,7 @@ unsafe fn process_blocks(state: &mut State, data: &[u8]) {
 
     // Save state
     ABCD = _mm_shuffle_epi32(ABCD, 0x1B);
-    _mm_store_si128(state.as_ptr() as *mut __m128i, ABCD);
+    _mm_store_si128(state.as_mut_ptr(), ABCD);
     state.s4 = _mm_extract_epi32(E0, 3) as u32;
 }
 
@@ -238,54 +239,65 @@ impl State {
     }
 }
 
+#[repr(C, align(16))]
+struct Padding {
+    padding: [u8; 128],
+    end: usize
+}
+
+impl Padding {
+    fn new(rest: &[u8], nbits: usize) -> Padding {
+        let mut padding = [0; 128];
+
+        let nbits_be = nbits.to_be_bytes();
+        let rest_len = rest.len();
+
+        padding[..rest_len].copy_from_slice(rest);
+        padding[rest_len] = 0x80;
+
+        let end = if rest_len < 56 {
+            padding[56..64].copy_from_slice(&nbits_be);
+            64
+        } else {
+            padding[120..].copy_from_slice(&nbits_be);
+            128
+        };
+
+        Padding { padding, end }
+    }
+}
+
+use std::ops::Deref;
+
+impl Deref for Padding {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        &self.padding[..self.end]
+    }
+}
+
 fn compute_sha1(data: &[u8]) -> [u8; 20] {
 
-    // let mut state = [
-    //     0x6745_2301,
-    //     0xEFCD_AB89,
-    //     0x98BA_DCFE,
-    //     0x1032_5476,
-    //     0xC3D2_E1F0
-    // ];
-
+    // Initial state
     let mut state = State::default();
 
-    // println!("ALIGN: {:?}", std::mem::align_of_val(&state2));
-    // println!("ALIGN DATA: {:?}", std::mem::align_of_val(data));
-    // println!("DATA: {:?} ALIGN {:?}", data.as_ptr() as usize, data.as_ptr() as usize % 16);
-
-    let nblock = data.len() / 64;
-
-    if nblock > 0 {
-        unsafe { process_blocks(&mut state, data) };
-    }
-
-    let remainder = &data[nblock * 64..];
-    let remainder_len = remainder.len();
-
+    // number of bits in the data
     let nbits = data.len() * 8;
-    let extra = [
-        (nbits >> 56) as u8,
-        (nbits >> 48) as u8,
-        (nbits >> 40) as u8,
-        (nbits >> 32) as u8,
-        (nbits >> 24) as u8,
-        (nbits >> 16) as u8,
-        (nbits >> 8) as u8,
-        (nbits >> 0) as u8
-    ];
 
-    let mut last = [0; 128];
-    last[..remainder_len].copy_from_slice(remainder);
-    last[remainder_len] = 0x80;
+    // data by chunks of 64 bytes
+    let data_blocks = data.chunks_exact(64);
 
-    if remainder_len < 56 {
-        last[56..64].copy_from_slice(&extra);
-        unsafe { process_blocks(&mut state, &last[..64]) };
-    } else {
-        last[120..128].copy_from_slice(&extra);
-        unsafe { process_blocks(&mut state, &last[..]) };
-    }
+    // Rest of the data
+    let rest = data_blocks.remainder();
+
+    // Padding
+    let pad = Padding::new(rest, nbits);
+
+    // Iterator on data + padding, by chunks of 64 bytes
+    let blocks = data_blocks.chain(pad.chunks_exact(64));
+
+    unsafe { process_blocks(&mut state, blocks); }
 
     [
         (state.s0 >> 24) as u8,
