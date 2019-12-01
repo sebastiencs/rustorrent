@@ -11,3 +11,4 @@ pub mod errors;
 pub mod extensions;
 pub mod bencode;
 pub mod udp_ext;
+pub mod sha1;

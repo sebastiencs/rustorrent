@@ -20,9 +20,19 @@ use std::io::{self, Read};
 
 use rustorrent::session::Session;
 use rustorrent::de;
+use rustorrent::sha1::sha1;
 
 //fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
 fn main() {
+
+    // let mut msg = "The quick brown fox jumps over the lazy dog".to_string();
+    // let msg = msg.as_bytes();
+    let msg = Box::new(b"hello");
+    let msg = msg.as_ref();
+    //let msg = msg.as_bytes();
+    println!("RES: {:x?}", sha1(&msg[..]));
+    return;
+
     let stdin = io::stdin();
     let mut buffer = Vec::new();
     let mut handle = stdin.lock();
