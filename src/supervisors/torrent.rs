@@ -10,7 +10,7 @@ use slab::Slab;
 
 use std::net::{SocketAddr, ToSocketAddrs};
 
-use crate::actors::peer::{PeerId, Peer, PeerTask, PeerCommand};
+use crate::actors::peer::{PeerId, Peer, PeerTask, PeerCommand, PeerExternId};
 use crate::metadata::Torrent;
 use crate::bitfield::{BitFieldUpdate, BitField};
 use crate::pieces::{PieceInfo, Pieces, PieceBuffer, PieceToDownload};
@@ -23,7 +23,8 @@ struct PeerState {
     socket: SocketAddr,
     bitfield: BitField,
     queue_tasks: PeerTask,
-    addr: a_sync::Sender<PeerCommand>
+    addr: a_sync::Sender<PeerCommand>,
+    extern_id: PeerExternId
 }
 
 /// Message sent to TorrentSupervisor
@@ -35,6 +36,7 @@ pub enum TorrentNotification {
         queue: PeerTask,
         addr: a_sync::Sender<PeerCommand>,
         socket: SocketAddr,
+        extern_id: PeerExternId
     },
     /// Message sent when a peer is destroyed (deconnected, ..)
     /// The peer is then removed to the list of peers
@@ -194,12 +196,13 @@ impl TorrentSupervisor {
                         piece.workers.retain(|p| !Arc::ptr_eq(&p, &queue) );
                     }
                 }
-                AddPeer { id, queue, addr, socket } => {
+                AddPeer { id, queue, addr, socket, extern_id } => {
                     self.peers.insert(id, PeerState {
                         bitfield: BitField::new(self.pieces_detail.num_pieces),
                         queue_tasks: queue,
                         addr,
                         socket,
+                        extern_id,
                     });
                 }
                 AddPiece (piece_block) => {

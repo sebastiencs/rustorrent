@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::convert::TryFrom;
 use std::net::SocketAddr;
+use std::convert::TryInto;
 
 use crate::bitfield::{BitField, BitFieldUpdate};
 use crate::utils::Map;
@@ -167,6 +168,24 @@ impl PeerDetail {
         };
     }
 }
+
+/// Peer extern ID
+/// Correspond to peer_id in the protocol and is 20 bytes long
+pub struct PeerExternId(Box<[u8; 20]>);
+
+impl PeerExternId {
+    fn new(bytes: &[u8]) -> PeerExternId {
+        PeerExternId(Box::new(bytes.try_into().expect("PeerExternId must be 20 bytes")))
+    }
+}
+
+impl PartialEq for PeerExternId {
+    fn eq(&self, other: &PeerExternId) -> bool {
+        super::sha1::compare_20_bytes(&*self.0, &*other.0)
+    }
+}
+
+impl Eq for PeerExternId {}
 
 pub struct Peer {
     id: PeerId,
@@ -350,14 +369,15 @@ impl Peer {
 
         let (addr, cmds) = a_sync::channel(1000);
 
+        let extern_id = self.do_handshake().await?;
+
         self.supervisor.send(TorrentNotification::AddPeer {
             id: self.id,
             queue: self.tasks.clone(),
             addr,
             socket: self.addr,
+            extern_id
         }).await;
-
-        self.do_handshake().await?;
 
         let cmds = cmds.recv().fuse();
         let mut cmds = Box::pin(cmds);
@@ -470,7 +490,7 @@ impl Peer {
             },
             Have { piece_index } => {
                 use TorrentNotification::UpdateBitfield;
-                
+
                 let update = BitFieldUpdate::from(piece_index);
 
                 self.supervisor.send(UpdateBitfield { id: self.id, update }).await;
@@ -620,7 +640,7 @@ impl Peer {
         Ok(())
     }
 
-    async fn do_handshake(&mut self) -> Result<()> {
+    async fn do_handshake(&mut self) -> Result<PeerExternId> {
         let mut handshake: [u8; 68] = [0; 68];
 
         let mut cursor = Cursor::new(&mut handshake[..]);
@@ -629,11 +649,11 @@ impl Peer {
 
         reserved[5] |= 0x10; // Support Extension Protocol
 
-        cursor.write(&[19])?;
-        cursor.write(b"BitTorrent protocol")?;
-        cursor.write(&reserved[..])?;
-        cursor.write(self.pieces_detail.info_hash.as_ref());
-        cursor.write(b"-RT1220sJ1Nna5rzWLd8")?;
+        cursor.write_all(&[19])?;
+        cursor.write_all(b"BitTorrent protocol")?;
+        cursor.write_all(&reserved[..])?;
+        cursor.write_all(self.pieces_detail.info_hash.as_ref());
+        cursor.write_all(b"-RT1220sJ1Nna5rzWLd8")?;
 
         self.write(&handshake).await?;
 
@@ -645,6 +665,6 @@ impl Peer {
 
         println!("[{}] HANDSHAKE DONE", self.id);
 
-        Ok(())
+        Ok(PeerExternId::new(&self.buffer[len + 28..len + 48]))
     }
 }
