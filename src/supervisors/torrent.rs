@@ -197,13 +197,20 @@ impl TorrentSupervisor {
                     }
                 }
                 AddPeer { id, queue, addr, socket, extern_id } => {
-                    self.peers.insert(id, PeerState {
-                        bitfield: BitField::new(self.pieces_detail.num_pieces),
-                        queue_tasks: queue,
-                        addr,
-                        socket,
-                        extern_id,
-                    });
+                    if self.is_duplicate_peer(&extern_id) {
+                        // We are already connected to this peer, disconnect.
+                        // This happens when we are connected to its ipv4 and ipv6 addresses
+
+                        addr.send(PeerCommand::Die).await
+                    } else {
+                        self.peers.insert(id, PeerState {
+                            bitfield: BitField::new(self.pieces_detail.num_pieces),
+                            queue_tasks: queue,
+                            addr,
+                            socket,
+                            extern_id,
+                        });
+                    }
                 }
                 AddPiece (piece_block) => {
                     let index = piece_block.piece_index;
@@ -283,5 +290,12 @@ impl TorrentSupervisor {
         }
 
         found
+    }
+
+    /// Check if the peer extern id is already in our state
+    fn is_duplicate_peer(&self, id: &PeerExternId) -> bool {
+        self.peers
+            .values()
+            .any(|p| &p.extern_id == id)
     }
 }
