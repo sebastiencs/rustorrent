@@ -333,28 +333,3 @@ pub(super) unsafe fn compute_sha1(data: &[u8]) -> [u8; 20] {
         (state.s4 >>  0) as u8,
     ]
 }
-
-#[cfg(test)]
-mod tests {
-    use super::compute_sha1;
-
-    #[test]
-    fn extern_vs_us_16k() {
-        use rand::Rng;
-        use rand::RngCore;
-
-        let mut rng = rand::thread_rng();
-
-        let mut vec = vec![0; 16 * 1024];
-
-        rng.fill_bytes(&mut vec);
-
-        let res1 = unsafe { compute_sha1(&vec) };
-
-        let mut m = sha1::Sha1::new();
-        m.update(&vec);
-        let res2 = m.digest().bytes();
-
-        assert_eq!(res1, res2);
-    }
-}
