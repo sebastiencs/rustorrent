@@ -64,11 +64,12 @@ impl Sha1Worker {
     fn process(&mut self, task: Sha1Task) {
         match task {
             Sha1Task::CheckSum { piece_buffer, sum_metadata, id, addr } => {
-                let sha1 = Sha1::from(piece_buffer.buf.as_slice()).digest();
-                let sha1 = sha1.bytes();
+                let sha1 = crate::sha1::sha1(piece_buffer.buf.as_slice());
 
-                let valid = compare_20_bytes(&sha1[..], sum_metadata.as_slice());
-//                let valid = &sha1[..] == sum_metadata.as_slice();
+                let valid = compare_20_bytes(
+                    &sha1[..],
+                    sum_metadata.as_slice()
+                );
 
                 self.send_result(id, valid, addr);
             }
