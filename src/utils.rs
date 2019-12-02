@@ -38,17 +38,14 @@ impl std::hash::Hasher for NoHash {
     fn finish(&self) -> u64 {
         self.0 as u64
     }
-    fn write(&mut self, slice: &[u8]) {
-        self.0 = match slice.len() {
-            8 => u64::from_ne_bytes(slice.try_into().unwrap()) as usize,
-            4 => u32::from_ne_bytes(slice.try_into().unwrap()) as usize,
-            2 => u16::from_ne_bytes(slice.try_into().unwrap()) as usize,
-            1 => u8::from_ne_bytes(slice.try_into().unwrap()) as usize,
-            _ => unreachable!()
-        };
+    fn write(&mut self, _slice: &[u8]) {
+        panic!("Wrong use of NoHash");
     }
     fn write_usize(&mut self, n: usize) {
         self.0 = n
+    }
+    fn write_u64(&mut self, n: u64) {
+        self.0 = n as usize
     }
 }
 
