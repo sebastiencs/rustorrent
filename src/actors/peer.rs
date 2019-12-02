@@ -146,7 +146,8 @@ pub type PeerTask = Arc<async_std::sync::RwLock<VecDeque<PieceToDownload>>>;
 
 #[derive(Debug)]
 pub enum PeerCommand {
-    TasksAvailables
+    TasksAvailables,
+    Die
 }
 
 enum PeerWaitEvent {
@@ -395,6 +396,9 @@ impl Peer {
                     match command {
                         Some(TasksAvailables) => {
                             self.maybe_send_request().await;
+                        }
+                        Some(Die) => {
+                            return Ok(());
                         }
                         None => {
                             // Disconnected
