@@ -178,6 +178,45 @@ impl PeerExternId {
     fn new(bytes: &[u8]) -> PeerExternId {
         PeerExternId(Box::new(bytes.try_into().expect("PeerExternId must be 20 bytes")))
     }
+
+    pub fn generate() -> PeerExternId {
+        use rand::Rng;
+        use rand::distributions::Alphanumeric;
+
+        // TODO: Improve this
+
+        const VERSION: usize = 1;
+
+        let random = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(12)
+            .collect::<String>();
+
+        let s = format!("-RR{:04}-{}", VERSION, random);
+
+        let id = s.into_boxed_str()
+                  .into_boxed_bytes()
+                  .try_into()
+                  .expect("PeerExternId are 20 bytes long");
+
+        PeerExternId(id)
+    }
+}
+
+use std::ops::Deref;
+
+impl Deref for PeerExternId {
+    type Target = [u8; 20];
+
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+
+impl std::fmt::Debug for PeerExternId {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{:?}", String::from_utf8_lossy(&*self.0))
+    }
 }
 
 impl PartialEq for PeerExternId {
@@ -210,7 +249,9 @@ pub struct Peer {
     nblocks: usize, // Downloaded
     start: Option<Instant>, // Downloaded,
 
-    peer_detail: PeerDetail
+    peer_detail: PeerDetail,
+
+    extern_id: Arc<PeerExternId>
 }
 
 impl Peer {
@@ -218,6 +259,7 @@ impl Peer {
         addr: SocketAddr,
         pieces_detail: Pieces,
         supervisor: a_sync::Sender<TorrentNotification>,
+        extern_id: Arc<PeerExternId>
     ) -> Result<Peer> {
         let stream = TcpStream::connect(&addr).await?;
 
@@ -228,6 +270,7 @@ impl Peer {
             supervisor,
             pieces_detail,
             id,
+            extern_id,
             tasks: PeerTask::default(),
             reader: BufReader::with_capacity(32 * 1024, stream),
             buffer: Vec::with_capacity(32 * 1024),
@@ -650,7 +693,7 @@ impl Peer {
         cursor.write_all(b"BitTorrent protocol")?;
         cursor.write_all(&reserved[..])?;
         cursor.write_all(self.pieces_detail.info_hash.as_ref())?;
-        cursor.write_all(b"-RT1220sJ1Nna5rzWLd8")?;
+        cursor.write_all(&**self.extern_id)?;
 
         self.write(&handshake).await?;
 

@@ -15,6 +15,7 @@ use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use crate::supervisors::torrent::Result;
 use crate::errors::TorrentError;
 use super::{TrackerData, TrackerConnection};
+use crate::actors::peer::PeerExternId;
 
 #[derive(Debug)]
 pub enum Action {
@@ -113,7 +114,7 @@ pub struct AnnounceRequest {
     pub transaction_id: u32,
     pub info_hash: Arc<Vec<u8>>,
 //    pub info_hash: [u8; 20],
-    pub peer_id: String,
+    pub peer_id: Arc<PeerExternId>,
 //    pub peer_id: [u8; 20],
     pub downloaded: u64,
     pub left: u64,
@@ -142,7 +143,7 @@ impl<'a> From<&'a UdpConnection> for AnnounceRequest {
             action: Action::Announce,
             transaction_id: state.transaction_id,
             info_hash: Arc::clone(&metadata.info_hash),
-            peer_id: "-RT1220sJ1Nna5rzWLd8".to_owned(),
+            peer_id: Arc::clone(&c.data.extern_id),
             downloaded: 0,
             left: metadata.files_total_size() as u64,
             uploaded: 0,
@@ -423,7 +424,7 @@ impl UdpConnection {
                 (&mut buffer[8..]).write_u32::<BigEndian>((&req.action).into()).unwrap();
                 (&mut buffer[12..]).write_u32::<BigEndian>(req.transaction_id).unwrap();
                 (&mut buffer[16..]).write_all(&req.info_hash[..]).unwrap();
-                (&mut buffer[36..]).write_all(req.peer_id.as_bytes()).unwrap();
+                (&mut buffer[36..]).write_all(&**req.peer_id).unwrap();
                 (&mut buffer[56..]).write_u64::<BigEndian>(req.downloaded).unwrap();
                 (&mut buffer[64..]).write_u64::<BigEndian>(req.left).unwrap();
                 (&mut buffer[72..]).write_u64::<BigEndian>(req.uploaded).unwrap();

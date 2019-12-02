@@ -12,6 +12,7 @@ use crate::metadata::Torrent;
 use crate::supervisors::torrent::Result;
 use crate::errors::TorrentError;
 use super::{TrackerConnection, TrackerData};
+use crate::actors::peer::PeerExternId;
 
 async fn peers_from_dict(peers: &[Peer], addrs: &mut Vec<SocketAddr>) {
     for peer in peers {
@@ -54,10 +55,10 @@ async fn get_peers_addrs(response: &AnnounceResponse) -> Vec<SocketAddr> {
     addrs
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Debug)]
 pub struct AnnounceQuery<'a> {
     pub info_hash: &'a [u8],
-    pub peer_id: String,
+    pub peer_id: &'a str,
     pub port: i64,
     pub uploaded: i64,
     pub downloaded: i64,
@@ -66,11 +67,12 @@ pub struct AnnounceQuery<'a> {
     pub compact: i64
 }
 
-impl<'a> From<&'a Torrent> for AnnounceQuery<'a> {
-    fn from(torrent: &'a Torrent) -> AnnounceQuery {
+impl<'a> From<&'a TrackerData> for AnnounceQuery<'a> {
+    fn from(data: &'a TrackerData) -> AnnounceQuery {
         AnnounceQuery {
-            info_hash: torrent.info_hash.as_ref(),
-            peer_id: "-RT1220sJ1Nna5rzWLd8".to_owned(),
+            info_hash: data.metadata.info_hash.as_ref(),
+            peer_id: std::str::from_utf8(&**data.extern_id)
+                .expect("Fail to convert extern id to str"),
             port: 6881,
             uploaded: 0,
             downloaded: 0,
@@ -310,7 +312,7 @@ pub struct HttpConnection {
 #[async_trait]
 impl TrackerConnection for HttpConnection {
     async fn announce(&mut self, connected_addr: &mut usize) -> Result<Vec<SocketAddr>> {
-        let query = AnnounceQuery::from(self.data.metadata.as_ref());
+        let query = AnnounceQuery::from(self.data.as_ref());
         let mut last_err = None;
         for (index, addr) in self.addr.iter().enumerate() {
             let response = match http_get(&self.data.url, &query, addr).await {

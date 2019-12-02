@@ -115,7 +115,9 @@ pub struct TorrentSupervisor {
 
     sha1_workers: Sender<Sha1Task>,
 
-    pending_pieces: Slab<Arc<PieceBuffer>>
+    pending_pieces: Slab<Arc<PieceBuffer>>,
+
+    extern_id: Arc<PeerExternId>
 }
 
 pub type Result<T> = std::result::Result<T, TorrentError>;
@@ -129,6 +131,8 @@ impl TorrentSupervisor {
         let mut pieces = Vec::with_capacity(num_pieces);
         pieces.resize_with(num_pieces, Default::default);
 
+        let extern_id = Arc::new(PeerExternId::generate());
+
         TorrentSupervisor {
             metadata: Arc::new(torrent),
             receiver,
@@ -138,15 +142,17 @@ impl TorrentSupervisor {
             peers: Default::default(),
             sha1_workers,
             pending_pieces: Slab::new(),
+            extern_id
         }
     }
 
     pub async fn start(&mut self) {
         let metadata = Arc::clone(&self.metadata);
         let my_addr = self.my_addr.clone();
+        let extern_id = self.extern_id.clone();
 
         task::spawn(async {
-            TrackerSupervisor::new(my_addr, metadata).start().await;
+            TrackerSupervisor::new(my_addr, metadata, extern_id).start().await;
         });
 
         self.process_cmds().await;
@@ -158,9 +164,10 @@ impl TorrentSupervisor {
         let addr = *addr;
         let my_addr = self.my_addr.clone();
         let pieces_detail = self.pieces_detail.clone();
+        let extern_id = self.extern_id.clone();
 
         task::spawn(async move {
-            let mut peer = match Peer::new(addr, pieces_detail, my_addr).await {
+            let mut peer = match Peer::new(addr, pieces_detail, my_addr, extern_id).await {
                 Ok(peer) => peer,
                 Err(e) => {
                     println!("PEER ERROR {:?}", e);

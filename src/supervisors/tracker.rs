@@ -9,6 +9,7 @@ use crate::metadata::Torrent;
 use crate::supervisors::torrent::TorrentNotification;
 use crate::errors::TorrentError;
 use crate::actors::tracker::Tracker;
+use crate::actors::peer::PeerExternId;
 
 #[derive(Debug)]
 pub enum TrackerStatus {
@@ -20,7 +21,8 @@ pub enum TrackerStatus {
 pub struct TrackerData {
     pub metadata: Arc<Torrent>,
     pub supervisor: Sender<TorrentNotification>,
-    pub url: Arc<TrackerUrl>
+    pub url: Arc<TrackerUrl>,
+    pub extern_id: Arc<PeerExternId>
 }
 
 impl From<(&TrackerSupervisor, &Arc<TrackerUrl>)> for TrackerData {
@@ -29,6 +31,7 @@ impl From<(&TrackerSupervisor, &Arc<TrackerUrl>)> for TrackerData {
             metadata: Arc::clone(&tracker.metadata),
             supervisor: tracker.supervisor.clone(),
             url: Arc::clone(url),
+            extern_id: tracker.extern_id.clone()
         }
     }
 }
@@ -64,12 +67,15 @@ pub struct TrackerSupervisor {
     /// Urls are already hashed so we can move it everywhere just by copy
     /// Otherwise we would have to clone an Arc<Url> in every messages etc.
     tracker_states: Map<UrlHash, TrackerState>,
+    /// Our peer_id we send to trackers
+    extern_id: Arc<PeerExternId>
 }
 
 impl TrackerSupervisor {
     pub fn new(
         supervisor: Sender<TorrentNotification>,
-        metadata: Arc<Torrent>
+        metadata: Arc<Torrent>,
+        extern_id: Arc<PeerExternId>,
     ) -> TrackerSupervisor
     {
         let urls = metadata.get_urls_tiers();
@@ -80,6 +86,7 @@ impl TrackerSupervisor {
             urls,
             recv,
             _sender,
+            extern_id,
             tracker_states: Default::default()
         }
     }
