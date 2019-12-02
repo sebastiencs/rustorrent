@@ -26,27 +26,37 @@ struct PeerState {
     addr: a_sync::Sender<PeerCommand>
 }
 
-/// Message sent to Supervisor
+/// Message sent to TorrentSupervisor
 pub enum TorrentNotification {
+    /// When a Peer is connected, it send this message to be added
+    /// to the list of peers
     AddPeer {
         id: PeerId,
         queue: PeerTask,
         addr: a_sync::Sender<PeerCommand>,
         socket: SocketAddr,
     },
+    /// Message sent when a peer is destroyed (deconnected, ..)
+    /// The peer is then removed to the list of peers
     RemovePeer {
         id: PeerId ,
         queue: PeerTask
     },
+    /// Message sent when a Peer downloaded a full piece
     AddPiece(PieceBuffer),
+    /// Update the bitfield of a Peer.
+    /// It is sent when the Peer received a BITFIELD or HAVE message
     UpdateBitfield {
         id: PeerId,
         update: BitFieldUpdate
     },
+    /// Whether or not the piece match its sha1 sum
     ResultChecksum {
+        /// This id is a slab id
         id: usize,
         valid: bool
     },
+    /// When a tracker discover peers, it send this message
     PeerDiscovered {
         addrs: Vec<SocketAddr>
     }
