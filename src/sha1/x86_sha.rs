@@ -281,7 +281,7 @@ impl Deref for Padding {
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sha,sse2,ssse3,sse4.1")]
-unsafe fn compute_sha1(data: &[u8]) -> [u8; 20] {
+pub(super) unsafe fn compute_sha1(data: &[u8]) -> [u8; 20] {
 
     // Initial state
     let mut state = State::default();
@@ -334,24 +334,9 @@ unsafe fn compute_sha1(data: &[u8]) -> [u8; 20] {
     ]
 }
 
-pub fn sha1(data: &[u8]) -> [u8; 20] {
-    #[cfg(any(target_arch = "x86_64"))]
-    {
-        if is_x86_feature_detected!("sha")
-            && is_x86_feature_detected!("sse2")
-            && is_x86_feature_detected!("ssse3")
-            && is_x86_feature_detected!("sse4.1")
-        {
-            return unsafe { compute_sha1(data) }
-        }
-    }
-
-    panic!("AAAA");
-}
-
 #[cfg(test)]
 mod tests {
-    use super::sha1;
+    use super::compute_sha1;
 
     #[test]
     fn extern_vs_us_16k() {
@@ -364,7 +349,7 @@ mod tests {
 
         rng.fill_bytes(&mut vec);
 
-        let res1 = sha1(&vec);
+        let res1 = unsafe { compute_sha1(&vec) };
 
         let mut m = sha1::Sha1::new();
         m.update(&vec);
