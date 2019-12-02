@@ -16,7 +16,7 @@ fn slice_compare_equal(b: &mut test::Bencher) {
     b.bytes = vec1.len() as u64;
 }
 
-use rustorrent::actors::sha1::compare_sum;
+use rustorrent::actors::sha1::compare_20_bytes;
 
 #[bench]
 fn simd_compare_equal(b: &mut Bencher) {

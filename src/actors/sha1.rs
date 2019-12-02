@@ -26,7 +26,7 @@ use packed_simd::u128x1;
 
 #[allow(clippy::cast_ptr_alignment)]
 #[inline(never)]
-pub fn compare_sum(sum1: &[u8], sum2: &[u8]) -> bool {
+pub fn compare_20_bytes(sum1: &[u8], sum2: &[u8]) -> bool {
     if sum1.len() == 20 && sum2.len() == 20 {
         unsafe {
             let first1 = u128x1::from_slice_unaligned(&*(sum1 as *const [u8] as *const [u128]));
@@ -67,7 +67,7 @@ impl Sha1Worker {
                 let sha1 = Sha1::from(piece_buffer.buf.as_slice()).digest();
                 let sha1 = sha1.bytes();
 
-                let valid = compare_sum(&sha1[..], sum_metadata.as_slice());
+                let valid = compare_20_bytes(&sha1[..], sum_metadata.as_slice());
 //                let valid = &sha1[..] == sum_metadata.as_slice();
 
                 self.send_result(id, valid, addr);
@@ -132,7 +132,7 @@ impl Sha1Workers {
 
 #[cfg(test)]
 mod tests {
-    use super::compare_sum;
+    use super::compare_20_bytes;
 
     #[test]
     fn compare_sum_simd() {
@@ -174,7 +174,7 @@ mod tests {
     fn compare_sum_simd_short() {
         let vec1 = vec![5; 19];
         let vec2 = vec1.clone();
-        compare_sum(&vec1, &vec2);
+        compare_20_bytes(&vec1, &vec2);
     }
 
     #[test]
@@ -183,7 +183,7 @@ mod tests {
         let vec1 = vec![5; 20];
         let mut vec2 = vec1.clone();
         vec2.push(1);
-        compare_sum(&vec1, &vec2);
+        compare_20_bytes(&vec1, &vec2);
     }
 
     #[test]
@@ -192,7 +192,7 @@ mod tests {
         let vec1 = vec![5; 19];
         let mut vec2 = vec1.clone();
         vec2.push(1);
-        compare_sum(&vec1, &vec2);
+        compare_20_bytes(&vec1, &vec2);
     }
 
     #[test]
@@ -200,6 +200,6 @@ mod tests {
     fn compare_sum_simd_big() {
         let vec1 = vec![5; 21];
         let vec2 = vec1.clone();
-        compare_sum(&vec1, &vec2);
+        compare_20_bytes(&vec1, &vec2);
     }
 }
