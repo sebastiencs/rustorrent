@@ -14,16 +14,18 @@ use core::arch::x86_64::{
     _mm_shuffle_epi32,
     _mm_shuffle_epi8,
     _mm_store_si128,
-//    _mm_storeu_si128,
     _mm_xor_si128,
 };
 
 #[allow(clippy::cast_ptr_alignment, non_snake_case)]
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sha,sse2,ssse3,sse4.1")]
-//unsafe fn process_blocks(state: &mut State, data: &[u8]) {
-//unsafe fn process_blocks(state: &mut State, data: Chain<ChunksExact<'_, u8>, ChunksExact<'_, u8>>) {
-unsafe fn process_blocks<'b>(state: &mut State, blocks: impl Iterator<Item = &'b [u8]>) {
+unsafe fn process_blocks<'b>(
+    state: &mut State,
+    blocks: impl Iterator<Item = &'b [u8]>,
+    load: unsafe fn (*const __m128i) -> __m128i,
+)
+{
     let (
         mut ABCD, mut ABCD_SAVE, mut E0, mut E0_SAVE,
         mut E1, mut MSG0, mut MSG1, mut MSG2, mut MSG3
@@ -42,14 +44,14 @@ unsafe fn process_blocks<'b>(state: &mut State, blocks: impl Iterator<Item = &'b
         E0_SAVE = E0;
 
         // Rounds 0-3
-        MSG0 = _mm_loadu_si128(block.as_ptr() as *const __m128i);
+        MSG0 = load(block.as_ptr() as *const __m128i);
         MSG0 = _mm_shuffle_epi8(MSG0, MASK);
         E0 = _mm_add_epi32(E0, MSG0);
         E1 = ABCD;
         ABCD = _mm_sha1rnds4_epu32(ABCD, E0, 0);
 
         // Rounds 4-7
-        MSG1 = _mm_loadu_si128(block.as_ptr().offset(16) as *const __m128i);
+        MSG1 = load(block.as_ptr().offset(16) as *const __m128i);
         MSG1 = _mm_shuffle_epi8(MSG1, MASK);
         E1 = _mm_sha1nexte_epu32(E1, MSG1);
         E0 = ABCD;
@@ -57,7 +59,7 @@ unsafe fn process_blocks<'b>(state: &mut State, blocks: impl Iterator<Item = &'b
         MSG0 = _mm_sha1msg1_epu32(MSG0, MSG1);
 
         // Rounds 8-11
-        MSG2 = _mm_loadu_si128(block.as_ptr().offset(32) as *const __m128i);
+        MSG2 = load(block.as_ptr().offset(32) as *const __m128i);
         MSG2 = _mm_shuffle_epi8(MSG2, MASK);
         E0 = _mm_sha1nexte_epu32(E0, MSG2);
         E1 = ABCD;
@@ -66,7 +68,7 @@ unsafe fn process_blocks<'b>(state: &mut State, blocks: impl Iterator<Item = &'b
         MSG0 = _mm_xor_si128(MSG0, MSG2);
 
         // Rounds 12-15
-        MSG3 = _mm_loadu_si128(block.as_ptr().offset(48) as *const __m128i);
+        MSG3 = load(block.as_ptr().offset(48) as *const __m128i);
         MSG3 = _mm_shuffle_epi8(MSG3, MASK);
         E1 = _mm_sha1nexte_epu32(E1, MSG3);
         E0 = ABCD;
@@ -277,7 +279,9 @@ impl Deref for Padding {
     }
 }
 
-fn compute_sha1(data: &[u8]) -> [u8; 20] {
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sha,sse2,ssse3,sse4.1")]
+unsafe fn compute_sha1(data: &[u8]) -> [u8; 20] {
 
     // Initial state
     let mut state = State::default();
@@ -297,7 +301,14 @@ fn compute_sha1(data: &[u8]) -> [u8; 20] {
     // Iterator on data + padding, by chunks of 64 bytes
     let blocks = data_blocks.chain(pad.chunks_exact(64));
 
-    unsafe { process_blocks(&mut state, blocks); }
+    // The compiler optimize this and make process_block inlined
+    if data.as_ptr() as usize % 16 == 0 {
+        // data is aligned, use movdqa
+        process_blocks(&mut state, blocks, _mm_load_si128);
+    } else {
+        // data is unaligned, use movdqu
+        process_blocks(&mut state, blocks, _mm_loadu_si128);
+    }
 
     [
         (state.s0 >> 24) as u8,
@@ -331,7 +342,7 @@ pub fn sha1(data: &[u8]) -> [u8; 20] {
             && is_x86_feature_detected!("ssse3")
             && is_x86_feature_detected!("sse4.1")
         {
-            return compute_sha1(data);
+            return unsafe { compute_sha1(data) }
         }
     }
 

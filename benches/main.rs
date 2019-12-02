@@ -111,6 +111,24 @@ fn sha1_512K(b: &mut Bencher) {
     b.bytes = vec.len() as u64;
 }
 
+#[bench]
+fn sha1_512K_unaligned(b: &mut Bencher) {
+    use rustorrent::sha1::sha1;
+
+    use rand::Rng;
+    use rand::RngCore;
+
+    let mut rng = rand::thread_rng();
+    let mut vec = vec![0; 512 * 1024];
+
+    rng.fill_bytes(&mut vec);
+
+    b.iter(|| {
+        sha1(&vec[6..])
+    });
+    b.bytes = vec.len() as u64;
+}
+
 // TODO: Sha1 with Simd
 // https://github.com/noloader/SHA-Intrinsics
 // https://www.nayuki.io/page/fast-sha1-hash-implementation-in-x86-assembly
