@@ -83,12 +83,7 @@ pub struct PEXMessage<'a> {
     dropped6: Option<PtrBuf<'a>>,
 }
 
-use std::io::Cursor;
-use byteorder::BigEndian;
-use byteorder::ReadBytesExt;
-use std::net::{SocketAddrV4, SocketAddrV6, Ipv4Addr, Ipv6Addr};
-
-use std::sync::Arc;
+use crate::utils;
 
 impl<'a> Into<Vec<SocketAddr>> for PEXMessage<'a> {
     fn into(self) -> Vec<SocketAddr> {
@@ -99,24 +94,11 @@ impl<'a> Into<Vec<SocketAddr>> for PEXMessage<'a> {
         let mut addrs = Vec::with_capacity(length);
 
         if let Some(PtrBuf { slice }) = self.added {
-            for chunk in slice.chunks_exact(6) {
-                let mut cursor = Cursor::new(&chunk[..]);
-                let ipv4 = cursor.read_u32::<BigEndian>().unwrap();
-                let port = cursor.read_u16::<BigEndian>().unwrap();
-                addrs.push(SocketAddrV4::new(Ipv4Addr::from(ipv4), port).into());
-            }
+            utils::ipv4_from_slice(slice, &mut addrs);
         };
 
         if let Some(PtrBuf { slice }) = self.added6 {
-            for chunk in slice.chunks_exact(18) {
-                let mut cursor = Cursor::new(chunk);
-                let mut addr: [u16; 8] = [0; 8];
-                addr.iter_mut().for_each(|a| {
-                    *a = cursor.read_u16::<BigEndian>().unwrap();
-                });
-                let port = cursor.read_u16::<BigEndian>().unwrap();
-                addrs.push(SocketAddrV6::new(Ipv6Addr::from(addr), port, 0, 0).into());
-            }
+            utils::ipv6_from_slice(slice, &mut addrs);
         };
 
         addrs
