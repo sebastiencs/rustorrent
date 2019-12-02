@@ -16,7 +16,7 @@ use crate::supervisors::tracker::{TrackerData, TrackerStatus};
 use crate::metadata::UrlHash;
 
 #[async_trait]
-trait TrackerConnection {
+pub trait TrackerConnection {
     async fn announce(&mut self, connected_addr: &mut usize) -> Result<Vec<SocketAddr>>;
     async fn scrape(&mut self) -> Result<()>;
 }
