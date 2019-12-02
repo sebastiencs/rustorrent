@@ -1,20 +1,20 @@
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use futures::future::{Fuse, FutureExt};
 use async_std::net::TcpStream;
-use async_std::io::{BufReader, BufWriter};
+use async_std::io::BufReader;
 use async_std::prelude::*;
 use async_std::sync as a_sync;
-use coarsetime::{Duration, Instant};
+use coarsetime::Instant;
 
 use std::pin::Pin;
-use std::io::{Cursor, Write, Read};
+use std::io::{Cursor, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::convert::TryFrom;
 use std::net::SocketAddr;
 use std::convert::TryInto;
 
-use crate::bitfield::{BitField, BitFieldUpdate};
+use crate::bitfield::BitFieldUpdate;
 use crate::utils::Map;
 use crate::pieces::{Pieces, PieceToDownload, PieceBuffer};
 use crate::supervisors::torrent::{TorrentNotification, Result};
@@ -63,7 +63,7 @@ impl<'a> TryFrom<&'a [u8]> for MessagePeer<'a> {
     type Error = TorrentError;
 
     fn try_from(buffer: &'a [u8]) -> Result<MessagePeer> {
-        if buffer.len() == 0 {
+        if buffer.is_empty() {
             return Ok(MessagePeer::KeepAlive);
         }
         let id = buffer[0];
@@ -196,8 +196,6 @@ pub struct Peer {
     buffer: Vec<u8>,
     /// Are we choked from the peer
     choked: Choke,
-    /// BitField of the peer
-    bitfield: BitField,
     /// List of pieces to download
     tasks: PeerTask,
     _tasks: Option<VecDeque<PieceToDownload>>,
@@ -225,13 +223,10 @@ impl Peer {
 
         let id = PEER_COUNTER.fetch_add(1, Ordering::SeqCst);
 
-        let bitfield = BitField::new(pieces_detail.num_pieces);
-
         Ok(Peer {
             addr,
             supervisor,
             pieces_detail,
-            bitfield,
             id,
             tasks: PeerTask::default(),
             reader: BufReader::with_capacity(32 * 1024, stream),
@@ -320,7 +315,7 @@ impl Peer {
                 cursor.write_u32::<BigEndian>(2 + bytes.len() as u32).unwrap();
                 cursor.write_u8(20).unwrap();
                 cursor.write_u8(0).unwrap();
-                cursor.write_all(&bytes);
+                cursor.write_all(&bytes).unwrap();
             }
             MessagePeer::Extension(ExtendedMessage::Message { id, buffer }) => {
 
@@ -329,7 +324,7 @@ impl Peer {
             MessagePeer::Unknown { .. } => unreachable!(),
         }
 
-        cursor.flush();
+        cursor.flush().unwrap();
     }
 
     fn writer(&mut self) -> &mut TcpStream {
@@ -344,21 +339,21 @@ impl Peer {
         use futures::task::{Context, Poll};
         use futures::{future, pin_mut};
 
-        let mut msgs = self.read_messages();
+        let msgs = self.read_messages();
         pin_mut!(msgs); // Pin on the stack
 
         // assert_unpin(&msgs);
         // assert_unpin(&cmds);
         // assert_fused_future();
 
-        let mut fun = |cx: &mut Context<'_>| {
+        let fun = |cx: &mut Context<'_>| {
             match FutureExt::poll_unpin(&mut msgs, cx).map(PeerWaitEvent::Peer) {
                 v @ Poll::Ready(_) => return v,
                 _ => {}
             }
 
             match FutureExt::poll_unpin(&mut cmds, cx).map(PeerWaitEvent::Supervisor) {
-                v @ Poll::Ready(_) => return v,
+                v @ Poll::Ready(_) => v,
                 _ => Poll::Pending
             }
         };
@@ -387,7 +382,7 @@ impl Peer {
             use PeerWaitEvent::*;
 
             match self.wait_event(cmds.as_mut()).await {
-                Peer(Ok(n)) => {
+                Peer(Ok(_n)) => {
                     self.dispatch().await?;
                 }
                 Supervisor(command) => {
@@ -395,7 +390,7 @@ impl Peer {
 
                     match command {
                         Some(TasksAvailables) => {
-                            self.maybe_send_request().await;
+                            self.maybe_send_request().await?;
                         }
                         Some(Die) => {
                             return Ok(());
@@ -411,8 +406,6 @@ impl Peer {
                 }
             }
         }
-
-        Ok(())
     }
 
     async fn take_tasks(&mut self) -> Option<PieceToDownload> {
@@ -420,14 +413,14 @@ impl Peer {
             let t = self.tasks.read().await;
             self._tasks = Some(t.clone());
         }
-        self._tasks.as_mut().and_then(|mut t| t.pop_front())
+        self._tasks.as_mut().and_then(|t| t.pop_front())
     }
 
     async fn maybe_send_request(&mut self) -> Result<()> {
         if !self.am_choked() {
 
             let task = match self._tasks.as_mut() {
-                Some(mut tasks) => tasks.pop_front(),
+                Some(tasks) => tasks.pop_front(),
                 _ => self.take_tasks().await
             };
 
@@ -440,7 +433,7 @@ impl Peer {
                 // Steal others tasks
             }
         } else {
-            self.send_message(MessagePeer::Interested).await;
+            self.send_message(MessagePeer::Interested).await?;
             println!("[{}] SENT INTERESTED", self.id);
         }
         Ok(())
@@ -466,7 +459,7 @@ impl Peer {
         self.choked == Choke::Choked
     }
 
-    async fn dispatch<'a>(&'a mut self) -> Result<()> {
+    async fn dispatch(&mut self) -> Result<()> {
         use MessagePeer::*;
 
         let msg = MessagePeer::try_from(self.buffer.as_slice())?;
@@ -565,7 +558,7 @@ impl Peer {
                 println!("KEEP ALICE");
             }
             Extension(ExtendedMessage::Handshake(handshake)) => {
-                self.send_extended_handshake().await;
+                self.send_extended_handshake().await?;
                 //self.maybe_send_request().await;
                 //println!("[{}] EXTENDED HANDSHAKE SENT", self.id);
             }
@@ -587,7 +580,7 @@ impl Peer {
         Ok(())
     }
 
-    async fn send_extended_handshake(&mut self) {
+    async fn send_extended_handshake(&mut self) -> Result<()> {
         let mut extensions = HashMap::new();
         extensions.insert("ut_pex".to_string(), 1);
         let handshake = ExtendedHandshake {
@@ -596,7 +589,7 @@ impl Peer {
             p: Some(6801),
             ..Default::default()
         };
-        self.send_message(MessagePeer::Extension(ExtendedMessage::Handshake(handshake))).await;
+        self.send_message(MessagePeer::Extension(ExtendedMessage::Handshake(handshake))).await
     }
 
     async fn send_completed(&mut self, index: u32) {
@@ -656,7 +649,7 @@ impl Peer {
         cursor.write_all(&[19])?;
         cursor.write_all(b"BitTorrent protocol")?;
         cursor.write_all(&reserved[..])?;
-        cursor.write_all(self.pieces_detail.info_hash.as_ref());
+        cursor.write_all(self.pieces_detail.info_hash.as_ref())?;
         cursor.write_all(b"-RT1220sJ1Nna5rzWLd8")?;
 
         self.write(&handshake).await?;

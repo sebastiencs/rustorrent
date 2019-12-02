@@ -1,14 +1,11 @@
 
 use std::sync::Arc;
-use parking_lot::{RwLock, RwLockReadGuard};
-use async_std::prelude::*;
 use async_std::task;
 use async_std::sync as a_sync;
-use sha1::Sha1;
 use crossbeam_channel::Sender;
 use slab::Slab;
 
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::SocketAddr;
 
 use crate::actors::peer::{PeerId, Peer, PeerTask, PeerCommand, PeerExternId};
 use crate::metadata::Torrent;
@@ -17,7 +14,7 @@ use crate::pieces::{PieceInfo, Pieces, PieceBuffer, PieceToDownload};
 use crate::supervisors::tracker::TrackerSupervisor;
 use crate::utils::Map;
 use crate::errors::TorrentError;
-use crate::actors::sha1::{Sha1Workers, Sha1Task};
+use crate::actors::sha1::Sha1Task;
 
 struct PeerState {
     socket: SocketAddr,
@@ -170,7 +167,8 @@ impl TorrentSupervisor {
                     return;
                 }
             };
-            peer.start().await;
+            let result = peer.start().await;
+            println!("PEER TERMINATED: {:?}", result);
         });
     }
 
@@ -221,19 +219,21 @@ impl TorrentSupervisor {
 
                         let id = self.pending_pieces.insert(Arc::clone(&piece_buffer));
 
-                        self.sha1_workers.send(Sha1Task::CheckSum { piece_buffer, sum_metadata, id, addr });
+                        self.sha1_workers
+                            .send(Sha1Task::CheckSum { piece_buffer, sum_metadata, id, addr })
+                            .unwrap();
                     }
                 }
                 ResultChecksum { id, valid } => {
                     if self.pending_pieces.contains(id) {
                         let _piece = self.pending_pieces.remove(id);
                     };
-                    //println!("PIECE CHECKED FROM THE POOL: {}", valid);
+                    println!("PIECE CHECKED FROM THE POOL: {}", valid);
                 }
                 PeerDiscovered { addrs } => {
                     for addr in &addrs {
                         let mut peers = self.peers.values();
-                        if peers.position(|p| &p.socket == addr).is_none() {
+                        if !peers.any(|p| &p.socket == addr) {
                             self.connect_to_peers(addr);
                         }
                     }
@@ -243,7 +243,7 @@ impl TorrentSupervisor {
     }
 
     async fn find_pieces_for_peer(&mut self, peer: PeerId, update: &BitFieldUpdate) -> bool {
-        let mut pieces = &mut self.pieces;
+        let pieces = &mut self.pieces;
         let nblock_piece = self.pieces_detail.nblocks_piece;
         let block_size = self.pieces_detail.block_size;
 
