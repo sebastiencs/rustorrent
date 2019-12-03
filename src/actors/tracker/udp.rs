@@ -316,7 +316,7 @@ impl UdpConnection {
     }
 
     fn current_addr(&self) -> &Arc<SocketAddr> {
-        &self.addrs[self.current_addr]
+        &self.addrs[self.current_addr - 1]
     }
 
     async fn get_response<T>(&mut self, send_size: usize) -> Result<T>
@@ -517,7 +517,7 @@ impl TrackerConnection for UdpConnection {
 
         let resp: AnnounceResponse = self.get_response(n).await?;
 
-        *addr = self.current_addr;
+        *addr = self.current_addr - 1;
 
         Ok(resp.addrs)
     }
