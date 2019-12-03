@@ -13,7 +13,7 @@ pub fn sha1(data: &[u8]) -> [u8; 20] {
         }
     }
 
-    panic!("AAAA");
+    sha1::Sha1::from(data).digest().bytes()
 }
 
 #[cfg(test)]
