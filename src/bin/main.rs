@@ -21,17 +21,19 @@ use std::io::{self, Read};
 use rustorrent::session::Session;
 use rustorrent::de;
 use rustorrent::sha1::sha1;
+use rustorrent::utp;
+
+use async_std::net::{SocketAddr, IpAddr, Ipv4Addr};
 
 //fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
 fn main() {
 
-    // let mut msg = "The quick brown fox jumps over the lazy dog".to_string();
-    // let msg = msg.as_bytes();
-    let msg = Box::new(b"hello");
-    let msg = msg.as_ref();
-    //let msg = msg.as_bytes();
-    println!("RES: {:x?}", sha1(&msg[..]));
-    return;
+    async_std::task::block_on(async {
+        let mut socket = utp::socket::UtpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080)).await.unwrap();
+        socket.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
+    });
+
+    return ;
 
     let stdin = io::stdin();
     let mut buffer = Vec::new();
