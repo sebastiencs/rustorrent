@@ -2,6 +2,51 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub mod socket;
 
+#[derive(Debug, Copy, Clone)]
+pub struct Timestamp(u32);
+
+impl Timestamp {
+    pub fn now() -> Timestamp {
+        let since_epoch = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        since_epoch.subsec_micros().into()
+    }
+
+    pub fn delay(self, o: Timestamp) -> Delay {
+        if self.0 > o.0 {
+            (self.0 - o.0).into()
+        } else {
+            (o.0 - self.0).into()
+        }
+    }
+}
+
+impl From<u32> for Timestamp {
+    fn from(n: u32) -> Timestamp {
+        Timestamp(n)
+    }
+}
+
+impl Into<u32> for Timestamp {
+    fn into(self) -> u32 {
+        self.0
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct Delay(u32);
+
+impl From<u32> for Delay {
+    fn from(n: u32) -> Delay {
+        Delay(n)
+    }
+}
+
+impl Into<u32> for Delay {
+    fn into(self) -> u32 {
+        self.0
+    }
+}
+
 #[derive(Debug)]
 pub enum UtpError {
     Malformed,
@@ -161,11 +206,11 @@ impl Header {
     fn get_version(&self) -> u8 {
         self.type_version & 0xF
     }
-    fn get_timestamp(&self) -> u32 {
-        u32::from_be(self.timestamp_micro)
+    fn get_timestamp(&self) -> Timestamp {
+        u32::from_be(self.timestamp_micro).into()
     }
-    fn get_timestamp_diff(&self) -> u32 {
-        u32::from_be(self.timestamp_difference_micro)
+    fn get_timestamp_diff(&self) -> Delay {
+        u32::from_be(self.timestamp_difference_micro).into()
     }
     fn get_window_size(&self) -> u32 {
         u32::from_be(self.window_size)
@@ -181,11 +226,11 @@ impl Header {
     fn set_connection_id(&mut self, id: ConnectionId) {
         self.connection_id = u16::to_be(id.into());
     }
-    fn set_timestamp(&mut self, timestamp: u32) {
-        self.timestamp_micro = u32::to_be(timestamp);
+    fn set_timestamp(&mut self, timestamp: Timestamp) {
+        self.timestamp_micro = u32::to_be(timestamp.into());
     }
-    fn set_timestamp_diff(&mut self, timestamp: u32) {
-        self.timestamp_difference_micro = u32::to_be(timestamp);
+    fn set_timestamp_diff(&mut self, delay: Delay) {
+        self.timestamp_difference_micro = u32::to_be(delay.into());
     }
     fn set_window_size(&mut self, window_size: u32) {
         self.window_size = u32::to_be(window_size);
@@ -198,8 +243,7 @@ impl Header {
     }
 
     fn update_timestamp(&mut self) {
-        let since_epoch = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-        self.set_timestamp(since_epoch.subsec_micros());
+        self.set_timestamp(Timestamp::now());
     }
 
     pub fn new(packet_type: PacketType) -> Header {
