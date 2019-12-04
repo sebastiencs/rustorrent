@@ -32,18 +32,47 @@ impl Into<u32> for Timestamp {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
-pub struct Delay(u32);
+#[derive(Debug, Copy, Clone, Default, Ord, PartialEq, Eq, PartialOrd)]
+pub struct Delay(i64);
+
+impl Delay {
+    pub fn since(timestamp: Timestamp) -> Delay {
+        let now = Timestamp::now();
+        now.delay(timestamp)
+    }
+
+    pub fn infinity() -> Delay {
+        Delay(i64::max_value())
+    }
+
+    pub fn as_num(&self) -> i64 {
+        self.0
+    }
+}
+
+impl Sub for Delay {
+    type Output = Delay;
+
+    fn sub(self, other: Delay) -> Delay {
+        Delay(self.0 - other.0)
+    }
+}
 
 impl From<u32> for Delay {
     fn from(n: u32) -> Delay {
+        Delay(n as i64)
+    }
+}
+
+impl From<i64> for Delay {
+    fn from(n: i64) -> Delay {
         Delay(n)
     }
 }
 
 impl Into<u32> for Delay {
     fn into(self) -> u32 {
-        self.0
+        self.0 as u32
     }
 }
 
@@ -339,12 +368,20 @@ pub struct Packet {
     payload: Payload
 }
 
+impl Deref for Packet {
+    type Target = Header;
+
+    fn deref(&self) -> &Header {
+        &self.header
+    }
+}
+
 pub struct PacketRef<'a> {
     packet_ref: &'a Packet,
     len: usize
 }
 
-use std::ops::{Deref, Add};
+use std::ops::{Deref, Add, Sub};
 
 impl Deref for PacketRef<'_> {
     type Target = Header;

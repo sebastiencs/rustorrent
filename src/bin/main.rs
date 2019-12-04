@@ -29,7 +29,9 @@ use async_std::net::{SocketAddr, IpAddr, Ipv4Addr};
 fn main() {
 
     async_std::task::block_on(async {
-        let mut socket = utp::socket::UtpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080)).await.unwrap();
+        let mut socket = utp::socket::UtpSocket::bind(
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080)
+        ).await.unwrap();
         socket.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
     });
 
