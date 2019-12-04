@@ -89,9 +89,11 @@ impl UtpSocket {
         let mut header = Header::new(PacketType::Syn);
         header.set_connection_id(self.recv_id);
         header.set_seq_number(self.seq_number);
+        self.seq_number += 1;
 
         for _ in 0..3 {
             header.update_timestamp();
+            println!("SENDING {:#?}", header);
 
             self.udp.send(header.as_bytes()).await?;
 
@@ -127,8 +129,11 @@ impl UtpSocket {
             (PacketType::Syn, State::None) => {
                 self.state = State::Connected;
                 // Set self.remote
-                self.ack_number = packet.get_seq_number();
+                let connection_id = packet.get_connection_id();
+                self.recv_id = connection_id + 1;
+                self.send_id = connection_id;
                 self.seq_number = rand::thread_rng().gen();
+                self.ack_number = packet.get_seq_number();
             }
             (PacketType::Syn, _) => {
             }
@@ -150,6 +155,16 @@ impl UtpSocket {
             (PacketType::Reset, _) => {
             }
         }
+
+        Ok(())
+    }
+
+    async fn send_ack(&mut self) -> Result<()> {
+        let mut header = Header::new(PacketType::State);
+        header.set_connection_id(self.send_id);
+        header.set_seq_number(self.seq_number);
+        header.set_ack_number(self.ack_number);
+        self.seq_number += 1;
 
         Ok(())
     }

@@ -198,21 +198,15 @@ impl Header {
     }
 
     fn update_timestamp(&mut self) {
-        let since_the_epoch = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-        self.set_timestamp(u32::try_from(since_the_epoch.as_micros() & 0xFFFF).unwrap())
+        let since_epoch = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        self.set_timestamp(since_epoch.subsec_micros());
     }
 
     pub fn new(packet_type: PacketType) -> Header {
         let packet_type: u8 = packet_type.into();
         Header {
             type_version: packet_type << 4 | 1,
-            extension: 0,
-            connection_id: 0,
-            timestamp_micro: 0,
-            timestamp_difference_micro: 0,
-            window_size: 0,
-            seq_nr: 0,
-            ack_nr: 0,
+            ..Default::default()
         }
     }
 
@@ -268,6 +262,14 @@ impl Into<u16> for ConnectionId {
     }
 }
 
+impl Add<u16> for ConnectionId {
+    type Output = Self;
+
+    fn add(self, o: u16) -> ConnectionId {
+        ConnectionId(self.0 + o)
+    }
+}
+
 use rand::Rng;
 
 impl ConnectionId {
@@ -298,7 +300,7 @@ pub struct PacketRef<'a> {
     len: usize
 }
 
-use std::ops::Deref;
+use std::ops::{Deref, Add};
 
 impl Deref for PacketRef<'_> {
     type Target = Header;
