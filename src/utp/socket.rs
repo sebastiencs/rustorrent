@@ -6,7 +6,7 @@ use rand::Rng;
 use std::time::{Duration, Instant};
 use std::{iter::Iterator, collections::VecDeque};
 
-use super::{ConnectionId, Result, UtpError, Packet, PacketRef, PacketType, Header, Delay, Timestamp};
+use super::{ConnectionId, Result, UtpError, Packet, PacketRef, PacketType, Header, Delay, Timestamp, SequenceNumber};
 use crate::udp_ext::WithTimeout;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
@@ -59,8 +59,8 @@ pub struct UtpSocket {
     send_id: ConnectionId,
     // seq_nr: u16,
     state: State,
-    ack_number: u16,
-    seq_number: u16,
+    ack_number: SequenceNumber,
+    seq_number: SequenceNumber,
     delay: Delay,
 
     /// Packets sent but we didn't receive an ack for them
@@ -100,8 +100,8 @@ impl UtpSocket {
             base_delays,
             remote: None,
             state: State::None,
-            ack_number: 0,
-            seq_number: 1,
+            ack_number: SequenceNumber::zero(),
+            seq_number: SequenceNumber::random(),
             delay: Delay::default(),
             current_delays: VecDeque::with_capacity(16),
             last_rollover: Instant::now(),
@@ -226,7 +226,7 @@ impl UtpSocket {
                 let connection_id = packet.get_connection_id();
                 self.recv_id = connection_id + 1;
                 self.send_id = connection_id;
-                self.seq_number = rand::thread_rng().gen();
+                self.seq_number = SequenceNumber::random();
                 self.ack_number = packet.get_seq_number();
             }
             (PacketType::Syn, _) => {
@@ -237,7 +237,7 @@ impl UtpSocket {
                 // https://engineering.bittorrent.com/2015/08/27/drdos-udp-based-protocols-and-bittorrent/
                 // https://www.usenix.org/system/files/conference/woot15/woot15-paper-adamsky.pdf
                 // https://github.com/bittorrent/libutp/commit/13d33254262d46b638d35c4bc1a2f76cea885760
-                self.ack_number = packet.get_seq_number().wrapping_sub(1);
+                self.ack_number = packet.get_seq_number() - 1;
 
                 println!("CONNECTED !", );
             }
@@ -334,7 +334,7 @@ impl UtpSocket {
     fn handle_state(&mut self, packet: &PacketRef<'_>) {
         let ack_number = packet.get_ack_number();
         let ack_packet = self.inflight_packets.iter().find(|p| p.get_seq_number() == ack_number);
-        let ack_packets = self.inflight_packets.iter().filter(|p| p.get_seq_number() <= ack_number);
+        let ack_packets = self.inflight_packets.iter().filter(|p| p.get_seq_number().cmp_less_equal(ack_number));
     }
 
     fn handle_ack(&mut self, packet: &PacketRef<'_>) {

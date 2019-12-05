@@ -1,13 +1,87 @@
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::cmp::{PartialOrd, Ord};
 
 pub mod socket;
 
+/// A safe type using wrapping_{add,sub} for +/-/cmp operations
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct SequenceNumber(u16);
+
+impl SequenceNumber {
+    pub fn random() -> SequenceNumber {
+        SequenceNumber(rand::thread_rng().gen())
+    }
+
+    pub fn zero() -> SequenceNumber {
+        SequenceNumber(0)
+    }
+
+    pub(self) fn to_be(self) -> u16 {
+        u16::to_be(self.0)
+    }
+
+    pub(self) fn from_be(n: u16) -> SequenceNumber {
+        SequenceNumber(u16::from_be(n))
+    }
+
+    /// Compare self with other, with consideration to wrapping.
+    /// We can't implement PartialOrd because it doesn't satisfy
+    /// antisymmetry
+    pub fn cmp_less(self, other: SequenceNumber) -> bool {
+	    let dist_down = self - other;
+	    let dist_up = other - self;
+
+	    dist_up.0 < dist_down.0
+    }
+
+    /// Compare self with other, with consideration to wrapping.
+    /// We can't implement PartialOrd because it doesn't satisfy
+    /// antisymmetry
+    pub fn cmp_less_equal(self, other: SequenceNumber) -> bool {
+	    let dist_down = self - other;
+	    let dist_up = other - self;
+
+	    dist_up.0 <= dist_down.0
+    }
+}
+
+impl Add<u16> for SequenceNumber {
+    type Output = Self;
+
+    fn add(self, n: u16) -> Self {
+        Self(self.0.wrapping_add(n))
+    }
+}
+impl AddAssign<u16> for SequenceNumber {
+    fn add_assign(&mut self, other: u16) {
+        // Use Add impl, with wrapping
+        *self = *self + other;
+    }
+}
+
+impl Sub<u16> for SequenceNumber {
+    type Output = Self;
+
+    fn sub(self, n: u16) -> Self {
+        Self(self.0.wrapping_sub(n))
+    }
+}
+impl Sub<SequenceNumber> for SequenceNumber {
+    type Output = Self;
+
+    fn sub(self, n: SequenceNumber) -> Self {
+        Self(self.0.wrapping_sub(n.0))
+    }
+}
+impl SubAssign<u16> for SequenceNumber {
+    fn sub_assign(&mut self, other: u16) {
+        // Use Sub impl, with wrapping
+        *self = *self - other;
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 pub struct Timestamp(u32);
-
-use std::time::Instant;
-
-use coarsetime;
 
 impl Timestamp {
     pub fn now() -> Timestamp {
@@ -256,11 +330,11 @@ impl Header {
     fn get_window_size(&self) -> u32 {
         u32::from_be(self.window_size)
     }
-    fn get_seq_number(&self) -> u16 {
-        u16::from_be(self.seq_nr)
+    fn get_seq_number(&self) -> SequenceNumber {
+        SequenceNumber::from_be(self.seq_nr)
     }
-    fn get_ack_number(&self) -> u16 {
-        u16::from_be(self.ack_nr)
+    fn get_ack_number(&self) -> SequenceNumber {
+        SequenceNumber::from_be(self.ack_nr)
     }
 
     // Setters
@@ -276,11 +350,11 @@ impl Header {
     fn set_window_size(&mut self, window_size: u32) {
         self.window_size = u32::to_be(window_size);
     }
-    fn set_seq_number(&mut self, seq_number: u16) {
-        self.seq_nr = u16::to_be(seq_number);
+    fn set_seq_number(&mut self, seq_number: SequenceNumber) {
+        self.seq_nr = seq_number.to_be();
     }
-    fn set_ack_number(&mut self, ack_number: u16) {
-        self.ack_nr = u16::to_be(ack_number);
+    fn set_ack_number(&mut self, ack_number: SequenceNumber) {
+        self.ack_nr = ack_number.to_be();
     }
 
     fn update_timestamp(&mut self) {
@@ -427,7 +501,7 @@ pub struct PacketRef<'a> {
     len: usize
 }
 
-use std::ops::{Deref, DerefMut, Add, Sub};
+use std::ops::{Deref, DerefMut, Add, Sub, AddAssign, SubAssign};
 
 impl Deref for PacketRef<'_> {
     type Target = Header;
