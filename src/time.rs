@@ -7,7 +7,7 @@
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 #[allow(non_camel_case_types)]
-fn get_time() -> (u64, u64) {
+pub fn get_time() -> (u64, u64) {
     use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 
     extern "C" {
@@ -72,7 +72,7 @@ fn get_time() -> (u64, u64) {
 }
 
 #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
-fn get_time() -> (u64, u64) {
+pub fn get_time() -> (u64, u64) {
     let mut t = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,
@@ -100,7 +100,7 @@ fn get_time() -> (u64, u64) {
 }
 
 #[cfg(windows)]
-fn get_times() -> (u64, u64) {
+pub fn get_times() -> (u64, u64) {
     extern "system" {
         pub fn GetTickCount64() -> libc::c_ulonglong;
     }

@@ -13,3 +13,4 @@ pub mod bencode;
 pub mod udp_ext;
 pub mod sha1;
 pub mod utp;
+pub mod time;

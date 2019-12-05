@@ -5,11 +5,23 @@ pub mod socket;
 #[derive(Debug, Copy, Clone)]
 pub struct Timestamp(u32);
 
+use std::time::Instant;
+
+use coarsetime;
+
 impl Timestamp {
     pub fn now() -> Timestamp {
-        let since_epoch = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-        since_epoch.subsec_micros().into()
+        use crate::time;
+
+        let (sec, nano) = time::get_time();
+        Timestamp((sec * 1_000_000 + nano / 1000) as u32)
+        // let since_epoch = coarsetime::Clock::now_since_epoch();
+        // println!("SINCE_EPOCH {:?}", since_epoch);
+        // let now = since_epoch.as_secs() * 1_000_000 + (since_epoch.subsec_nanos() / 1000) as u64;
+        // Timestamp(now as u32)
     }
+
+    // return uint64(ts.tv_sec) * 1000000 + uint64(ts.tv_nsec) / 1000;
 
     pub fn delay(self, o: Timestamp) -> Delay {
         if self.0 > o.0 {
@@ -358,8 +370,20 @@ impl ConnectionId {
 
 #[repr(C, packed)]
 struct Payload {
-    payload: [u8; 1500],
-    len: u16
+    data: [u8; 1500],
+    len: usize
+}
+
+impl Payload {
+    fn new(data: &[u8]) -> Payload {
+        let data_len = data.len();
+        let mut payload = [0; 1500];
+        payload[..data_len].copy_from_slice(data);
+        Payload {
+            data: payload,
+            len: data_len
+        }
+    }
 }
 
 #[repr(C, packed)]
@@ -376,12 +400,34 @@ impl Deref for Packet {
     }
 }
 
+impl DerefMut for Packet {
+    //type Target = Header;
+
+    fn deref_mut(&mut self) -> &mut Header {
+        &mut self.header
+    }
+}
+
+impl Packet {
+    pub fn new(data: &[u8]) -> Packet {
+        Packet {
+            header: Header::default(),
+            payload: Payload::new(data)
+        }
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        let slice = unsafe { &*(self as *const Packet as *const [u8; std::mem::size_of::<Packet>()]) };
+        &slice[..std::mem::size_of::<Header>() + self.payload.len]
+    }
+}
+
 pub struct PacketRef<'a> {
     packet_ref: &'a Packet,
     len: usize
 }
 
-use std::ops::{Deref, Add, Sub};
+use std::ops::{Deref, DerefMut, Add, Sub};
 
 impl Deref for PacketRef<'_> {
     type Target = Header;

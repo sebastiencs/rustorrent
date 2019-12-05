@@ -159,6 +159,7 @@ impl UtpSocket {
         };
 
         if let Some(len) = len {
+            println!("CONNECTED", );
             let packet = PacketRef::ref_from_buffer(&buffer[..len])?;
             self.dispatch(packet).await?;
             return Ok(());
@@ -167,8 +168,54 @@ impl UtpSocket {
         Err(Error::new(ErrorKind::TimedOut, "connect timed out").into())
     }
 
+    pub async fn send(&mut self, data: &[u8]) -> Result<usize> {
+        let data = vec![1; 1000];
+        let mut packet = Packet::new(&data);
+        let mut seq_number = self.seq_number;
+        packet.set_ack_number(self.ack_number);
+        packet.set_connection_id(self.send_id);
+        // self.udp.send(data).await?;
+
+        let mut len = None;
+        let mut buffer = [0; 1500];
+
+        for _ in 0..3 {
+            packet.update_timestamp();
+            packet.set_seq_number(seq_number);
+            seq_number += 1;
+            println!("SENDING {:#?}", &(&*packet));
+
+            // println!("SENDING BUFFER", );
+            self.udp.send(packet.as_bytes()).await?;
+
+            match self.udp.recv_from_timeout(&mut buffer, Duration::from_secs(1)).await {
+                Ok((n, addr)) => {
+                    len = Some(n);
+                    self.remote = Some(addr);
+                    self.state = State::SynSent;
+                    break;
+                }
+                Err(ref e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {
+                    continue;
+                }
+                Err(e) => {
+                    return Err(e.into());
+                }
+            }
+        };
+
+        println!("RECEIVED {:?}", len);
+        if let Some(len) = len {
+            let packet = PacketRef::ref_from_buffer(&buffer[..len])?;
+            self.dispatch(packet).await?;
+            return Ok(len);
+        }
+
+        Ok(0)
+    }
+
     async fn dispatch(&mut self, packet: PacketRef<'_>) -> Result<()> {
-        println!("HEADER: {:#?}", packet.header());
+        println!("DISPATCH HEADER: {:#?}", packet.header());
 
         self.delay = Delay::since(packet.get_timestamp());
 
@@ -187,6 +234,8 @@ impl UtpSocket {
             (PacketType::State, State::SynSent) => {
                 self.state = State::Connected;
                 self.ack_number = packet.get_seq_number();
+                self.seq_number = packet.get_seq_number() + 1;
+
                 println!("CONNECTED !", );
             }
             (PacketType::State, State::Connected) => {
