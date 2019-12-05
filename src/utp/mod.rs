@@ -242,6 +242,8 @@ impl Into<u8> for PacketType {
     }
 }
 
+pub const HEADER_SIZE: usize = std::mem::size_of::<Header>();
+
 /// 0       4       8               16              24              32
 /// +-------+-------+---------------+---------------+---------------+
 /// | type  | ver   | extension     | connection_id                 |
@@ -458,6 +460,10 @@ impl Payload {
             len: data_len
         }
     }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
 }
 
 #[repr(C, packed)]
@@ -488,6 +494,10 @@ impl Packet {
             header: Header::default(),
             payload: Payload::new(data)
         }
+    }
+
+    pub fn size(&self) -> usize {
+        self.payload.len() + HEADER_SIZE
     }
 
     pub fn as_bytes(&self) -> &[u8] {
@@ -526,3 +536,32 @@ impl<'a> PacketRef<'a> {
         &self.packet_ref.header
     }
 }
+
+// Following constants found in libutp
+
+pub const ETHERNET_MTU: usize = 1500;
+pub const IPV4_HEADER_SIZE: usize = 20;
+pub const IPV6_HEADER_SIZE: usize = 40;
+pub const UDP_HEADER_SIZE: usize = 8;
+pub const GRE_HEADER_SIZE: usize = 24;
+pub const PPPOE_HEADER_SIZE: usize = 8;
+pub const MPPE_HEADER_SIZE: usize = 2;
+// packets have been observed in the wild that were fragmented
+// with a payload of 1416 for the first fragment
+// There are reports of routers that have MTU sizes as small as 1392
+pub const FUDGE_HEADER_SIZE: usize = 36;
+pub const TEREDO_MTU: usize = 1280;
+
+pub const UDP_IPV4_OVERHEAD: usize = (IPV4_HEADER_SIZE + UDP_HEADER_SIZE);
+pub const UDP_IPV6_OVERHEAD: usize = (IPV6_HEADER_SIZE + UDP_HEADER_SIZE);
+pub const UDP_TEREDO_OVERHEAD: usize = (UDP_IPV4_OVERHEAD + UDP_IPV6_OVERHEAD);
+
+pub const UDP_IPV4_MTU: usize =
+    (ETHERNET_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE - GRE_HEADER_SIZE
+     - PPPOE_HEADER_SIZE - MPPE_HEADER_SIZE - FUDGE_HEADER_SIZE);
+
+pub const UDP_IPV6_MTU: usize =
+    (ETHERNET_MTU - IPV6_HEADER_SIZE - UDP_HEADER_SIZE - GRE_HEADER_SIZE
+     - PPPOE_HEADER_SIZE - MPPE_HEADER_SIZE - FUDGE_HEADER_SIZE);
+
+pub const UDP_TEREDO_MTU: usize = (TEREDO_MTU - IPV6_HEADER_SIZE - UDP_HEADER_SIZE);

@@ -5,8 +5,13 @@ use rand::Rng;
 
 use std::time::{Duration, Instant};
 use std::{iter::Iterator, collections::VecDeque};
+use std::iter;
 
-use super::{ConnectionId, Result, UtpError, Packet, PacketRef, PacketType, Header, Delay, Timestamp, SequenceNumber};
+use super::{
+    ConnectionId, Result, UtpError, Packet, PacketRef, PacketType,
+    Header, Delay, Timestamp, SequenceNumber, HEADER_SIZE,
+    UDP_IPV4_MTU, UDP_IPV6_MTU,
+};
 use crate::udp_ext::WithTimeout;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
@@ -63,6 +68,9 @@ pub struct UtpSocket {
     seq_number: SequenceNumber,
     delay: Delay,
 
+    /// advirtised window from the remote
+    remote_window: u32,
+
     /// Packets sent but we didn't receive an ack for them
     inflight_packets: VecDeque<Packet>,
 
@@ -88,9 +96,7 @@ impl UtpSocket {
         let (recv_id, send_id) = ConnectionId::make_ids();
 
         let mut base_delays = VecDeque::with_capacity(BASE_HISTORY);
-        for _ in 0..BASE_HISTORY {
-            base_delays.push_back(Delay::infinity());
-        }
+        base_delays.extend(iter::repeat(Delay::infinity()).take(BASE_HISTORY));
 
         UtpSocket {
             local,
@@ -111,6 +117,7 @@ impl UtpSocket {
             srtt: 0,
             rttvar: 0,
             inflight_packets: VecDeque::with_capacity(64),
+            remote_window: INIT_CWND * MSS,
         }
     }
 
@@ -169,49 +176,109 @@ impl UtpSocket {
         Err(Error::new(ErrorKind::TimedOut, "connect timed out").into())
     }
 
-    pub async fn send(&mut self, data: &[u8]) -> Result<usize> {
-        let mut packet = Packet::new(&data);
-        let mut seq_number = self.seq_number;
+    pub async fn send(&mut self, data: &[u8]) -> Result<()> {
+        let packet_size = self.packet_size();
+        let packets = data.chunks(packet_size).map(Packet::new);
+
+        for packet in packets {
+            self.send_packet(packet).await?;
+        }
+
+        self.wait_for_reception().await
+    }
+
+    async fn wait_for_reception(&mut self) -> Result<()> {
+        let last_seq = self.seq_number - 1;
+
+        let mut is_last_acked = self.is_packet_acked(last_seq);
+
+        while !is_last_acked {
+            println!("LOOP IS ACKED", );
+            self.receive_packet().await?;
+            is_last_acked = self.is_packet_acked(last_seq);
+        }
+
+        Ok(())
+    }
+
+    fn is_packet_acked(&self, n: SequenceNumber) -> bool {
+        !self.inflight_packets.iter().any(|p| p.get_seq_number() == n)
+    }
+
+    async fn send_packet(&mut self, mut packet: Packet) -> Result<()> {
+
+        let packet_size = packet.size();
+        let mut inflight_size = self.inflight_size();
+        let mut window = self.cwnd.min(self.remote_window) as usize;
+
+        while packet_size + inflight_size > window {
+            self.receive_packet().await?;
+
+            inflight_size = self.inflight_size();
+            window = self.cwnd.min(self.remote_window) as usize;
+        }
+
         packet.set_ack_number(self.ack_number);
+        packet.set_seq_number(self.seq_number);
         packet.set_connection_id(self.send_id);
         packet.set_window_size(1_048_576);
+        self.seq_number += 1;
+        packet.update_timestamp();
 
-        let mut len = None;
+        println!("SENDING {:#?}", &*packet);
+
+        self.udp.send(packet.as_bytes()).await?;
+
+        self.inflight_packets.push_back(packet);
+
+        Ok(())
+    }
+
+    async fn receive_packet(&mut self) -> Result<()> {
         let mut buffer = [0; 1500];
 
+        let mut timeout = self.congestion_timeout;
+        let mut len = None;
+
         for _ in 0..3 {
-            packet.update_timestamp();
-            packet.set_seq_number(seq_number);
-            seq_number += 1;
-            println!("SENDING {:#?}", &(&*packet));
-
-            // println!("SENDING BUFFER", );
-            self.udp.send(packet.as_bytes()).await?;
-
-            match self.udp.recv_from_timeout(&mut buffer, Duration::from_secs(1)).await {
-                Ok((n, addr)) => {
+            match self.udp.recv_timeout(&mut buffer, timeout).await {
+                Ok(n) => {
                     len = Some(n);
-                    self.remote = Some(addr);
-                    self.state = State::SynSent;
                     break;
                 }
                 Err(ref e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {
+                    timeout *= 2;
                     continue;
                 }
                 Err(e) => {
                     return Err(e.into());
                 }
             }
-        };
+        }
 
-        println!("RECEIVED {:?}", len);
         if let Some(len) = len {
             let packet = PacketRef::ref_from_buffer(&buffer[..len])?;
             self.dispatch(packet).await?;
-            return Ok(len);
-        }
+            return Ok(());
+        };
 
-        Err(Error::new(ErrorKind::TimedOut, "Send timed out").into())
+        Err(Error::new(ErrorKind::TimedOut, "timed out").into())
+    }
+
+    /// Returns the number of bytes currently in flight (sent but not acked)
+    fn inflight_size(&self) -> usize {
+        self.inflight_packets.iter().map(Packet::size).sum()
+    }
+
+    fn packet_size(&self) -> usize {
+        let is_ipv4 = self.remote.map(|r| r.is_ipv4()).unwrap_or(true);
+
+        // TODO: Change this when MTU discovery is implemented
+        if is_ipv4 {
+            UDP_IPV4_MTU - HEADER_SIZE
+        } else {
+            UDP_IPV6_MTU - HEADER_SIZE
+        }
     }
 
     async fn dispatch(&mut self, packet: PacketRef<'_>) -> Result<()> {
@@ -238,7 +305,7 @@ impl UtpSocket {
                 // https://www.usenix.org/system/files/conference/woot15/woot15-paper-adamsky.pdf
                 // https://github.com/bittorrent/libutp/commit/13d33254262d46b638d35c4bc1a2f76cea885760
                 self.ack_number = packet.get_seq_number() - 1;
-
+                self.remote_window = packet.get_window_size();
                 println!("CONNECTED !", );
             }
             (PacketType::State, State::Connected) => {
