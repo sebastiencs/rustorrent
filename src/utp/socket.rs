@@ -134,6 +134,7 @@ impl UtpSocket {
         let mut header = Header::new(PacketType::Syn);
         header.set_connection_id(self.recv_id);
         header.set_seq_number(self.seq_number);
+        header.set_window_size(1_048_576);
         self.seq_number += 1;
 
         for _ in 0..3 {
@@ -169,12 +170,11 @@ impl UtpSocket {
     }
 
     pub async fn send(&mut self, data: &[u8]) -> Result<usize> {
-        let data = vec![1; 1000];
         let mut packet = Packet::new(&data);
         let mut seq_number = self.seq_number;
         packet.set_ack_number(self.ack_number);
         packet.set_connection_id(self.send_id);
-        // self.udp.send(data).await?;
+        packet.set_window_size(1_048_576);
 
         let mut len = None;
         let mut buffer = [0; 1500];
@@ -211,7 +211,7 @@ impl UtpSocket {
             return Ok(len);
         }
 
-        Ok(0)
+        Err(Error::new(ErrorKind::TimedOut, "Send timed out").into())
     }
 
     async fn dispatch(&mut self, packet: PacketRef<'_>) -> Result<()> {
@@ -233,8 +233,11 @@ impl UtpSocket {
             }
             (PacketType::State, State::SynSent) => {
                 self.state = State::Connected;
-                self.ack_number = packet.get_seq_number();
-                self.seq_number = packet.get_seq_number() + 1;
+                // Related:
+                // https://engineering.bittorrent.com/2015/08/27/drdos-udp-based-protocols-and-bittorrent/
+                // https://www.usenix.org/system/files/conference/woot15/woot15-paper-adamsky.pdf
+                // https://github.com/bittorrent/libutp/commit/13d33254262d46b638d35c4bc1a2f76cea885760
+                self.ack_number = packet.get_seq_number().wrapping_sub(1);
 
                 println!("CONNECTED !", );
             }
