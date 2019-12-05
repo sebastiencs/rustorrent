@@ -118,8 +118,9 @@ impl Into<u32> for Timestamp {
     }
 }
 
-#[derive(Debug, Copy, Clone, Default, Ord, PartialEq, Eq, PartialOrd)]
-pub struct Delay(i64);
+//#[derive(Debug, Copy, Clone, Default, Ord, PartialEq, Eq, PartialOrd)]
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
+pub struct Delay(u32);
 
 impl Delay {
     pub fn since(timestamp: Timestamp) -> Delay {
@@ -128,15 +129,17 @@ impl Delay {
     }
 
     pub fn infinity() -> Delay {
-        Delay(i64::max_value())
+        Delay(u32::max_value())
     }
 
-    pub fn as_num(&self) -> i64 {
-        self.0
-    }
+    /// Compare self with other, with consideration to wrapping.
+    /// We can't implement PartialOrd because it doesn't satisfy
+    /// antisymmetry
+    pub fn cmp_less(self, other: Delay) -> bool {
+	    let dist_down = self - other;
+	    let dist_up = other - self;
 
-    pub fn zero() -> Delay {
-        Delay(0)
+	    dist_up.0 < dist_down.0
     }
 }
 
@@ -144,21 +147,21 @@ impl Sub for Delay {
     type Output = Delay;
 
     fn sub(self, other: Delay) -> Delay {
-        Delay(self.0 - other.0)
+        Delay(self.0.saturating_sub(other.0))
     }
 }
 
 impl From<u32> for Delay {
     fn from(n: u32) -> Delay {
-        Delay(n as i64)
-    }
-}
-
-impl From<i64> for Delay {
-    fn from(n: i64) -> Delay {
         Delay(n)
     }
 }
+
+// impl From<i64> for Delay {
+//     fn from(n: i64) -> Delay {
+//         Delay(n)
+//     }
+// }
 
 impl Into<u32> for Delay {
     fn into(self) -> u32 {
@@ -166,9 +169,73 @@ impl Into<u32> for Delay {
     }
 }
 
-impl Into<i64> for Delay {
-    fn into(self) -> i64 {
-        self.0
+use std::time::{Instant, Duration};
+
+#[derive(Debug)]
+struct DelayHistory {
+    /// Array of delays, 1 per minute
+    /// history[x] is the lowest delay in the minute x
+    history: [Delay; 20],
+    /// Index in `history` array
+    index: u8,
+    /// Number of delays in the current minute
+    ndelays: u16,
+    /// Lowest delay in the last 20 mins
+    lowest: Delay,
+    next_index_time: Instant,
+}
+
+impl DelayHistory {
+    fn new() -> DelayHistory {
+        DelayHistory {
+            history: [Delay::infinity(); 20],
+            index: 0,
+            ndelays: 0,
+            lowest: Delay::infinity(),
+            next_index_time: Instant::now() + Duration::from_secs(1),
+        }
+    }
+
+    pub fn get_lowest(&self) -> Delay {
+        self.lowest
+    }
+
+    pub fn add_delay(&mut self, delay: Delay) -> Delay {
+        self.ndelays = self.ndelays.saturating_add(1);
+
+        let index = self.index as usize;
+        if delay.cmp_less(self.lowest) {
+            self.lowest = delay;
+            self.history[index] = delay;
+        } else if delay.cmp_less(self.history[index]) {
+            self.history[index] = delay;
+        }
+
+        let value = delay - self.lowest;
+
+        if self.ndelays > 120 &&
+            self.next_index_time
+                .checked_duration_since(Instant::now())
+                .is_some()
+        {
+            self.next_index_time = Instant::now() + Duration::from_secs(1);
+            self.index = (self.index + 1) % self.history.len() as u8;
+            self.ndelays = 0;
+            self.history[self.index as usize] = delay;
+            self.lowest = self.lowest_in_history();
+        }
+
+        value
+    }
+
+    fn lowest_in_history(&self) -> Delay {
+        let mut lowest = self.history[0];
+        for delay in &self.history {
+            if delay.cmp_less(lowest) {
+                lowest = *delay;
+            }
+        }
+        lowest
     }
 }
 
@@ -518,7 +585,8 @@ impl Packet {
 
 pub struct PacketRef<'a> {
     packet_ref: &'a Packet,
-    len: usize
+    len: usize,
+    received_at: Timestamp,
 }
 
 use std::ops::{Deref, DerefMut, Add, Sub, AddAssign, SubAssign};
@@ -533,12 +601,15 @@ impl Deref for PacketRef<'_> {
 
 impl<'a> PacketRef<'a> {
     fn ref_from_buffer(buffer: &[u8]) -> Result<PacketRef> {
-        if buffer.len() < std::mem::size_of::<Header>() {
+        let received_at = Timestamp::now();
+        let len = buffer.len();
+        if len < std::mem::size_of::<Header>() {
             return Err(UtpError::Malformed);
         }
         Ok(PacketRef {
+            len,
+            received_at,
             packet_ref: unsafe { &*(buffer.as_ptr() as *const Packet) },
-            len: buffer.len()
         })
     }
 
