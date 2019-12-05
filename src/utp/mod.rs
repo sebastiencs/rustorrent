@@ -134,6 +134,10 @@ impl Delay {
     pub fn as_num(&self) -> i64 {
         self.0
     }
+
+    pub fn zero() -> Delay {
+        Delay(0)
+    }
 }
 
 impl Sub for Delay {
@@ -159,6 +163,12 @@ impl From<i64> for Delay {
 impl Into<u32> for Delay {
     fn into(self) -> u32 {
         self.0 as u32
+    }
+}
+
+impl Into<i64> for Delay {
+    fn into(self) -> i64 {
+        self.0
     }
 }
 

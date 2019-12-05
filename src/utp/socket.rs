@@ -52,7 +52,7 @@ const MIN_CWND: u32 = 2;
 /// Sender's Maximum Segment Size
 /// Set to Ethernet MTU
 const MSS: u32 = 1400;
-const TARGET: u32 = 100;
+const TARGET: u32 = 100_000; //100;
 const GAIN: u32 = 1;
 const ALLOWED_INCREASE: u32 = 1;
 
@@ -309,6 +309,7 @@ impl UtpSocket {
                 println!("CONNECTED !", );
             }
             (PacketType::State, State::Connected) => {
+                self.handle_state(packet);
                 // let current_delay = packet.get_timestamp_diff();
                 // let base_delay = std::cmp::min();
                 // current_delay = acknowledgement.delay
@@ -398,10 +399,15 @@ impl UtpSocket {
         self.congestion_timeout *= 2;
     }
 
-    fn handle_state(&mut self, packet: &PacketRef<'_>) {
+    fn handle_state(&mut self, packet: PacketRef<'_>) {
         let ack_number = packet.get_ack_number();
-        let ack_packet = self.inflight_packets.iter().find(|p| p.get_seq_number() == ack_number);
-        let ack_packets = self.inflight_packets.iter().filter(|p| p.get_seq_number().cmp_less_equal(ack_number));
+        let acked = self.inflight_packets.iter().find(|p| p.get_seq_number() == ack_number);
+        let ackeds = self.inflight_packets.iter().filter(|p| p.get_seq_number().cmp_less_equal(ack_number));
+
+        let nbytes = acked.unwrap().size();
+        println!("NBYTES {:?}", nbytes);
+
+        self.handle_ack(&packet);
     }
 
     fn handle_ack(&mut self, packet: &PacketRef<'_>) {
@@ -409,6 +415,7 @@ impl UtpSocket {
         //    was received and is updated later;
         // bytes_newly_acked is the number of bytes that this ACK
         //    newly acknowledges, and it MAY be set to MSS.
+        println!("BEFORE CWND {:?}", self.cwnd);
 
         let delay = packet.get_timestamp_diff();
         self.update_base_delay(delay);
@@ -416,20 +423,28 @@ impl UtpSocket {
 
         let queuing_delay = self.filter_current_delays()
             - *self.base_delays.iter().min().unwrap();
-        let queuing_delay: u32 = queuing_delay.into();
+        let queuing_delay: i64 = queuing_delay.into();
 
-        let off_target = (TARGET - queuing_delay) / TARGET;
+        let off_target = (TARGET as f64 - queuing_delay as f64) / TARGET as f64;
+
+        //println!("FILTER {:?}", self.filter_current_delays());
 
         // TODO: Compute bytes_newly_acked;
-        let bytes_newly_acked = 10;
+        let bytes_newly_acked = 61;
 
-        let cwnd = GAIN * off_target * bytes_newly_acked * MSS / self.cwnd;
-        let max_allowed_cwnd = self.flight_size + (ALLOWED_INCREASE * MSS);
+        let cwnd = self.cwnd as f64 + ((GAIN as f64 * off_target as f64 * bytes_newly_acked as f64 * MSS as f64) / self.cwnd as f64);
+        let max_allowed_cwnd = self.inflight_size() + (ALLOWED_INCREASE * MSS) as usize;
 
-        let cwnd = cwnd.min(max_allowed_cwnd);
+        println!("CWND {:?} MAX_ALLOWED {:?}", cwnd, max_allowed_cwnd);
+
+        let cwnd = (cwnd as u32).min(max_allowed_cwnd as u32);
+
+        println!("DELAY {:?} QUEUING_DELAY {:?} OFF_TARGET {:?}", delay, queuing_delay, off_target);
 
         self.cwnd = cwnd.max(MIN_CWND * MSS);
-        self.flight_size -= bytes_newly_acked;
+
+        println!("FINAL CWND {:?}", self.cwnd);
+        //self.flight_size -= bytes_newly_acked;
 
 //        let cwnd = std::cmp::min(cwnd, max_allowed_cwnd);
 
