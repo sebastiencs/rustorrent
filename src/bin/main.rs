@@ -42,9 +42,18 @@ fn main() {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080)
         ).await.unwrap();
         socket.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
-        socket.send(b"hello weshaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").await.unwrap();
-        socket.send(b"OKLM").await.unwrap();
-        socket.send(b"OUIOUIOUIOUIOUIOUIOUIOUI").await.unwrap();
+
+        let stdin = io::stdin();
+        let mut buffer = Vec::new();
+        let mut handle = stdin.lock();
+
+        handle.read_to_end(&mut buffer).unwrap();
+
+        socket.send(&buffer).await.unwrap();
+
+        // socket.send(b"hello weshaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").await.unwrap();
+        // socket.send(b"OKLM").await.unwrap();
+        // socket.send(b"OUIOUIOUIOUIOUIOUIOUIOUI").await.unwrap();
     });
 
     return ;
