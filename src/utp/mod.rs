@@ -95,6 +95,20 @@ impl Timestamp {
         // Timestamp(now as u32)
     }
 
+    pub(self) fn zero() -> Timestamp {
+        Timestamp(0)
+    }
+
+    pub fn elapsed_millis(self, now: Timestamp) -> u32 {
+        //let now = Timestamp::now().0 / 1000;
+        (now.0 / 1000) - (self.0 / 1000)
+    }
+
+    // pub fn elapsed_millis(self) -> u32 {
+    //     let now = Timestamp::now().0 / 1000;
+    //     now - (self.0 / 1000)
+    // }
+
     // return uint64(ts.tv_sec) * 1000000 + uint64(ts.tv_nsec) / 1000;
 
     pub fn delay(self, o: Timestamp) -> Delay {
@@ -479,9 +493,9 @@ impl Header {
         self.ack_nr = ack_number.to_be();
     }
 
-    fn update_timestamp(&mut self) {
-        self.set_timestamp(Timestamp::now());
-    }
+    // fn update_timestamp(&mut self) {
+    //     self.set_timestamp(Timestamp::now());
+    // }
 
     pub fn new(packet_type: PacketType) -> Header {
         let packet_type: u8 = packet_type.into();
@@ -595,6 +609,7 @@ pub struct Packet {
     seq_number: SequenceNumber,
     /// True if this packet was resent
     resent: bool,
+    last_sent: Timestamp,
 //    resent_time: Timestamp,
 }
 
@@ -628,8 +643,29 @@ impl Packet {
             header: Header::default(),
             payload: Payload::new(data),
             seq_number: SequenceNumber::zero(),
-            resent: false
+            resent: false,
+            last_sent: Timestamp::zero(),
         }
+    }
+
+    pub fn syn() -> Packet {
+        Packet {
+            header: Header::new(PacketType::Syn),
+            payload: Payload::new(&[]),
+            seq_number: SequenceNumber::zero(),
+            resent: false,
+            last_sent: Timestamp::zero(),
+        }
+    }
+
+    pub fn update_timestamp(&mut self) {
+        let timestamp = Timestamp::now();
+        self.set_timestamp(timestamp);
+        self.last_sent = timestamp;
+    }
+
+    pub fn millis_since_sent(&self, now: Timestamp) -> u32 {
+        self.last_sent.elapsed_millis(now)
     }
 
     pub fn set_packet_seq_number(&mut self, n: SequenceNumber) {
@@ -686,6 +722,10 @@ pub struct SelectiveAck<'a> {
 impl SelectiveAck<'_> {
     pub fn has_missing_ack(&self) -> bool {
         self.bitfield.iter().any(|b| b.count_zeros() > 0)
+    }
+
+    pub fn nackeds(&self) -> u32 {
+        self.bitfield.iter().map(|b| b.count_ones()).sum()
     }
 }
 

@@ -142,7 +142,7 @@ impl UtpSocket {
         let mut buffer = [0; 1500];
         let mut len = None;
 
-        let mut header = Header::new(PacketType::Syn);
+        let mut header = Packet::syn();
         header.set_connection_id(self.recv_id);
         header.set_seq_number(self.seq_number);
         header.set_window_size(1_048_576);
@@ -213,7 +213,17 @@ impl UtpSocket {
         // for packet in self.inflight_packets.iter() {
         //     self.resend_packet(packet.get_packet_seq_number()).await?;
         // }
-        let inflights = self.inflight_packets.iter().take(10).map(|p| p.get_packet_seq_number()).collect::<Vec<_>>();
+        let now = Timestamp::now();
+
+        let inflights = self.inflight_packets
+                            .iter()
+                            .filter(|p| {
+                                p.millis_since_sent(now) > 500
+                            })
+                            .map(|p| p.get_packet_seq_number())
+                            .collect::<Vec<_>>();
+
+        println!("EXPIRED PACKETS: {:?}", inflights);
 
         for packet in inflights {
             self.resend_packet(packet).await?;
@@ -243,10 +253,10 @@ impl UtpSocket {
                 Err(e) => return Err(e)
             }
             is_last_sent_acked = self.is_packet_acked(last_seq);
-            if self.ack_duplicate >= 3 {
-                println!("!!! DUPLICATE DETECTED HEEEEER !!!!", );
+            // if self.ack_duplicate >= 3 {
+                // println!("!!! DUPLICATE DETECTED HEEEEER !!!!", );
                 // self.resend_packet(self.last_ack + 1).await?;
-            }
+            // }
         }
 
         Ok(())
@@ -468,6 +478,7 @@ impl UtpSocket {
                 if select_ack.has_missing_ack() {
                     lost = true;
                 }
+                println!("SACKS ACKED: {:?}", select_ack.nackeds());
                 for missing_ack in select_ack {
                     match missing_ack {
                         SelectiveAckBit::Missing(seq_num) => {
@@ -516,7 +527,7 @@ impl UtpSocket {
                 packet.set_ack_number(self.ack_number);
                 packet.update_timestamp();
 
-                println!("== RESENDING START {:?} POS {:?} {:?}", start, packet_position, &**packet);
+                println!("== RESENDING {:?} CWND={:?} POS {:?} {:?}", start, self.cwnd, packet_position, &**packet);
 
                 self.udp.send(packet.as_bytes()).await?;
 
