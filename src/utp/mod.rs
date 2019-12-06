@@ -250,7 +250,8 @@ impl DelayHistory {
             self.lowest = self.history.iter().min().copied().unwrap();
         }
 
-        println!("VALUE {:?} FROM {:?} AND {:?}", value, delay, self.lowest);
+        //println!("HISTORY {:?}", self);
+        //println!("VALUE {:?} FROM {:?} AND {:?}", value, delay, self.lowest);
     }
 
     fn save_relative(&mut self, relative: RelativeDelay) {
@@ -280,6 +281,7 @@ pub enum UtpError {
     UnknownPacketType,
     WrongVersion,
     FamillyMismatch,
+    PacketLost,
     IO(std::io::Error)
 }
 
@@ -450,6 +452,12 @@ impl Header {
     fn get_ack_number(&self) -> SequenceNumber {
         SequenceNumber::from_be(self.ack_nr)
     }
+    fn get_extension_type(&self) -> ExtensionType {
+        ExtensionType::from(self.extension)
+    }
+    fn has_extension(&self) -> bool {
+        self.extension != 0
+    }
 
     // Setters
     fn set_connection_id(&mut self, id: ConnectionId) {
@@ -585,6 +593,17 @@ pub struct Packet {
     /// Used to read the seq_nr later, without the need to convert from
     /// big endian from the header
     seq_number: SequenceNumber,
+    /// True if this packet was resent
+    resent: bool,
+//    resent_time: Timestamp,
+}
+
+impl std::fmt::Debug for Packet {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("Packet")
+         .field("seq_nr", &self.seq_number)
+         .finish()
+    }
 }
 
 impl Deref for Packet {
@@ -609,6 +628,7 @@ impl Packet {
             header: Header::default(),
             payload: Payload::new(data),
             seq_number: SequenceNumber::zero(),
+            resent: false
         }
     }
 
@@ -633,6 +653,132 @@ impl Packet {
         let slice = unsafe { &*(self as *const Packet as *const [u8; std::mem::size_of::<Packet>()]) };
         &slice[..std::mem::size_of::<Header>() + self.payload.len]
     }
+
+    // pub fn iter_extensions(&self) -> ExtensionIterator {
+    //     ExtensionIterator::new(self)
+    // }
+}
+
+pub enum ExtensionType {
+    SelectiveAck,
+    None,
+    Unknown
+}
+
+impl From<u8> for ExtensionType {
+    fn from(byte: u8) -> ExtensionType {
+        match byte {
+            0 => ExtensionType::None,
+            1 => ExtensionType::SelectiveAck,
+            _ => ExtensionType::Unknown
+        }
+    }
+}
+
+pub struct SelectiveAck<'a> {
+    bitfield: &'a [u8],
+    byte_index: usize,
+    bit_index: u8,
+    ack_number: SequenceNumber,
+    first: bool,
+}
+
+impl SelectiveAck<'_> {
+    pub fn has_missing_ack(&self) -> bool {
+        self.bitfield.iter().any(|b| b.count_zeros() > 0)
+    }
+}
+
+// enum SelectiveAckBit {
+//     Ack(SequenceNumber),
+//     Missing(SequenceNumber)
+// }
+
+impl Iterator for SelectiveAck<'_> {
+    type Item = SequenceNumber;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.first {
+            for byte in self.bitfield {
+                println!("BITFIELD {:08b}", byte);
+            }
+            self.first = false;
+            return Some(self.ack_number + 1);
+        }
+        loop {
+            let byte = self.bitfield.get(self.byte_index).copied()?;
+            let bit = byte & (1 << self.bit_index);
+
+            let ack_number = self.ack_number
+                + self.byte_index as u16 * 8
+                + self.bit_index as u16
+                + 2;
+
+            if self.bit_index == 7 {
+                self.byte_index += 1;
+                self.bit_index = 0;
+            } else {
+                self.bit_index += 1;
+            }
+
+            if bit == 0 {
+                return Some(ack_number);
+            }
+        }
+    }
+}
+
+pub struct ExtensionIterator<'a> {
+    current_type: ExtensionType,
+    slice: &'a [u8],
+    ack_number: SequenceNumber,
+}
+
+impl<'a> ExtensionIterator<'a> {
+    pub fn new(packet: &'a PacketRef) -> ExtensionIterator<'a> {
+        let current_type = packet.get_extension_type();
+        let slice = &packet.packet_ref.payload.data[..packet.len - HEADER_SIZE];
+        let ack_number = packet.get_ack_number();
+
+        for byte in &packet.packet_ref.payload.data[..packet.len - HEADER_SIZE] {
+            println!("BYTE {:x}", byte);
+        }
+        ExtensionIterator { current_type, slice, ack_number }
+    }
+}
+
+impl<'a> Iterator for ExtensionIterator<'a> {
+    type Item = SelectiveAck<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.current_type {
+                ExtensionType::None => {
+                    return None;
+                }
+                ExtensionType::SelectiveAck => {
+                    let len = self.slice.get(1).copied()? as usize;
+                    let bitfield = &self.slice.get(2..2 + len)?;
+
+                    self.current_type = self.slice.get(0).copied()?.into();
+                    self.slice = &self.slice.get(2 + len..)?;
+
+                    return Some(SelectiveAck {
+                        bitfield,
+                        byte_index: 0,
+                        bit_index: 0,
+                        ack_number: self.ack_number,
+                        first: true
+                    });
+                }
+                _ => {
+                    self.current_type = self.slice.get(0).copied()?.into();
+                    let len = self.slice.get(1).copied()? as usize;
+                    self.slice = &self.slice.get(len..)?;
+                }
+            }
+        }
+    }
 }
 
 pub struct PacketRef<'a> {
@@ -655,7 +801,7 @@ impl<'a> PacketRef<'a> {
     fn ref_from_buffer(buffer: &[u8]) -> Result<PacketRef> {
         let received_at = Timestamp::now();
         let len = buffer.len();
-        if len < std::mem::size_of::<Header>() {
+        if len < HEADER_SIZE {
             return Err(UtpError::Malformed);
         }
         Ok(PacketRef {
@@ -667,6 +813,10 @@ impl<'a> PacketRef<'a> {
 
     fn header(&self) -> &Header {
         &self.packet_ref.header
+    }
+
+    pub fn iter_extensions(&self) -> ExtensionIterator {
+        ExtensionIterator::new(self)
     }
 }
 
