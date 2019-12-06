@@ -38,6 +38,8 @@ async-std = { version = "1", features = ["unstable"] }
 # async-std = "1"
 # surf = "1.0.3"
 
+fixed = { version = "0.4", default-features = false }
+
 # TODO: Make it optional
 packed_simd = { version = "0.3.3" }
 #packed_simd = { version = "0.3.3", features = ["into_bits"] }

@@ -119,6 +119,19 @@ impl Into<u32> for Timestamp {
 }
 
 #[derive(Debug, Copy, Clone, Default, Ord, PartialEq, Eq, PartialOrd)]
+pub struct RelativeDelay(u32);
+
+impl RelativeDelay {
+    fn infinity() -> RelativeDelay {
+        RelativeDelay(u32::max_value())
+    }
+
+    pub fn as_i64(self) -> i64 {
+        self.0 as i64
+    }
+}
+
+#[derive(Debug, Copy, Clone, Default, Ord, PartialEq, Eq, PartialOrd)]
 //#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 pub struct Delay(u32);
 
@@ -149,10 +162,10 @@ impl Delay {
 }
 
 impl Sub for Delay {
-    type Output = Delay;
+    type Output = RelativeDelay;
 
-    fn sub(self, other: Delay) -> Delay {
-        Delay(self.0.saturating_sub(other.0))
+    fn sub(self, other: Delay) -> RelativeDelay {
+        RelativeDelay(self.0.saturating_sub(other.0))
     }
 }
 
@@ -188,6 +201,10 @@ struct DelayHistory {
     /// Lowest delay in the last 20 mins
     lowest: Delay,
     next_index_time: Instant,
+    /// 3 lowest relative delays
+    last_relatives: [RelativeDelay; 3],
+    /// Index in `last_relatives`
+    index_relative: u8,
 }
 
 impl DelayHistory {
@@ -198,6 +215,8 @@ impl DelayHistory {
             ndelays: 0,
             lowest: Delay::infinity(),
             next_index_time: Instant::now() + Duration::from_secs(1),
+            last_relatives: [RelativeDelay::infinity(); 3],
+            index_relative: 0,
         }
     }
 
@@ -205,7 +224,7 @@ impl DelayHistory {
         self.lowest
     }
 
-    pub fn add_delay(&mut self, delay: Delay) -> Delay {
+    pub fn add_delay(&mut self, delay: Delay) {
         self.ndelays = self.ndelays.saturating_add(1);
 
         let index = self.index as usize;
@@ -217,6 +236,7 @@ impl DelayHistory {
         }
 
         let value = delay - self.lowest;
+        self.save_relative(value);
 
         if self.ndelays > 120 &&
             self.next_index_time
@@ -231,8 +251,16 @@ impl DelayHistory {
         }
 
         println!("VALUE {:?} FROM {:?} AND {:?}", value, delay, self.lowest);
+    }
 
-        value
+    fn save_relative(&mut self, relative: RelativeDelay) {
+        let index = self.index_relative as usize;
+        self.last_relatives[index] = relative;
+        self.index_relative = ((index + 1) % self.last_relatives.len()) as u8;
+    }
+
+    fn lowest_relative(&self) -> RelativeDelay {
+        self.last_relatives.iter().min().copied().unwrap()
     }
 
     // fn lowest_in_history(&self) -> Delay {
@@ -553,7 +581,10 @@ impl Payload {
 #[repr(C, packed)]
 pub struct Packet {
     header: Header,
-    payload: Payload
+    payload: Payload,
+    /// Used to read the seq_nr later, without the need to convert from
+    /// big endian from the header
+    seq_number: SequenceNumber,
 }
 
 impl Deref for Packet {
@@ -576,8 +607,22 @@ impl Packet {
     pub fn new(data: &[u8]) -> Packet {
         Packet {
             header: Header::default(),
-            payload: Payload::new(data)
+            payload: Payload::new(data),
+            seq_number: SequenceNumber::zero(),
         }
+    }
+
+    pub fn set_packet_seq_number(&mut self, n: SequenceNumber) {
+        self.header.set_seq_number(n);
+        self.seq_number = n;
+    }
+
+    pub fn get_packet_seq_number(&self) -> SequenceNumber {
+        self.seq_number
+    }
+
+    pub fn is_seq_less_equal(&self, n: SequenceNumber) -> bool {
+        self.seq_number.cmp_less_equal(n)
     }
 
     pub fn size(&self) -> usize {

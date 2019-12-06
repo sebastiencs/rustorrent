@@ -2,6 +2,7 @@
 use async_std::net::{UdpSocket, SocketAddr};
 use async_std::io::{ErrorKind, Error};
 use rand::Rng;
+use fixed::types::I48F16;
 
 use std::time::{Duration, Instant};
 use std::{iter::Iterator, collections::VecDeque};
@@ -10,7 +11,7 @@ use std::iter;
 use super::{
     ConnectionId, Result, UtpError, Packet, PacketRef, PacketType,
     Header, Delay, Timestamp, SequenceNumber, HEADER_SIZE,
-    UDP_IPV4_MTU, UDP_IPV6_MTU, DelayHistory,
+    UDP_IPV4_MTU, UDP_IPV6_MTU, DelayHistory, RelativeDelay,
 };
 use crate::udp_ext::WithTimeout;
 
@@ -52,7 +53,7 @@ const MIN_CWND: u32 = 2;
 /// Sender's Maximum Segment Size
 /// Set to Ethernet MTU
 const MSS: u32 = 1400;
-const TARGET: u32 = 100_000; //100;
+const TARGET: i64 = 100_000; //100;
 const GAIN: u32 = 1;
 const ALLOWED_INCREASE: u32 = 1;
 
@@ -62,7 +63,6 @@ pub struct UtpSocket {
     udp: UdpSocket,
     recv_id: ConnectionId,
     send_id: ConnectionId,
-    // seq_nr: u16,
     state: State,
     ack_number: SequenceNumber,
     seq_number: SequenceNumber,
@@ -73,14 +73,6 @@ pub struct UtpSocket {
 
     /// Packets sent but we didn't receive an ack for them
     inflight_packets: VecDeque<Packet>,
-
-    // base_delays: VecDeque<Delay>,
-
-    // current_delays: VecDeque<Delay>, // TODO: Use SliceDeque ?
-
-    // last_rollover: Instant,
-
-    // flight_size: u32,
 
     delay_history: DelayHistory,
 
@@ -193,19 +185,19 @@ impl UtpSocket {
     async fn wait_for_reception(&mut self) -> Result<()> {
         let last_seq = self.seq_number - 1;
 
-        let mut is_last_acked = self.is_packet_acked(last_seq);
+        let mut is_last_sent_acked = self.is_packet_acked(last_seq);
 
-        while !is_last_acked {
+        while !is_last_sent_acked {
             println!("LOOP IS ACKED", );
             self.receive_packet().await?;
-            is_last_acked = self.is_packet_acked(last_seq);
+            is_last_sent_acked = self.is_packet_acked(last_seq);
         }
 
         Ok(())
     }
 
     fn is_packet_acked(&self, n: SequenceNumber) -> bool {
-        !self.inflight_packets.iter().any(|p| p.get_seq_number() == n)
+        !self.inflight_packets.iter().any(|p| p.get_packet_seq_number() == n)
     }
 
     async fn send_packet(&mut self, mut packet: Packet) -> Result<()> {
@@ -222,7 +214,7 @@ impl UtpSocket {
         }
 
         packet.set_ack_number(self.ack_number);
-        packet.set_seq_number(self.seq_number);
+        packet.set_packet_seq_number(self.seq_number);
         packet.set_connection_id(self.send_id);
         packet.set_window_size(1_048_576);
         self.seq_number += 1;
@@ -336,50 +328,6 @@ impl UtpSocket {
         Ok(())
     }
 
-    // fn update_base_delay(&mut self, delay: Delay) {
-    //     // # Maintain BASE_HISTORY delay-minima.
-    //     // # Each minimum is measured over a period of a minute.
-    //     // # 'now' is the current system time
-    //     // if round_to_minute(now) != round_to_minute(last_rollover)
-    //     //     last_rollover = now
-    //     //     delete first item in base_delays list
-    //     //     append delay to base_delays list
-    //     // else
-    //     //     base_delays.tail = MIN(base_delays.tail, delay)
-    //     if self.last_rollover.elapsed() >= Duration::from_secs(1) {
-    //         self.last_rollover = Instant::now();
-    //         self.base_delays.pop_front();
-    //         self.base_delays.push_back(delay);
-    //     } else {
-    //         let last = self.base_delays.pop_back().unwrap();
-    //         self.base_delays.push_back(last.min(delay));
-    //     }
-    // }
-
-    // fn update_current_delay(&mut self, delay: Delay) {
-    //     //  # Maintain a list of CURRENT_FILTER last delays observed.
-    //     // delete first item in current_delays list
-    //     // append delay to current_delays list
-
-    //     // TODO: Pop delays before the last RTT
-    //     self.current_delays.pop_front();
-    //     self.current_delays.push_back(delay);
-    // }
-
-    // fn filter_current_delays(&self) -> Delay {
-    //     // TODO: Test other algos
-
-    //     // We're using the exponentially weighted moving average (EWMA) function
-    //     // Magic number from https://github.com/VividCortex/ewma
-    //     let alpha = 0.032_786_885;
-    //     let mut samples = self.current_delays.iter().map(|d| d.as_num() as f64);
-    //     let first = samples.next().unwrap_or(0.0);
-    //     (samples.fold(
-    //         first,
-    //         |acc, delay| alpha * delay + (acc * (1.0 - alpha))
-    //     ) as i64).into()
-    // }
-
     fn on_data_loss(&mut self) {
         // on data loss:
         // # at most once per RTT
@@ -404,82 +352,37 @@ impl UtpSocket {
 
     fn handle_state(&mut self, packet: PacketRef<'_>) {
         let ack_number = packet.get_ack_number();
-        let acked = self.inflight_packets.iter().find(|p| p.get_seq_number() == ack_number);
-        let ackeds = self.inflight_packets.iter().filter(|p| p.get_seq_number().cmp_less_equal(ack_number));
 
-        let nbytes = acked.unwrap().size();
-        println!("NBYTES {:?}", nbytes);
+        let in_flight = self.inflight_size();
+        let mut bytes_newly_acked = 0;
+
+        self.inflight_packets
+            .retain(|p| {
+                !p.is_seq_less_equal(ack_number) || (false, bytes_newly_acked += p.size()).0
+            });
 
         let delay = packet.get_timestamp_diff();
         if !delay.is_zero() {
-            println!("ADDING DELAY {:?}", delay);
             self.delay_history.add_delay(delay);
+            self.ledbat(bytes_newly_acked, in_flight);
         }
-
-        println!("HISTORY: {:#?}", self.delay_history);
-
-        // self.handle_ack(&packet, nbytes);
 
         self.inflight_packets.pop_front();
     }
 
-    fn handle_ack(&mut self, packet: &PacketRef<'_>, bytes_newly_acked: usize) {
-        // flightsize is the amount of data outstanding before this ACK
-        //    was received and is updated later;
-        // bytes_newly_acked is the number of bytes that this ACK
-        //    newly acknowledges, and it MAY be set to MSS.
-        println!("BEFORE CWND {:?}", self.cwnd);
+    fn ledbat(&mut self, bytes_newly_acked: usize, in_flight: usize) {
+        let lowest_relative = self.delay_history.lowest_relative();
 
-        let delay = packet.get_timestamp_diff();
-        // self.update_base_delay(delay);
-        // self.update_current_delay(delay);
+        let cwnd_reached = in_flight + bytes_newly_acked + self.packet_size() > self.cwnd as usize;
 
-        // const std::int64_t window_factor = (std::int64_t(acked_bytes) * (1 << 16)) / in_flight;
-	    // const std::int64_t delay_factor = (std::int64_t(target_delay - delay) * (1 << 16)) / target_delay;
+        if cwnd_reached {
+            let window_factor = I48F16::from_num(bytes_newly_acked as i64) / in_flight as i64;
+            let delay_factor = I48F16::from_num(TARGET - lowest_relative.as_i64()) / TARGET;
 
-        //let window_factor = bytes_newly_acked / self.inflight_size();
-        //let delay_factor = TARGET -
+            let gain = (window_factor * delay_factor) * 3000;
 
-        // let queuing_delay = self.filter_current_delays()
-        //     - *self.base_delays.iter().min().unwrap();
-        // let queuing_delay: i64 = queuing_delay.into();
-
-        // let off_target = (TARGET as f64 - queuing_delay as f64) / TARGET as f64;
-
-        //println!("FILTER {:?}", self.filter_current_delays());
-
-        // TODO: Compute bytes_newly_acked;
-        //let bytes_newly_acked = 61;
-
-        // let cwnd = self.cwnd as f64 + ((GAIN as f64 * off_target as f64 * bytes_newly_acked as f64 * MSS as f64) / self.cwnd as f64);
-        // let max_allowed_cwnd = self.inflight_size() + (ALLOWED_INCREASE * MSS) as usize;
-
-        // println!("CWND {:?} MAX_ALLOWED {:?}", cwnd, max_allowed_cwnd);
-
-        // let cwnd = (cwnd as u32).min(max_allowed_cwnd as u32);
-
-        // println!("DELAY {:?} QUEUING_DELAY {:?} OFF_TARGET {:?}", delay, queuing_delay, off_target);
-
-        // self.cwnd = cwnd.max(MIN_CWND * MSS);
-
-        // println!("FINAL CWND {:?}", self.cwnd);
-        //self.flight_size -= bytes_newly_acked;
-
-//        let cwnd = std::cmp::min(cwnd, max_allowed_cwnd);
-
-       // for each delay sample in the acknowledgement:
-       //     delay = acknowledgement.delay
-       //     update_base_delay(delay)
-       //     update_current_delay(delay)
-
-       // queuing_delay = FILTER(current_delays) - MIN(base_delays)
-       // off_target = (TARGET - queuing_delay) / TARGET
-       // cwnd += GAIN * off_target * bytes_newly_acked * MSS / cwnd
-       // max_allowed_cwnd = flightsize + ALLOWED_INCREASE * MSS
-       // cwnd = min(cwnd, max_allowed_cwnd)
-       // cwnd = max(cwnd, MIN_CWND * MSS)
-       // flightsize = flightsize - bytes_newly_acked
-       // update_CTO()
+            self.cwnd = self.remote_window.min((self.cwnd as i32 + gain.to_num::<i32>()).max(0) as u32);
+        }
     }
 
     fn update_congestion_timeout(&mut self) {

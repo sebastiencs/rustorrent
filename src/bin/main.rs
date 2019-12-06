@@ -44,6 +44,7 @@ fn main() {
         socket.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
         socket.send(b"hello weshaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").await.unwrap();
         socket.send(b"OKLM").await.unwrap();
+        socket.send(b"OUIOUIOUIOUIOUIOUIOUIOUI").await.unwrap();
     });
 
     return ;
