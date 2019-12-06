@@ -28,12 +28,22 @@ use async_std::net::{SocketAddr, IpAddr, Ipv4Addr};
 //fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
 fn main() {
 
+    println!("1 << 16 = {}", 1 << 16);
+    println!("2 * (1 << 16) = {}", 2 * (1 << 16));
+    println!("(2 * (1 << 16)) >> 16 = {}", (2 * (1 << 16)) >> 16);
+    println!("397 * (1 << 16) = {}", 397 * (1 << 16));
+    println!("(397 * (1 << 16)) >> 16 = {}", (397 * (1 << 16)) >> 16);
+    println!("397 / 2 = {}", 397 / 2);
+    println!("(397 * (1 << 16)) / 2 = {}", (397 * (1 << 16)) / 2);
+    println!("((397 * (1 << 16)) / 2) >> 16 = {}", ((397 * (1 << 16)) / 2) >> 16);
+
     async_std::task::block_on(async {
         let mut socket = utp::socket::UtpSocket::bind(
             SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080)
         ).await.unwrap();
         socket.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
         socket.send(b"hello weshaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").await.unwrap();
+        socket.send(b"OKLM").await.unwrap();
     });
 
     return ;

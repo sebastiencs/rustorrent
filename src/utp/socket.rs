@@ -10,7 +10,7 @@ use std::iter;
 use super::{
     ConnectionId, Result, UtpError, Packet, PacketRef, PacketType,
     Header, Delay, Timestamp, SequenceNumber, HEADER_SIZE,
-    UDP_IPV4_MTU, UDP_IPV6_MTU,
+    UDP_IPV4_MTU, UDP_IPV6_MTU, DelayHistory,
 };
 use crate::udp_ext::WithTimeout;
 
@@ -74,50 +74,53 @@ pub struct UtpSocket {
     /// Packets sent but we didn't receive an ack for them
     inflight_packets: VecDeque<Packet>,
 
-    base_delays: VecDeque<Delay>,
+    // base_delays: VecDeque<Delay>,
 
-    current_delays: VecDeque<Delay>, // TODO: Use SliceDeque ?
+    // current_delays: VecDeque<Delay>, // TODO: Use SliceDeque ?
 
-    last_rollover: Instant,
+    // last_rollover: Instant,
 
-    flight_size: u32,
+    // flight_size: u32,
+
+    delay_history: DelayHistory,
 
     cwnd: u32,
     congestion_timeout: Duration,
 
-    /// SRTT (smoothed round-trip time)
-    srtt: u32,
-    /// RTTVAR (round-trip time variation)
-    rttvar: u32,
+    // /// SRTT (smoothed round-trip time)
+    // srtt: u32,
+    // /// RTTVAR (round-trip time variation)
+    // rttvar: u32,
 }
 
 impl UtpSocket {
     fn new(local: SocketAddr, udp: UdpSocket) -> UtpSocket {
         let (recv_id, send_id) = ConnectionId::make_ids();
 
-        let mut base_delays = VecDeque::with_capacity(BASE_HISTORY);
-        base_delays.extend(iter::repeat(Delay::infinity()).take(BASE_HISTORY));
+        // let mut base_delays = VecDeque::with_capacity(BASE_HISTORY);
+        // base_delays.extend(iter::repeat(Delay::infinity()).take(BASE_HISTORY));
 
         UtpSocket {
             local,
             udp,
             recv_id,
             send_id,
-            base_delays,
+            // base_delays,
             remote: None,
             state: State::None,
             ack_number: SequenceNumber::zero(),
             seq_number: SequenceNumber::random(),
             delay: Delay::default(),
-            current_delays: VecDeque::with_capacity(16),
-            last_rollover: Instant::now(),
+            // current_delays: VecDeque::with_capacity(16),
+            // last_rollover: Instant::now(),
             cwnd: INIT_CWND * MSS,
             congestion_timeout: Duration::from_secs(1),
-            flight_size: 0,
-            srtt: 0,
-            rttvar: 0,
+            // flight_size: 0,
+            // srtt: 0,
+            // rttvar: 0,
             inflight_packets: VecDeque::with_capacity(64),
             remote_window: INIT_CWND * MSS,
+            delay_history: DelayHistory::new(),
         }
     }
 
@@ -333,49 +336,49 @@ impl UtpSocket {
         Ok(())
     }
 
-    fn update_base_delay(&mut self, delay: Delay) {
-        // # Maintain BASE_HISTORY delay-minima.
-        // # Each minimum is measured over a period of a minute.
-        // # 'now' is the current system time
-        // if round_to_minute(now) != round_to_minute(last_rollover)
-        //     last_rollover = now
-        //     delete first item in base_delays list
-        //     append delay to base_delays list
-        // else
-        //     base_delays.tail = MIN(base_delays.tail, delay)
-        if self.last_rollover.elapsed() >= Duration::from_secs(1) {
-            self.last_rollover = Instant::now();
-            self.base_delays.pop_front();
-            self.base_delays.push_back(delay);
-        } else {
-            let last = self.base_delays.pop_back().unwrap();
-            self.base_delays.push_back(last.min(delay));
-        }
-    }
+    // fn update_base_delay(&mut self, delay: Delay) {
+    //     // # Maintain BASE_HISTORY delay-minima.
+    //     // # Each minimum is measured over a period of a minute.
+    //     // # 'now' is the current system time
+    //     // if round_to_minute(now) != round_to_minute(last_rollover)
+    //     //     last_rollover = now
+    //     //     delete first item in base_delays list
+    //     //     append delay to base_delays list
+    //     // else
+    //     //     base_delays.tail = MIN(base_delays.tail, delay)
+    //     if self.last_rollover.elapsed() >= Duration::from_secs(1) {
+    //         self.last_rollover = Instant::now();
+    //         self.base_delays.pop_front();
+    //         self.base_delays.push_back(delay);
+    //     } else {
+    //         let last = self.base_delays.pop_back().unwrap();
+    //         self.base_delays.push_back(last.min(delay));
+    //     }
+    // }
 
-    fn update_current_delay(&mut self, delay: Delay) {
-        //  # Maintain a list of CURRENT_FILTER last delays observed.
-        // delete first item in current_delays list
-        // append delay to current_delays list
+    // fn update_current_delay(&mut self, delay: Delay) {
+    //     //  # Maintain a list of CURRENT_FILTER last delays observed.
+    //     // delete first item in current_delays list
+    //     // append delay to current_delays list
 
-        // TODO: Pop delays before the last RTT
-        self.current_delays.pop_front();
-        self.current_delays.push_back(delay);
-    }
+    //     // TODO: Pop delays before the last RTT
+    //     self.current_delays.pop_front();
+    //     self.current_delays.push_back(delay);
+    // }
 
-    fn filter_current_delays(&self) -> Delay {
-        // TODO: Test other algos
+    // fn filter_current_delays(&self) -> Delay {
+    //     // TODO: Test other algos
 
-        // We're using the exponentially weighted moving average (EWMA) function
-        // Magic number from https://github.com/VividCortex/ewma
-        let alpha = 0.032_786_885;
-        let mut samples = self.current_delays.iter().map(|d| d.as_num() as f64);
-        let first = samples.next().unwrap_or(0.0);
-        (samples.fold(
-            first,
-            |acc, delay| alpha * delay + (acc * (1.0 - alpha))
-        ) as i64).into()
-    }
+    //     // We're using the exponentially weighted moving average (EWMA) function
+    //     // Magic number from https://github.com/VividCortex/ewma
+    //     let alpha = 0.032_786_885;
+    //     let mut samples = self.current_delays.iter().map(|d| d.as_num() as f64);
+    //     let first = samples.next().unwrap_or(0.0);
+    //     (samples.fold(
+    //         first,
+    //         |acc, delay| alpha * delay + (acc * (1.0 - alpha))
+    //     ) as i64).into()
+    // }
 
     fn on_data_loss(&mut self) {
         // on data loss:
@@ -407,10 +410,20 @@ impl UtpSocket {
         let nbytes = acked.unwrap().size();
         println!("NBYTES {:?}", nbytes);
 
-        self.handle_ack(&packet);
+        let delay = packet.get_timestamp_diff();
+        if !delay.is_zero() {
+            println!("ADDING DELAY {:?}", delay);
+            self.delay_history.add_delay(delay);
+        }
+
+        println!("HISTORY: {:#?}", self.delay_history);
+
+        // self.handle_ack(&packet, nbytes);
+
+        self.inflight_packets.pop_front();
     }
 
-    fn handle_ack(&mut self, packet: &PacketRef<'_>) {
+    fn handle_ack(&mut self, packet: &PacketRef<'_>, bytes_newly_acked: usize) {
         // flightsize is the amount of data outstanding before this ACK
         //    was received and is updated later;
         // bytes_newly_acked is the number of bytes that this ACK
@@ -418,32 +431,38 @@ impl UtpSocket {
         println!("BEFORE CWND {:?}", self.cwnd);
 
         let delay = packet.get_timestamp_diff();
-        self.update_base_delay(delay);
-        self.update_current_delay(delay);
+        // self.update_base_delay(delay);
+        // self.update_current_delay(delay);
 
-        let queuing_delay = self.filter_current_delays()
-            - *self.base_delays.iter().min().unwrap();
-        let queuing_delay: i64 = queuing_delay.into();
+        // const std::int64_t window_factor = (std::int64_t(acked_bytes) * (1 << 16)) / in_flight;
+	    // const std::int64_t delay_factor = (std::int64_t(target_delay - delay) * (1 << 16)) / target_delay;
 
-        let off_target = (TARGET as f64 - queuing_delay as f64) / TARGET as f64;
+        //let window_factor = bytes_newly_acked / self.inflight_size();
+        //let delay_factor = TARGET -
+
+        // let queuing_delay = self.filter_current_delays()
+        //     - *self.base_delays.iter().min().unwrap();
+        // let queuing_delay: i64 = queuing_delay.into();
+
+        // let off_target = (TARGET as f64 - queuing_delay as f64) / TARGET as f64;
 
         //println!("FILTER {:?}", self.filter_current_delays());
 
         // TODO: Compute bytes_newly_acked;
-        let bytes_newly_acked = 61;
+        //let bytes_newly_acked = 61;
 
-        let cwnd = self.cwnd as f64 + ((GAIN as f64 * off_target as f64 * bytes_newly_acked as f64 * MSS as f64) / self.cwnd as f64);
-        let max_allowed_cwnd = self.inflight_size() + (ALLOWED_INCREASE * MSS) as usize;
+        // let cwnd = self.cwnd as f64 + ((GAIN as f64 * off_target as f64 * bytes_newly_acked as f64 * MSS as f64) / self.cwnd as f64);
+        // let max_allowed_cwnd = self.inflight_size() + (ALLOWED_INCREASE * MSS) as usize;
 
-        println!("CWND {:?} MAX_ALLOWED {:?}", cwnd, max_allowed_cwnd);
+        // println!("CWND {:?} MAX_ALLOWED {:?}", cwnd, max_allowed_cwnd);
 
-        let cwnd = (cwnd as u32).min(max_allowed_cwnd as u32);
+        // let cwnd = (cwnd as u32).min(max_allowed_cwnd as u32);
 
-        println!("DELAY {:?} QUEUING_DELAY {:?} OFF_TARGET {:?}", delay, queuing_delay, off_target);
+        // println!("DELAY {:?} QUEUING_DELAY {:?} OFF_TARGET {:?}", delay, queuing_delay, off_target);
 
-        self.cwnd = cwnd.max(MIN_CWND * MSS);
+        // self.cwnd = cwnd.max(MIN_CWND * MSS);
 
-        println!("FINAL CWND {:?}", self.cwnd);
+        // println!("FINAL CWND {:?}", self.cwnd);
         //self.flight_size -= bytes_newly_acked;
 
 //        let cwnd = std::cmp::min(cwnd, max_allowed_cwnd);

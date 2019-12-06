@@ -118,8 +118,8 @@ impl Into<u32> for Timestamp {
     }
 }
 
-//#[derive(Debug, Copy, Clone, Default, Ord, PartialEq, Eq, PartialOrd)]
-#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, Default, Ord, PartialEq, Eq, PartialOrd)]
+//#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 pub struct Delay(u32);
 
 impl Delay {
@@ -132,14 +132,19 @@ impl Delay {
         Delay(u32::max_value())
     }
 
-    /// Compare self with other, with consideration to wrapping.
-    /// We can't implement PartialOrd because it doesn't satisfy
-    /// antisymmetry
-    pub fn cmp_less(self, other: Delay) -> bool {
-	    let dist_down = self - other;
-	    let dist_up = other - self;
+    // /// Compare self with other, with consideration to wrapping.
+    // /// We can't implement PartialOrd because it doesn't satisfy
+    // /// antisymmetry
+    // pub fn cmp_less(self, other: Delay) -> bool {
+	//     let dist_down = self - other;
+	//     let dist_up = other - self;
 
-	    dist_up.0 < dist_down.0
+    //     println!("DIST_DOWN {:?} DIST_UP {:?}", dist_down, dist_up);
+	//     dist_up.0 < dist_down.0
+    // }
+
+    pub fn is_zero(self) -> bool {
+        self.0 == 0
     }
 }
 
@@ -204,10 +209,10 @@ impl DelayHistory {
         self.ndelays = self.ndelays.saturating_add(1);
 
         let index = self.index as usize;
-        if delay.cmp_less(self.lowest) {
+        if delay < self.lowest {
             self.lowest = delay;
             self.history[index] = delay;
-        } else if delay.cmp_less(self.history[index]) {
+        } else if delay < self.history[index] {
             self.history[index] = delay;
         }
 
@@ -222,21 +227,23 @@ impl DelayHistory {
             self.index = (self.index + 1) % self.history.len() as u8;
             self.ndelays = 0;
             self.history[self.index as usize] = delay;
-            self.lowest = self.lowest_in_history();
+            self.lowest = self.history.iter().min().copied().unwrap();
         }
+
+        println!("VALUE {:?} FROM {:?} AND {:?}", value, delay, self.lowest);
 
         value
     }
 
-    fn lowest_in_history(&self) -> Delay {
-        let mut lowest = self.history[0];
-        for delay in &self.history {
-            if delay.cmp_less(lowest) {
-                lowest = *delay;
-            }
-        }
-        lowest
-    }
+    // fn lowest_in_history(&self) -> Delay {
+    //     let mut lowest = self.history[0];
+    //     for delay in &self.history {
+    //         if delay.cmp_less(lowest) {
+    //             lowest = *delay;
+    //         }
+    //     }
+    //     lowest
+    // }
 }
 
 #[derive(Debug)]
