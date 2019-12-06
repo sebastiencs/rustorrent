@@ -689,13 +689,13 @@ impl SelectiveAck<'_> {
     }
 }
 
-// enum SelectiveAckBit {
-//     Ack(SequenceNumber),
-//     Missing(SequenceNumber)
-// }
+pub enum SelectiveAckBit {
+    Acked(SequenceNumber),
+    Missing(SequenceNumber)
+}
 
 impl Iterator for SelectiveAck<'_> {
-    type Item = SequenceNumber;
+    type Item = SelectiveAckBit;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.first {
@@ -703,27 +703,28 @@ impl Iterator for SelectiveAck<'_> {
                 println!("BITFIELD {:08b}", byte);
             }
             self.first = false;
-            return Some(self.ack_number + 1);
+            return Some(SelectiveAckBit::Missing(self.ack_number + 1));
         }
-        loop {
-            let byte = self.bitfield.get(self.byte_index).copied()?;
-            let bit = byte & (1 << self.bit_index);
 
-            let ack_number = self.ack_number
-                + self.byte_index as u16 * 8
-                + self.bit_index as u16
-                + 2;
+        let byte = *self.bitfield.get(self.byte_index)?;
+        let bit = byte & (1 << self.bit_index);
 
-            if self.bit_index == 7 {
-                self.byte_index += 1;
-                self.bit_index = 0;
-            } else {
-                self.bit_index += 1;
-            }
+        let ack_number = self.ack_number
+            + self.byte_index as u16 * 8
+            + self.bit_index as u16
+            + 2;
 
-            if bit == 0 {
-                return Some(ack_number);
-            }
+        if self.bit_index == 7 {
+            self.byte_index += 1;
+            self.bit_index = 0;
+        } else {
+            self.bit_index += 1;
+        }
+
+        if bit == 0 {
+            Some(SelectiveAckBit::Missing(ack_number))
+        } else {
+            Some(SelectiveAckBit::Acked(ack_number))
         }
     }
 }

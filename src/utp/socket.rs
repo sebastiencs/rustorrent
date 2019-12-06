@@ -12,6 +12,7 @@ use super::{
     ConnectionId, Result, UtpError, Packet, PacketRef, PacketType,
     Header, Delay, Timestamp, SequenceNumber, HEADER_SIZE,
     UDP_IPV4_MTU, UDP_IPV6_MTU, DelayHistory, RelativeDelay,
+    SelectiveAckBit
 };
 use crate::udp_ext::WithTimeout;
 
@@ -367,6 +368,10 @@ impl UtpSocket {
                 println!("CONNECTED !", );
             }
             (PacketType::State, State::Connected) => {
+                if self.remote_window != packet.get_window_size() {
+                    panic!("WINDOW SIZE CHANGED {:?}", packet.get_window_size());
+                }
+
                 self.handle_state(packet).await?;
                 // let current_delay = packet.get_timestamp_diff();
                 // let base_delay = std::cmp::min();
@@ -464,7 +469,15 @@ impl UtpSocket {
                     lost = true;
                 }
                 for missing_ack in select_ack {
-                    self.lost_packets.push_back(missing_ack);
+                    match missing_ack {
+                        SelectiveAckBit::Missing(seq_num) => {
+                            self.lost_packets.push_back(seq_num);
+                        }
+                        SelectiveAckBit::Acked(seq_num) => {
+                            self.inflight_packets
+                                .retain(|p| !(p.get_packet_seq_number() == seq_num));
+                        }
+                    }
                 }
             }
             if lost {
@@ -499,7 +512,7 @@ impl UtpSocket {
 
             let packet = &mut self.inflight_packets[packet_position];
 
-            //if !packet.resent {
+            // if !packet.resent {
                 packet.set_ack_number(self.ack_number);
                 packet.update_timestamp();
 
