@@ -247,7 +247,7 @@ impl Torrent {
                 *length as usize
             },
             InfoFile::Multiple { files, .. } => {
-                files.iter().fold(0, |acc, f| acc + f.length as usize)
+                files.iter().map(|f| f.length as usize).sum()
             }
         }
     }
