@@ -85,6 +85,8 @@ pub struct UtpSocket {
 
     lost_packets: VecDeque<SequenceNumber>,
 
+    nlost: usize,
+
     // /// SRTT (smoothed round-trip time)
     // srtt: u32,
     // /// RTTVAR (round-trip time variation)
@@ -121,7 +123,8 @@ impl UtpSocket {
             delay_history: DelayHistory::new(),
             ack_duplicate: 0,
             last_ack: SequenceNumber::zero(),
-            lost_packets: VecDeque::with_capacity(100)
+            lost_packets: VecDeque::with_capacity(100),
+            nlost: 0,
         }
     }
 
@@ -190,7 +193,6 @@ impl UtpSocket {
 
         let mut size = 0;
 
-        let mut packet_lost = 0;
         let mut packet_total = 0;
 
         for packet in packets {
@@ -200,32 +202,24 @@ impl UtpSocket {
             self.ensure_window_is_large_enough(packet.size()).await?;
 
             self.send_packet(packet).await?;
-
-            // self.send_packet(packet).await?;
         }
 
         println!("\nDONE, WAITING NOW", );
         println!("TOTAL SENT {:?}\n", size);
 
-        self.wait_for_reception().await;
+        let res = self.wait_for_reception().await;
 
         println!("TOTAL={:?}", packet_total);
-        println!("LOST={:?}", packet_lost);
+        println!("LOST={:?}", self.nlost);
 
-        Ok(())
+        res
     }
 
     async fn ensure_window_is_large_enough(&mut self, packet_size: usize) -> Result<()> {
-        let mut inflight_size = self.inflight_size();
-
-        while packet_size + inflight_size > self.cwnd as usize {
-            println!("BLOCKED BY CWND {:?} {:?} {:?}", packet_size, inflight_size, self.cwnd);
-
+        while packet_size + self.inflight_size() > self.cwnd as usize {
+            println!("BLOCKED BY CWND {:?} {:?} {:?}", packet_size, self.inflight_size(), self.cwnd);
             self.receive_and_handle_lost_packets().await?;
-
-            inflight_size = self.inflight_size();
         }
-
         Ok(())
     }
 
@@ -234,7 +228,7 @@ impl UtpSocket {
             Err(UtpError::PacketLost) => {
                 // println!("PACKET LOST HEEER {:?}", self.last_ack);
                 //self.resend_packet(self.last_ack + 1).await?;
-                // packet_lost += self.lost_packets.len();
+                self.nlost += self.lost_packets.len();
                 self.resend_lost_packets().await
             },
             x => x
@@ -247,26 +241,19 @@ impl UtpSocket {
             self.resend_packet(ack_num).await?;
         }
 
-        // for packet in self.inflight_packets.iter() {
-        //     self.resend_packet(packet.get_packet_seq_number()).await?;
-        // }
         let now = Timestamp::now();
 
-        let inflights = self.inflight_packets
-                            .iter()
-                            .filter(|p| p.millis_since_sent(now) > 500)
-                            .map(|p| p.get_packet_seq_number())
-                            .collect::<Vec<_>>();
+        let expired_packets = self.inflight_packets
+                                  .iter()
+                                  .filter(|p| p.millis_since_sent(now) > 500)
+                                  .map(|p| p.get_packet_seq_number())
+                                  .collect::<Vec<_>>();
 
-        println!("EXPIRED PACKETS: {:?}", inflights);
+        println!("EXPIRED PACKETS: {:?}", expired_packets);
 
-        for packet in inflights {
+        for packet in expired_packets {
             self.resend_packet(packet).await?;
         }
-
-        // for packet in self.inflight_packets.iter().map(|p| p.get_packet_seq_number()) {
-        //     self.resend_packet(packet).await?;
-        // }
 
         Ok(())
     }
@@ -274,24 +261,8 @@ impl UtpSocket {
     async fn wait_for_reception(&mut self) -> Result<()> {
         let last_seq = self.seq_number - 1;
 
-        let mut is_last_sent_acked = self.is_packet_acked(last_seq);
-
-        while !is_last_sent_acked {
-            // println!("LOOP IS ACKED", );
-            match self.receive_packet().await {
-                Ok(_) => {},
-                Err(UtpError::PacketLost) => {
-                    self.resend_lost_packets().await;
-                    // println!("PACKET LOST HEEERAAAAA", );
-                    // panic!("AAAA");
-                },
-                Err(e) => return Err(e)
-            }
-            is_last_sent_acked = self.is_packet_acked(last_seq);
-            // if self.ack_duplicate >= 3 {
-                // println!("!!! DUPLICATE DETECTED HEEEEER !!!!", );
-                // self.resend_packet(self.last_ack + 1).await?;
-            // }
+        while !self.is_packet_acked(last_seq) {
+            self.receive_and_handle_lost_packets().await?;
         }
 
         Ok(())
@@ -466,7 +437,8 @@ impl UtpSocket {
     async fn handle_state(&mut self, packet: PacketRef<'_>) -> Result<()> {
         let ack_number = packet.get_ack_number();
 
-        println!("ACK RECEIVED {:?} LAST_ACK {:?} DUP {:?} INFLIGHT {:?}", ack_number, self.last_ack, self.ack_duplicate, self.inflight_size());
+        println!("ACK RECEIVED {:?} LAST_ACK {:?} DUP {:?} INFLIGHT {:?}",
+                 ack_number, self.last_ack, self.ack_duplicate, self.inflight_size());
 
         let in_flight = self.inflight_size();
         let mut bytes_newly_acked = 0;
@@ -477,12 +449,6 @@ impl UtpSocket {
                 !p.is_seq_less_equal(ack_number) || (false, bytes_newly_acked += p.size()).0
             });
 
-        for seq in self.inflight_packets.iter() {
-            if seq.is_seq_less_equal(ack_number) {
-                panic!("ERRROR STILL HAVE NUMBER INSIDE");
-            }
-        }
-
         //println!("PACKETS IN FLIGHT {:?}", self.inflight_packets.len());
 //        println!("PACKETS IN FLIGHT {:?}", self.inflight_packets.as_slices());
 
@@ -491,7 +457,7 @@ impl UtpSocket {
         let delay = packet.get_timestamp_diff();
         if !delay.is_zero() {
             self.delay_history.add_delay(delay);
-            self.apply_congestion(bytes_newly_acked, in_flight);
+            self.apply_congestion_control(bytes_newly_acked, in_flight);
         }
 
         if self.last_ack == ack_number {
@@ -509,12 +475,10 @@ impl UtpSocket {
             println!("HAS EXTENSIONS !", );
             let mut lost = false;
             for select_ack in packet.iter_extensions() {
-                if select_ack.has_missing_ack() {
-                    lost = true;
-                }
+                lost = select_ack.has_missing_ack() || lost;
                 println!("SACKS ACKED: {:?}", select_ack.nackeds());
-                for missing_ack in select_ack {
-                    match missing_ack {
+                for ack_bit in select_ack {
+                    match ack_bit {
                         SelectiveAckBit::Missing(seq_num) => {
                             self.lost_packets.push_back(seq_num);
                         }
@@ -536,32 +500,16 @@ impl UtpSocket {
 
     async fn resend_packet(&mut self, start: SequenceNumber) -> Result<()> {
         println!("PACKET TO RESEND {:?}", start);
-        let packet_position = self.inflight_packets.iter().position(|p| p.get_packet_seq_number() == start);
-        if let Some(packet_position) = packet_position {
+        let mut packet = self.inflight_packets.iter_mut().find(|p| p.get_packet_seq_number() == start);
+        if let Some(ref mut packet) = packet {
 
-            let packet_size = self.inflight_packets[packet_position].size();
-
-            let mut inflight_size = self.inflight_size();
-
-            if packet_size + inflight_size > self.cwnd as usize {
-                println!("RESENDING WOULD BE BLOCKED, BUT PROCEED", );
-            }
-
-            // while packet_size + inflight_size > self.cwnd as usize {
-            //     println!("RESENDING BUT BLOCKED BY CWND {:?} {:?} {:?}", packet_size, inflight_size, self.cwnd);
-            //     // 1402 1047294 1048576
-            //     self.receive_packet().await?;
-
-            //     inflight_size = self.inflight_size();
-            // }
-
-            let packet = &mut self.inflight_packets[packet_position];
+            let packet_size = packet.size();
 
             // if !packet.resent {
                 packet.set_ack_number(self.ack_number);
                 packet.update_timestamp();
 
-                println!("== RESENDING {:?} CWND={:?} POS {:?} {:?}", start, self.cwnd, packet_position, &**packet);
+                println!("== RESENDING {:?} CWND={:?} POS {:?} {:?}", start, self.cwnd, start, &**packet);
 
                 self.udp.send(packet.as_bytes()).await?;
 
@@ -578,7 +526,7 @@ impl UtpSocket {
         Ok(())
     }
 
-    fn apply_congestion(&mut self, bytes_newly_acked: usize, in_flight: usize) {
+    fn apply_congestion_control(&mut self, bytes_newly_acked: usize, in_flight: usize) {
         let lowest_relative = self.delay_history.lowest_relative();
 
         let cwnd_reached = in_flight + bytes_newly_acked + self.packet_size() > self.cwnd as usize;
