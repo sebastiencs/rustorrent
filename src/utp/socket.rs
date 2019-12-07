@@ -188,20 +188,57 @@ impl UtpSocket {
         let packet_size = self.packet_size();
         let packets = data.chunks(packet_size).map(Packet::new);
 
+        let mut size = 0;
+
+        let mut packet_lost = 0;
+        let mut packet_total = 0;
+
         for packet in packets {
-            match self.send_packet(packet).await {
-                Ok(_) => {},
-                Err(UtpError::PacketLost) => {
-                    // println!("PACKET LOST HEEER {:?}", self.last_ack);
-                    //self.resend_packet(self.last_ack + 1).await?;
-                    self.resend_lost_packets().await;
-                },
-                Err(e) => return Err(e)
-            }
+            packet_total += 1;
+            size += packet.payload_len();
+
+            self.ensure_window_is_large_enough(packet.size()).await?;
+
+            self.send_packet(packet).await?;
+
             // self.send_packet(packet).await?;
         }
 
-        self.wait_for_reception().await
+        println!("\nDONE, WAITING NOW", );
+        println!("TOTAL SENT {:?}\n", size);
+
+        self.wait_for_reception().await;
+
+        println!("TOTAL={:?}", packet_total);
+        println!("LOST={:?}", packet_lost);
+
+        Ok(())
+    }
+
+    async fn ensure_window_is_large_enough(&mut self, packet_size: usize) -> Result<()> {
+        let mut inflight_size = self.inflight_size();
+
+        while packet_size + inflight_size > self.cwnd as usize {
+            println!("BLOCKED BY CWND {:?} {:?} {:?}", packet_size, inflight_size, self.cwnd);
+
+            self.receive_and_handle_lost_packets().await?;
+
+            inflight_size = self.inflight_size();
+        }
+
+        Ok(())
+    }
+
+    async fn receive_and_handle_lost_packets(&mut self) -> Result<()> {
+        match self.receive_packet().await {
+            Err(UtpError::PacketLost) => {
+                // println!("PACKET LOST HEEER {:?}", self.last_ack);
+                //self.resend_packet(self.last_ack + 1).await?;
+                // packet_lost += self.lost_packets.len();
+                self.resend_lost_packets().await
+            },
+            x => x
+        }
     }
 
     async fn resend_lost_packets(&mut self) -> Result<()> {
@@ -217,9 +254,7 @@ impl UtpSocket {
 
         let inflights = self.inflight_packets
                             .iter()
-                            .filter(|p| {
-                                p.millis_since_sent(now) > 500
-                            })
+                            .filter(|p| p.millis_since_sent(now) > 500)
                             .map(|p| p.get_packet_seq_number())
                             .collect::<Vec<_>>();
 
@@ -268,22 +303,22 @@ impl UtpSocket {
 
     async fn send_packet(&mut self, mut packet: Packet) -> Result<()> {
 
-        let packet_size = packet.size();
-        let mut inflight_size = self.inflight_size();
+        // let packet_size = packet.size();
+        // let mut inflight_size = self.inflight_size();
 
-        while packet_size + inflight_size > self.cwnd as usize {
-            println!("SENDING BUT BLOCKED BY CWND {:?} {:?} {:?}", packet_size, inflight_size, self.cwnd);
+        // while packet_size + inflight_size > self.cwnd as usize {
+        //     println!("SENDING BUT BLOCKED BY CWND {:?} {:?} {:?}", packet_size, inflight_size, self.cwnd);
 
-            self.receive_packet().await?;
+        //     self.receive_packet().await?;
 
-            //if self.ac
-            // if self.ack_duplicate >= 3 {
-            //     println!("!!! DUPLICATE DETECTED !!!!", );
-            //     self.resend_packet(self.last_ack + 1).await?;
-            // }
+        //     //if self.ac
+        //     // if self.ack_duplicate >= 3 {
+        //     //     println!("!!! DUPLICATE DETECTED !!!!", );
+        //     //     self.resend_packet(self.last_ack + 1).await?;
+        //     // }
 
-            inflight_size = self.inflight_size();
-        }
+        //     inflight_size = self.inflight_size();
+        // }
 
         packet.set_ack_number(self.ack_number);
         packet.set_packet_seq_number(self.seq_number);
@@ -448,9 +483,8 @@ impl UtpSocket {
             }
         }
 
-        if self.inflight_packets.len() > 10 {
-            println!("PACKETS IN FLIGHT {:?}", self.inflight_packets.as_slices());
-        }
+        //println!("PACKETS IN FLIGHT {:?}", self.inflight_packets.len());
+//        println!("PACKETS IN FLIGHT {:?}", self.inflight_packets.as_slices());
 
         println!("BEFORE {:?} AFTER {:?}", before, self.inflight_packets.len());
 

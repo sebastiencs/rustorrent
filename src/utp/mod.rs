@@ -658,6 +658,10 @@ impl Packet {
         }
     }
 
+    pub fn payload_len(&self) -> usize {
+        self.payload.len()
+    }
+
     pub fn update_timestamp(&mut self) {
         let timestamp = Timestamp::now();
         self.set_timestamp(timestamp);
@@ -739,9 +743,9 @@ impl Iterator for SelectiveAck<'_> {
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.first {
-            for byte in self.bitfield {
-                println!("BITFIELD {:08b}", byte);
-            }
+            // for byte in self.bitfield {
+            //     println!("BITFIELD {:08b}", byte);
+            // }
             self.first = false;
             return Some(SelectiveAckBit::Missing(self.ack_number + 1));
         }
@@ -781,9 +785,9 @@ impl<'a> ExtensionIterator<'a> {
         let slice = &packet.packet_ref.payload.data[..packet.len - HEADER_SIZE];
         let ack_number = packet.get_ack_number();
 
-        for byte in &packet.packet_ref.payload.data[..packet.len - HEADER_SIZE] {
-            println!("BYTE {:x}", byte);
-        }
+        // for byte in &packet.packet_ref.payload.data[..packet.len - HEADER_SIZE] {
+        //     //println!("BYTE {:x}", byte);
+        // }
         ExtensionIterator { current_type, slice, ack_number }
     }
 }
