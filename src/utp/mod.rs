@@ -1,8 +1,11 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::cmp::{PartialOrd, Ord};
+use std::io::ErrorKind;
 
 pub mod socket;
 pub mod stream;
+
+use stream::IncomingBytes;
 
 /// A safe type using wrapping_{add,sub} for +/-/cmp operations
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -298,6 +301,18 @@ pub enum UtpError {
     FamillyMismatch,
     PacketLost,
     IO(std::io::Error)
+}
+
+impl UtpError {
+    pub fn should_continue(&self) -> bool {
+        match self {
+            UtpError::IO(ref e) if e.kind() == ErrorKind::TimedOut
+                || e.kind() == ErrorKind::WouldBlock => {
+                true
+            }
+            _ => false
+        }
+    }
 }
 
 impl From<std::io::Error> for UtpError {
@@ -618,6 +633,7 @@ impl std::fmt::Debug for Packet {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("Packet")
          .field("seq_nr", &self.seq_number)
+         .field("header", &self.header)
          .finish()
     }
 }
@@ -652,6 +668,16 @@ impl Packet {
     pub fn syn() -> Packet {
         Packet {
             header: Header::new(PacketType::Syn),
+            payload: Payload::new(&[]),
+            seq_number: SequenceNumber::zero(),
+            resent: false,
+            last_sent: Timestamp::zero(),
+        }
+    }
+
+    pub fn new_type(ty: PacketType) -> Packet {
+        Packet {
+            header: Header::new(ty),
             payload: Payload::new(&[]),
             seq_number: SequenceNumber::zero(),
             resent: false,
@@ -855,6 +881,15 @@ impl<'a> PacketRef<'a> {
             received_at,
             packet_ref: unsafe { &*(buffer.as_ptr() as *const Packet) },
         })
+    }
+
+    fn ref_from_incoming(incoming: &IncomingBytes) -> PacketRef {
+        let len = incoming.buffer.len();
+        PacketRef {
+            len,
+            received_at: incoming.timestamp,
+            packet_ref: unsafe { &*(incoming.buffer.as_ptr() as *const Packet) },
+        }
     }
 
     fn header(&self) -> &Header {

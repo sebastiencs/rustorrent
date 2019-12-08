@@ -17,7 +17,7 @@ use super::{
 use crate::udp_ext::WithTimeout;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
-enum State {
+pub enum State {
     /// not yet connected
 	None,
 	/// sent a syn packet, not received any acks
@@ -48,15 +48,15 @@ enum State {
 	// Delete
 }
 
-const BASE_HISTORY: usize = 10;
-const INIT_CWND: u32 = 2;
-const MIN_CWND: u32 = 2;
+pub const BASE_HISTORY: usize = 10;
+pub const INIT_CWND: u32 = 2;
+pub const MIN_CWND: u32 = 2;
 /// Sender's Maximum Segment Size
 /// Set to Ethernet MTU
-const MSS: u32 = 1400;
-const TARGET: i64 = 100_000; //100;
-const GAIN: u32 = 1;
-const ALLOWED_INCREASE: u32 = 1;
+pub const MSS: u32 = 1400;
+pub const TARGET: i64 = 100_000; //100;
+pub const GAIN: u32 = 1;
+pub const ALLOWED_INCREASE: u32 = 1;
 
 pub struct UtpSocket {
     local: SocketAddr,
@@ -273,23 +273,6 @@ impl UtpSocket {
     }
 
     async fn send_packet(&mut self, mut packet: Packet) -> Result<()> {
-
-        // let packet_size = packet.size();
-        // let mut inflight_size = self.inflight_size();
-
-        // while packet_size + inflight_size > self.cwnd as usize {
-        //     println!("SENDING BUT BLOCKED BY CWND {:?} {:?} {:?}", packet_size, inflight_size, self.cwnd);
-
-        //     self.receive_packet().await?;
-
-        //     //if self.ac
-        //     // if self.ack_duplicate >= 3 {
-        //     //     println!("!!! DUPLICATE DETECTED !!!!", );
-        //     //     self.resend_packet(self.last_ack + 1).await?;
-        //     // }
-
-        //     inflight_size = self.inflight_size();
-        // }
 
         packet.set_ack_number(self.ack_number);
         packet.set_packet_seq_number(self.seq_number);

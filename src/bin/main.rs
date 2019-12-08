@@ -38,6 +38,13 @@ fn main() {
     println!("((397 * (1 << 16)) / 2) >> 16 = {}", ((397 * (1 << 16)) / 2) >> 16);
 
     async_std::task::block_on(async {
+        let mut listener = utp::stream::UtpListener::new(10001).await.unwrap();
+        listener.start().await.unwrap();
+
+
+        println!("DOOOOONE", );
+
+
         let mut socket = utp::socket::UtpSocket::bind(
             SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080)
         ).await.unwrap();
