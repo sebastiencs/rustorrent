@@ -2,6 +2,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::cmp::{PartialOrd, Ord};
 
 pub mod socket;
+pub mod stream;
 
 /// A safe type using wrapping_{add,sub} for +/-/cmp operations
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
