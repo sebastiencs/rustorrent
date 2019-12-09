@@ -183,7 +183,7 @@ impl UtpListener {
 
     pub fn start(self: Arc<Self>) {
         task::spawn(async move {
-            self.process_incoming().await
+            self.process_incoming().await?
         });
     }
 
@@ -250,6 +250,10 @@ impl UtpListener {
 
             {
                 if let Some(addr) = self.streams.read().await.get(&addr) {
+                    // self.streams is still borrowed at this point
+                    // can add.send() blocks and so self.streams be deadlock ?
+                    // A solution is to clone the addr, but it involves its drop overhead.
+                    // Or use try_send when available and clone only if error
                     addr.send(incoming).await;
                     continue;
                 }
@@ -271,6 +275,8 @@ impl UtpListener {
 struct UtpManager {
     socket: Arc<UdpSocket>,
     recv: Receiver<IncomingBytes>,
+    /// Do not await while locking the state
+    /// The await could block and lead to a deadlock state
     state: Arc<RwLock<State>>,
     addr: SocketAddr,
     writer: Sender<WriterCommand>,
@@ -452,6 +458,8 @@ impl UtpManager {
 struct UtpReader {
     rcv: Receiver<ReaderCommand>,
     send: Sender<ReaderResult>,
+    /// Do not await while locking the state
+    /// The await could block and lead to a deadlock state
     state: Arc<RwLock<State>>,
 }
 
@@ -484,6 +492,8 @@ struct UtpWriter {
     socket: Arc<UdpSocket>,
     addr: SocketAddr,
     command: Receiver<WriterCommand>,
+    /// Do not await while locking the state
+    /// The await could block and lead to a deadlock state
     state: Arc<RwLock<State>>
     // result: Sender<WriterResult>,
 }
