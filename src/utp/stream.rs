@@ -37,6 +37,19 @@ struct State {
 
     /// Packets sent but we didn't receive an ack for them
     inflight_packets: VecDeque<Packet>,
+
+    /// Notify we're connected
+    /// True if connected
+    on_connected: Option<Sender<bool>>,
+}
+
+impl State {
+    fn with_utp_state(utp_state: UtpState) -> State {
+        State {
+            utp_state,
+            ..Default::default()
+        }
+    }
 }
 
 impl Default for State {
@@ -64,6 +77,7 @@ impl Default for State {
             // last_ack: SequenceNumber::zero(),
             // lost_packets: VecDeque::with_capacity(100),
             // nlost: 0,
+            on_connected: None
         }
     }
 }
@@ -73,10 +87,6 @@ const BUFFER_CAPACITY: usize = 1500;
 pub struct UtpListener {
     v4: Arc<UdpSocket>,
     v6: Arc<UdpSocket>,
-    /// The buffer is used only by one task and won't be borrowed more than once
-    buffer_v4: RefCell<Vec<u8>>,
-    /// The buffer is used only by one task and won't be borrowed more than once
-    buffer_v6: RefCell<Vec<u8>>,
     /// The hashmap might be modified by different tasks so we wrap it in a RwLock
     streams: RwLock<HashMap<SocketAddr, Sender<IncomingBytes>>>,
     // sender: Sender<IncomingBytes>,
@@ -89,25 +99,25 @@ enum IncomingEvent {
 }
 
 impl UtpListener {
-    pub async fn new(port: u16) -> Result<UtpListener> {
-        let v4 = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port)).await?;
-        let v6 = UdpSocket::bind(SocketAddrV6::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1), port, 0, 0)).await?;
+    pub async fn new(port: u16) -> Result<Arc<UtpListener>> {
+        use async_std::prelude::*;
 
-        let mut buffer_v4 = Vec::with_capacity(BUFFER_CAPACITY);
-        let mut buffer_v6 = Vec::with_capacity(BUFFER_CAPACITY);
+        let v4 = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port));
+        let v6 = UdpSocket::bind(SocketAddrV6::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1), port, 0, 0));
 
-        unsafe {
-            buffer_v4.set_len(BUFFER_CAPACITY);
-            buffer_v6.set_len(BUFFER_CAPACITY);
-        }
+        let (v4, v6) = v4.join(v6).await;
+        let (v4, v6) = (v4?, v6?);
 
-        Ok(UtpListener {
+        let listener = Arc::new(UtpListener {
             v4: Arc::new(v4),
             v6: Arc::new(v6),
-            buffer_v4: RefCell::new(buffer_v4),
-            buffer_v6: RefCell::new(buffer_v6),
             streams: Default::default(),
-        })
+        });
+
+        let listener2 = Arc::clone(&listener);
+        listener2.start();
+
+        Ok(listener)
     }
 
     fn get_matching_socket(&self, sockaddr: &SocketAddr) -> Arc<UdpSocket> {
@@ -118,75 +128,34 @@ impl UtpListener {
         }
     }
 
-    async fn connect(&self, sockaddr: SocketAddr) -> Result<()> {
-
+    pub async fn connect(&self, sockaddr: SocketAddr) -> Result<UtpStream> {
         let socket = self.get_matching_socket(&sockaddr);
 
-        let mut buffer = [0; 1500];
-        let mut len_addr = None;
+        let (on_connected, is_connected) = channel(1);
 
-        let mut state = State::default();
+        let mut state = State::with_utp_state(UtpState::MustConnect);
+        state.on_connected = Some(on_connected);
+        let state = Arc::new(RwLock::new(state));
 
-        let mut header = Packet::syn();
-        header.set_connection_id(state.recv_id);
-        header.set_seq_number(state.seq_number);
-        header.set_window_size(1_048_576);
-        state.seq_number += 1;
+        let (sender, receiver) = channel(10);
+        let manager = UtpManager::new_with_state(socket, sockaddr, receiver, state);
 
-        for _ in 0..3 {
-            header.update_timestamp();
-            println!("SENDING {:#?}", header);
-
-            socket.send(header.as_bytes()).await?;
-
-            match socket.recv_from_timeout(&mut buffer, Duration::from_secs(1)).await {
-                Ok((n, addr)) => {
-                    len_addr = Some((n, addr));
-                    // self.remote = Some(addr);
-                    state.utp_state = UtpState::SynSent;
-                    break;
-                }
-                Err(ref e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {
-                    continue;
-                }
-                Err(e) => {
-                    return Err(e.into());
-                }
-            }
-        };
-
-        if let Some((len, addr)) = len_addr {
-            println!("CONNECTED", );
-            let packet = PacketRef::ref_from_buffer(&buffer[..len])?;
-            // self.dispatch(packet).await?;
-
-            // let manager = UtpManager::new(socket, sockaddr, receiver);
-
-            let (sender, receiver) = channel(10);
-            let manager = UtpManager::new(socket, sockaddr, receiver);
-
-            {
-                let mut streams = self.streams.write().await;
-                streams.insert(sockaddr, sender.clone());
-            }
-
-            task::spawn(async move {
-                manager.start().await
-            });
-
-
-            // let udp_clone = udp.try_clone()?;
-            // let udp_clone2 = udp.try_clone()?;
-
-            task::spawn(async move {
-
-            });
-
-            return Ok(());
+        {
+            let mut streams = self.streams.write().await;
+            streams.insert(sockaddr, sender.clone());
         }
 
-        Err(Error::new(ErrorKind::TimedOut, "connect timed out").into())
+        let stream = manager.get_stream();
 
+        task::spawn(async move {
+            manager.start().await
+        });
+
+        if let Some(true) = is_connected.recv().await {
+            Ok(stream)
+        } else {
+            Err(Error::new(ErrorKind::TimedOut, "utp connect timed out").into())
+        }
     }
 
     async fn new_connection(&self, sockaddr: SocketAddr) -> Sender<IncomingBytes> {
@@ -212,15 +181,15 @@ impl UtpListener {
         sender
     }
 
-    pub async fn start(&self) -> Result<()> {
-        self.process_incoming().await
+    pub fn start(self: Arc<Self>) {
+        task::spawn(async move {
+            self.process_incoming().await
+        });
     }
 
-    async fn poll(&self) -> Result<IncomingEvent> {
-        let mut buffer_v4 = self.buffer_v4.borrow_mut();
-        let mut buffer_v6 = self.buffer_v6.borrow_mut();
-        let v4 = self.v4.recv_from(buffer_v4.as_mut_slice());
-        let v6 = self.v6.recv_from(buffer_v6.as_mut_slice());
+    async fn poll(&self, buffer_v4: &mut [u8], buffer_v6: &mut [u8]) -> Result<IncomingEvent> {
+        let v4 = self.v4.recv_from(buffer_v4);
+        let v6 = self.v6.recv_from(buffer_v6);
         pin_mut!(v4); // Pin on the stack
         pin_mut!(v6); // Pin on the stack
 
@@ -241,9 +210,9 @@ impl UtpListener {
             .map_err(Into::into)
     }
 
-    async fn poll_event(&self) -> Result<IncomingEvent> {
+    async fn poll_event(&self, buffer_v4: &mut [u8], buffer_v6: &mut [u8]) -> Result<IncomingEvent> {
         loop {
-            match self.poll().await {
+            match self.poll(buffer_v4, buffer_v6).await {
                 Err(ref e) if e.should_continue() => {
                     // WouldBlock or TimedOut
                     continue
@@ -256,13 +225,16 @@ impl UtpListener {
     async fn process_incoming(&self) -> Result<()> {
         use IncomingEvent::*;
 
+        let mut buffer_v4 = [0; BUFFER_CAPACITY];
+        let mut buffer_v6 = [0; BUFFER_CAPACITY];
+
         loop {
-            let (buffer, addr) = match self.poll_event().await? {
+            let (buffer, addr) = match self.poll_event(&mut buffer_v4[..], &mut buffer_v6[..]).await? {
                 V4((size, addr)) => {
-                    (Vec::from_slice(&self.buffer_v4.borrow()[..size]), addr)
+                    (Vec::from_slice(&buffer_v4[..size]), addr)
                 },
                 V6((size, addr)) => {
-                    (Vec::from_slice(&self.buffer_v4.borrow()[..size]), addr)
+                    (Vec::from_slice(&buffer_v6[..size]), addr)
                 },
             };
 
@@ -302,6 +274,10 @@ struct UtpManager {
     state: Arc<RwLock<State>>,
     addr: SocketAddr,
     writer: Sender<WriterCommand>,
+    reader: Sender<ReaderCommand>,
+    _reader_rcv: Receiver<ReaderCommand>,
+    reader_result: Sender<ReaderResult>,
+    _reader_result_rcv: Receiver<ReaderResult>,
 }
 
 pub struct IncomingBytes {
@@ -315,13 +291,28 @@ impl UtpManager {
         addr: SocketAddr,
         recv: Receiver<IncomingBytes>
     ) -> UtpManager {
-        let (writer, writer_rcv) = channel(10);
+        Self::new_with_state(socket, addr, recv, Default::default())
+    }
 
-        let state = Default::default();
+    fn new_with_state(
+        socket: Arc<UdpSocket>,
+        addr: SocketAddr,
+        recv: Receiver<IncomingBytes>,
+        state: Arc<RwLock<State>>,
+    ) -> UtpManager {
+        let (writer, writer_rcv) = channel(10);
 
         let writer_actor = UtpWriter::new(socket.clone(), addr, writer_rcv, Arc::clone(&state));
         task::spawn(async move {
             writer_actor.start().await;
+        });
+
+        let (reader, _reader_rcv) = channel(10);
+        let (reader_result, _reader_result_rcv) = channel(10);
+
+        let reader_actor = UtpReader::new(_reader_rcv.clone(), reader_result.clone(), Arc::clone(&state));
+        task::spawn(async move {
+            reader_actor.start().await;
         });
 
         UtpManager {
@@ -330,29 +321,39 @@ impl UtpManager {
             recv,
             writer,
             state,
+            reader,
+            _reader_rcv,
+            reader_result,
+            _reader_result_rcv
         }
     }
 
     pub fn get_stream(&self) -> UtpStream {
-
-        // #[derive(Debug)]
-        // struct UtpStream {
-        //     reader_command: Sender<ReaderCommand>,
-        //     reader_result: Receiver<ReaderResult>,
-        //     writer_command: Sender<WriterCommand>,
-        //     // writer_result: Receiver<WriterResult>,
-        // }
-
-        // UtpStream {
-
-        // }
-
+        UtpStream {
+            reader_command: self.reader.clone(),
+            reader_result: self._reader_result_rcv.clone(),
+            writer_command: self.writer.clone()
+        }
     }
 
     async fn start(self) {
+        self.ensure_connected().await;
         while let Some(incoming) = self.recv.recv().await {
             self.process_incoming(incoming).await;
         }
+    }
+
+    async fn ensure_connected(&self) {
+        let state = {
+            let state = self.state.read().await;
+            state.utp_state
+        };
+
+        if state != UtpState::MustConnect {
+            return;
+        }
+
+        self.writer.send(WriterCommand::SendSyn).await;
     }
 
     async fn process_incoming(&self, incoming: IncomingBytes) -> Result<()> {
@@ -403,11 +404,18 @@ impl UtpManager {
                 // https://engineering.bittorrent.com/2015/08/27/drdos-udp-based-protocols-and-bittorrent/
                 // https://www.usenix.org/system/files/conference/woot15/woot15-paper-adamsky.pdf
                 // https://github.com/bittorrent/libutp/commit/13d33254262d46b638d35c4bc1a2f76cea885760
-                let mut state = self.state.write().await;
-                state.utp_state = UtpState::Connected;
-                state.ack_number = packet.get_seq_number() - 1;
-                state.remote_window = packet.get_window_size();
-                println!("CONNECTED !", );
+                let notify = {
+                    let mut state = self.state.write().await;
+                    state.utp_state = UtpState::Connected;
+                    state.ack_number = packet.get_seq_number() - 1;
+                    state.remote_window = packet.get_window_size();
+                    println!("CONNECTED !", );
+                    state.on_connected.take()
+                };
+                if let Some(notify) = notify {
+                    notify.send(true).await;
+                };
+
             }
             (PacketType::State, UtpState::Connected) => {
                 if remote_window != packet.get_window_size() {
@@ -442,7 +450,23 @@ impl UtpManager {
 
 #[derive(Debug)]
 struct UtpReader {
-    socket: UdpSocket
+    rcv: Receiver<ReaderCommand>,
+    send: Sender<ReaderResult>,
+    state: Arc<RwLock<State>>,
+}
+
+impl UtpReader {
+    fn new(
+        rcv: Receiver<ReaderCommand>,
+        send: Sender<ReaderResult>,
+        state: Arc<RwLock<State>>,
+    ) -> UtpReader {
+        UtpReader { rcv, send, state }
+    }
+
+    async fn start(self) {
+
+    }
 }
 
 #[derive(Debug)]
@@ -472,6 +496,8 @@ enum WriterCommand {
     SendPacket {
         packet: Packet
     },
+    /// Syn is a special case
+    SendSyn,
     ResendPacket {
 
     }
@@ -488,7 +514,6 @@ impl UtpWriter {
         addr: SocketAddr,
         command: Receiver<WriterCommand>,
         state: Arc<RwLock<State>>,
-        // result: Sender<WriterResult>,
     ) -> UtpWriter {
         UtpWriter { socket, addr, command, state }
     }
@@ -503,6 +528,9 @@ impl UtpWriter {
                     self.send_packet(packet).await.unwrap();
                 }
                 WriterCommand::ResendPacket { } => {}
+                WriterCommand::SendSyn => {
+                    self.send_syn().await.unwrap();
+                }
             }
         }
     }
@@ -512,7 +540,6 @@ impl UtpWriter {
     }
 
     async fn send_packet(&mut self, mut packet: Packet) -> Result<()> {
-
         let (ack_number, seq_number, send_id) = {
             let state = self.state.read().await;
             (state.ack_number, state.seq_number, state.send_id)
@@ -522,11 +549,11 @@ impl UtpWriter {
         packet.set_packet_seq_number(seq_number);
         packet.set_connection_id(send_id);
         packet.set_window_size(1_048_576);
-        packet.update_timestamp();
 
         println!("SENDING NEW PACKET ! {:?}", packet);
 
         // println!("SENDING {:?}", &*packet);
+        packet.update_timestamp();
 
         self.socket.send_to(packet.as_bytes(), self.addr).await?;
 
@@ -539,25 +566,53 @@ impl UtpWriter {
         Ok(())
     }
 
-    // async fn send_result(&mut self) {
+    async fn send_syn(&mut self) -> Result<()> {
+        let (seq_number, recv_id) = {
+            let state = self.state.read().await;
+            (state.seq_number, state.recv_id)
+        };
 
-    // }
+        let mut packet = Packet::syn();
+        packet.set_connection_id(recv_id);
+        packet.set_seq_number(seq_number);
+        packet.set_window_size(1_048_576);
+
+        println!("SENDING {:#?}", packet);
+
+        packet.update_timestamp();
+        self.socket.send_to(packet.as_bytes(), self.addr).await?;
+
+        {
+            let mut state = self.state.write().await;
+            state.seq_number += 1;
+            state.inflight_packets.push_back(packet);
+            state.utp_state = UtpState::SynSent;
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
-struct UtpStream {
+pub struct UtpStream {
     reader_command: Sender<ReaderCommand>,
     reader_result: Receiver<ReaderResult>,
     writer_command: Sender<WriterCommand>,
-    // writer_result: Receiver<WriterResult>,
 }
 
 impl UtpStream {
-    pub fn read(&self) {
+    pub async fn read(&self, data: &mut [u8]) {
+        self.reader_command.send(ReaderCommand {
+            length: data.len()
+        }).await;
 
+        self.reader_result.recv().await;
     }
 
-    pub fn write(&self) {
-
+    pub async fn write(&self, data: &[u8]) {
+        let data = Vec::from_slice(data);
+        self.writer_command.send(WriterCommand::WriteData {
+            data
+        }).await;
     }
 }

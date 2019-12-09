@@ -29,6 +29,8 @@ pub enum State {
 	/// have not yet been acked. We might still be waiting
 	/// for a FIN from the other end
 	FinSent,
+    ///
+    MustConnect
 	// /// ====== states beyond this point =====
 	// /// === are considered closing states ===
 	// /// === and will cause the socket to ====
