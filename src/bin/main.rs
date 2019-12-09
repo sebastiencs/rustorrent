@@ -56,11 +56,11 @@ fn main() {
         // ).await.unwrap();
         // socket.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
 
-        // let stdin = io::stdin();
-        // let mut buffer = Vec::new();
-        // let mut handle = stdin.lock();
+        let stdin = io::stdin();
+        let mut buffer = Vec::new();
+        let mut handle = stdin.lock();
 
-        // handle.read_to_end(&mut buffer).unwrap();
+        handle.read_to_end(&mut buffer).unwrap();
 
         // socket.send(&buffer).await.unwrap();
 

@@ -4,8 +4,9 @@ use std::io::ErrorKind;
 
 pub mod socket;
 pub mod stream;
+pub mod tick;
 
-use stream::IncomingBytes;
+use stream::UtpEvent;
 
 /// A safe type using wrapping_{add,sub} for +/-/cmp operations
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -883,12 +884,12 @@ impl<'a> PacketRef<'a> {
         })
     }
 
-    fn ref_from_incoming(incoming: &IncomingBytes) -> PacketRef {
-        let len = incoming.buffer.len();
+    fn ref_from_incoming(buffer: &[u8], timestamp: Timestamp) -> PacketRef {
+        let len = buffer.len();
         PacketRef {
             len,
-            received_at: incoming.timestamp,
-            packet_ref: unsafe { &*(incoming.buffer.as_ptr() as *const Packet) },
+            received_at: timestamp,
+            packet_ref: unsafe { &*(buffer.as_ptr() as *const Packet) },
         }
     }
 

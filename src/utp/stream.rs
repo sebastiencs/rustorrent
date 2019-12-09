@@ -22,6 +22,7 @@ use super::socket::{
     INIT_CWND, MSS,
     State as UtpState
 };
+use super::tick::Tick;
 use crate::utils::FromSlice;
 
 #[derive(Debug)]
@@ -88,9 +89,9 @@ pub struct UtpListener {
     v4: Arc<UdpSocket>,
     v6: Arc<UdpSocket>,
     /// The hashmap might be modified by different tasks so we wrap it in a RwLock
-    streams: RwLock<HashMap<SocketAddr, Sender<IncomingBytes>>>,
-    // sender: Sender<IncomingBytes>,
-    // _recv: Receiver<IncomingBytes>,
+    streams: Arc<RwLock<HashMap<SocketAddr, Sender<UtpEvent>>>>,
+    // sender: Sender<UtpEvent>,
+    // _recv: Receiver<UtpEvent>,
 }
 
 enum IncomingEvent {
@@ -114,8 +115,7 @@ impl UtpListener {
             streams: Default::default(),
         });
 
-        let listener2 = Arc::clone(&listener);
-        listener2.start();
+        listener.clone().start();
 
         Ok(listener)
     }
@@ -158,7 +158,7 @@ impl UtpListener {
         }
     }
 
-    async fn new_connection(&self, sockaddr: SocketAddr) -> Sender<IncomingBytes> {
+    async fn new_connection(&self, sockaddr: SocketAddr) -> Sender<UtpEvent> {
         println!("NEW CONNECTION {:?}", sockaddr);
         let socket = if sockaddr.is_ipv4() {
             Arc::clone(&self.v4)
@@ -183,7 +183,8 @@ impl UtpListener {
 
     pub fn start(self: Arc<Self>) {
         task::spawn(async move {
-            self.process_incoming().await?
+            Tick::new(self.streams.clone()).start();
+            self.process_incoming().await.unwrap()
         });
     }
 
@@ -246,10 +247,11 @@ impl UtpListener {
                 continue;
             }
 
-            let incoming = IncomingBytes { buffer, timestamp };
 
             {
                 if let Some(addr) = self.streams.read().await.get(&addr) {
+                    let incoming = UtpEvent::IncomingBytes { buffer, timestamp };
+
                     // self.streams is still borrowed at this point
                     // can add.send() blocks and so self.streams be deadlock ?
                     // A solution is to clone the addr, but it involves its drop overhead.
@@ -259,9 +261,10 @@ impl UtpListener {
                 }
             }
 
-            let packet = PacketRef::ref_from_incoming(&incoming);
+            let packet = PacketRef::ref_from_incoming(&buffer, timestamp);
 
             if let Ok(PacketType::Syn) = packet.get_type() {
+                let incoming = UtpEvent::IncomingBytes { buffer, timestamp };
                 self.new_connection(addr)
                     .await
                     .send(incoming)
@@ -274,7 +277,7 @@ impl UtpListener {
 #[derive(Debug)]
 struct UtpManager {
     socket: Arc<UdpSocket>,
-    recv: Receiver<IncomingBytes>,
+    recv: Receiver<UtpEvent>,
     /// Do not await while locking the state
     /// The await could block and lead to a deadlock state
     state: Arc<RwLock<State>>,
@@ -286,16 +289,24 @@ struct UtpManager {
     _reader_result_rcv: Receiver<ReaderResult>,
 }
 
-pub struct IncomingBytes {
-    pub buffer: Vec<u8>,
-    pub timestamp: Timestamp
+// pub struct IncomingBytes {
+//     pub buffer: Vec<u8>,
+//     pub timestamp: Timestamp
+// }
+
+pub enum UtpEvent {
+    IncomingBytes {
+        buffer: Vec<u8>,
+        timestamp: Timestamp
+    },
+    Tick
 }
 
 impl UtpManager {
     fn new(
         socket: Arc<UdpSocket>,
         addr: SocketAddr,
-        recv: Receiver<IncomingBytes>
+        recv: Receiver<UtpEvent>
     ) -> UtpManager {
         Self::new_with_state(socket, addr, recv, Default::default())
     }
@@ -303,7 +314,7 @@ impl UtpManager {
     fn new_with_state(
         socket: Arc<UdpSocket>,
         addr: SocketAddr,
-        recv: Receiver<IncomingBytes>,
+        recv: Receiver<UtpEvent>,
         state: Arc<RwLock<State>>,
     ) -> UtpManager {
         let (writer, writer_rcv) = channel(10);
@@ -362,9 +373,16 @@ impl UtpManager {
         self.writer.send(WriterCommand::SendSyn).await;
     }
 
-    async fn process_incoming(&self, incoming: IncomingBytes) -> Result<()> {
-        let packet = PacketRef::ref_from_incoming(&incoming);
-        self.dispatch(packet).await?;
+    async fn process_incoming(&self, event: UtpEvent) -> Result<()> {
+        match event {
+            UtpEvent::IncomingBytes { buffer, timestamp } => {
+                let packet = PacketRef::ref_from_incoming(&buffer, timestamp);
+                self.dispatch(packet).await?;
+            }
+            UtpEvent::Tick => {
+                println!("TICK RECEIVED", );
+            }
+        }
         Ok(())
     }
 
