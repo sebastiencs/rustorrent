@@ -70,11 +70,10 @@ struct State {
 }
 
 impl State {
-    async fn add_packet_inflight(&self, packet: Packet) {
+    async fn add_packet_inflight(&self, seq_num: SequenceNumber, packet: Packet) {
         let size = packet.size();
 
         let mut inflight_packets = self.inflight_packets.write().await;
-        let seq_num = packet.get_packet_seq_number();
         inflight_packets.insert(seq_num, packet);
 
         self.atomic.in_flight.fetch_add(size as u32, Ordering::AcqRel);
@@ -206,7 +205,7 @@ impl UtpListener {
     pub async fn new(port: u16) -> Result<Arc<UtpListener>> {
         use async_std::prelude::*;
 
-        let v4 = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port));
+        let v4 = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), port));
         let v6 = UdpSocket::bind(SocketAddrV6::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1), port, 0, 0));
 
         let (v4, v6) = v4.join(v6).await;
@@ -250,9 +249,7 @@ impl UtpListener {
 
         let stream = manager.get_stream();
 
-        task::spawn(async move {
-            manager.start().await
-        });
+        task::spawn(async move { manager.start().await });
 
         if let Some(true) = is_connected.recv().await {
             Ok(stream)
@@ -404,7 +401,11 @@ struct UtpManager {
 
     tmp_packet_losts: Vec<SequenceNumber>,
 
-    nlost: usize
+    nlost: usize,
+
+    slow_start: bool,
+
+    next_cwnd_decrease: Instant,
 }
 
 pub enum UtpEvent {
@@ -466,7 +467,9 @@ impl UtpManager {
             ack_duplicate: 0,
             delay_history: DelayHistory::new(),
             tmp_packet_losts: Vec::new(),
-            nlost: 0
+            nlost: 0,
+            slow_start: true,
+            next_cwnd_decrease: Instant::now()
         }
     }
 
@@ -703,13 +706,25 @@ impl UtpManager {
         let delay = packet.get_timestamp_diff();
         if !delay.is_zero() {
             self.delay_history.add_delay(delay);
-            self.apply_congestion_control(bytes_newly_acked, in_flight);
+            if !lost {
+                self.apply_congestion_control(bytes_newly_acked, in_flight);
+            }
         }
 
         if lost {
-            let cwnd = self.state.cwnd();
-            let cwnd = cwnd.min((cwnd / 2).max(MIN_CWND * MSS));
-            self.state.set_cwnd(cwnd);
+            let now = Instant::now();
+
+            if self.next_cwnd_decrease < now {
+                let cwnd = self.state.cwnd();
+                let cwnd = cwnd.min((cwnd / 2).max(MIN_CWND * MSS));
+                self.state.set_cwnd(cwnd);
+                self.next_cwnd_decrease = now + Duration::from_millis(100);
+            }
+
+            if self.slow_start {
+                println!("STOP SLOW START AT {:?}", self.state.cwnd());
+                self.slow_start = false;
+            }
 
             self.nlost += self.tmp_packet_losts.len();
 
@@ -733,29 +748,32 @@ impl UtpManager {
         self.tmp_packet_losts.clear();
     }
 
-    // /// Returns the number of bytes currently in flight (sent but not acked)
-    // async fn inflight_size(&self) -> usize {
-    //     let inflight_packets = self.state.inflight_packets.read().await;
-    //     inflight_packets.iter().map(Packet::size).sum()
-    // }
-
     fn apply_congestion_control(&mut self, bytes_newly_acked: usize, in_flight: usize) {
         let lowest_relative = self.delay_history.lowest_relative();
 
         let cwnd = self.state.cwnd() as usize;
+        let before = cwnd;
 
         let cwnd_reached = in_flight + bytes_newly_acked + self.packet_size() > cwnd;
 
         if cwnd_reached {
-            let window_factor = I48F16::from_num(bytes_newly_acked as i64) / in_flight as i64;
-            let delay_factor = I48F16::from_num(TARGET - lowest_relative.as_i64()) / TARGET;
+            let cwnd = if self.slow_start {
+                (cwnd + bytes_newly_acked) as u32
+            } else {
+                let window_factor = I48F16::from_num(bytes_newly_acked as i64) / in_flight as i64;
+                let delay_factor = I48F16::from_num(TARGET - lowest_relative.as_i64()) / TARGET;
 
-            let gain = (window_factor * delay_factor) * 3000;
+                let gain = (window_factor * delay_factor) * 3000;
 
-            let cwnd = self.state.remote_window().min((cwnd as i32 + gain.to_num::<i32>()).max(0) as u32);
+                (cwnd as i32 + gain.to_num::<i32>()).max(0) as u32
+            };
+            let cwnd = self.state.remote_window().min(cwnd);
             self.state.set_cwnd(cwnd);
 
-            //println!("!! CWND CHANGED !! {:?} WIN_FACT {:?} DELAY_FACT {:?} GAIN {:?}", cwnd, window_factor, delay_factor, gain);
+            println!("CWND: {:?} BEFORE={}", cwnd, before);
+
+            //println!("!! CWND CHANGED !! {:?} WIN_FACT {:?} DELAY_FACT {:?} GAIN {:?}",
+            // cwnd, window_factor, delay_factor, gain);
         }
     }
 
@@ -1044,7 +1062,7 @@ impl UtpWriter {
 
         self.socket.send_to(packet.as_bytes(), self.addr).await?;
 
-        self.state.add_packet_inflight(packet).await;
+        self.state.add_packet_inflight(seq_number, packet).await;
         // {
         //     let mut inflight_packets = self.state.inflight_packets.write().await;
         //     inflight_packets.push_back(packet);
@@ -1068,7 +1086,7 @@ impl UtpWriter {
         self.socket.send_to(packet.as_bytes(), self.addr).await?;
 
         self.state.set_utp_state(UtpState::SynSent);
-        self.state.add_packet_inflight(packet).await;
+        self.state.add_packet_inflight(seq_number, packet).await;
         // {
         //     let mut inflight_packets = self.state.inflight_packets.write().await;
         //     inflight_packets.push_back(packet);
