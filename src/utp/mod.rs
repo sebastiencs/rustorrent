@@ -50,6 +50,18 @@ impl SequenceNumber {
     }
 }
 
+impl From<u16> for SequenceNumber {
+    fn from(n: u16) -> SequenceNumber {
+        SequenceNumber(n)
+    }
+}
+
+impl From<SequenceNumber> for u16 {
+    fn from(s: SequenceNumber) -> u16 {
+        s.0
+    }
+}
+
 impl Add<u16> for SequenceNumber {
     type Output = Self;
 

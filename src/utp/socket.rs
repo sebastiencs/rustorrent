@@ -50,6 +50,31 @@ pub enum State {
 	// Delete
 }
 
+impl From<u8> for State {
+    fn from(n: u8) -> State {
+        match n {
+            0 => State::None,
+            1 => State::SynSent,
+            2 => State::Connected,
+            3 => State::FinSent,
+            4 => State::MustConnect,
+            _ => unreachable!()
+        }
+    }
+}
+
+impl From<State> for u8 {
+    fn from(s: State) -> u8 {
+        match s {
+            State::None => 0,
+            State::SynSent => 1,
+            State::Connected => 2,
+            State::FinSent => 3,
+            State::MustConnect => 4,
+        }
+    }
+}
+
 pub const BASE_HISTORY: usize = 10;
 pub const INIT_CWND: u32 = 2;
 pub const MIN_CWND: u32 = 2;
