@@ -9,7 +9,7 @@ pub mod tick;
 use stream::UtpEvent;
 
 /// A safe type using wrapping_{add,sub} for +/-/cmp operations
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct SequenceNumber(u16);
 
 impl SequenceNumber {
@@ -313,6 +313,7 @@ pub enum UtpError {
     WrongVersion,
     FamillyMismatch,
     PacketLost,
+    MustClose,
     IO(std::io::Error)
 }
 
@@ -639,6 +640,7 @@ pub struct Packet {
     /// True if this packet was resent
     resent: bool,
     last_sent: Timestamp,
+    lost: bool
 //    resent_time: Timestamp,
 }
 
@@ -675,6 +677,7 @@ impl Packet {
             seq_number: SequenceNumber::zero(),
             resent: false,
             last_sent: Timestamp::zero(),
+            lost: false
         }
     }
 
@@ -685,6 +688,7 @@ impl Packet {
             seq_number: SequenceNumber::zero(),
             resent: false,
             last_sent: Timestamp::zero(),
+            lost: false
         }
     }
 
@@ -695,6 +699,7 @@ impl Packet {
             seq_number: SequenceNumber::zero(),
             resent: false,
             last_sent: Timestamp::zero(),
+            lost: false
         }
     }
 

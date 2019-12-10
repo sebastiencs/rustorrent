@@ -57,6 +57,16 @@ fn main() {
 
         let stream = listener.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
 
+        let stdin = io::stdin();
+        let mut buffer = Vec::new();
+        let mut handle = stdin.lock();
+
+        handle.read_to_end(&mut buffer).unwrap();
+
+        stream.write(&buffer).await;
+
+         // stream.write(b"hello").await;
+
         println!("DOOOOONE", );
 
         // return Ok(true);

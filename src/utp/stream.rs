@@ -7,19 +7,24 @@ use futures::task::{Context, Poll};
 use futures::{future, pin_mut};
 use futures::future::{Fuse, FutureExt};
 use hashbrown::HashMap;
+use fixed::types::I48F16;
 
 use std::collections::VecDeque;
 use std::cell::RefCell;
 
 use crate::udp_ext::WithTimeout;
+use crate::utils::Map;
 
 use super::{
     UtpError, Result, SequenceNumber, Packet, PacketRef,
     Timestamp, PacketType, ConnectionId, HEADER_SIZE,
+    SelectiveAckBit, SelectiveAck, DelayHistory, Delay, RelativeDelay,
+    UDP_IPV4_MTU, UDP_IPV6_MTU
 };
 use super::socket::{
     INIT_CWND, MSS,
-    State as UtpState
+    State as UtpState,
+    TARGET
 };
 use super::tick::Tick;
 use crate::utils::FromSlice;
@@ -36,6 +41,7 @@ struct AtomicState {
     seq_number: CacheAligned<AtomicU16>,
     remote_window: CacheAligned<AtomicU32>,
     cwnd: CacheAligned<AtomicU32>,
+    in_flight: CacheAligned<AtomicU32>,
 }
 
 impl Default for AtomicState {
@@ -50,6 +56,7 @@ impl Default for AtomicState {
             seq_number: CacheAligned::new(AtomicU16::new(SequenceNumber::random().into())),
             remote_window: CacheAligned::new(AtomicU32::new(INIT_CWND * MSS)),
             cwnd: CacheAligned::new(AtomicU32::new(INIT_CWND * MSS)),
+            in_flight: CacheAligned::new(AtomicU32::new(0))
         }
     }
 }
@@ -59,10 +66,47 @@ struct State {
     atomic: AtomicState,
 
     /// Packets sent but we didn't receive an ack for them
-    inflight_packets: RwLock<VecDeque<Packet>>,
+    inflight_packets: RwLock<Map<SequenceNumber, Packet>>,
 }
 
 impl State {
+    async fn add_packet_inflight(&self, packet: Packet) {
+        let size = packet.size();
+
+        let mut inflight_packets = self.inflight_packets.write().await;
+        let seq_num = packet.get_packet_seq_number();
+        inflight_packets.insert(seq_num, packet);
+
+        self.atomic.in_flight.fetch_add(size as u32, Ordering::AcqRel);
+    }
+
+    async fn remove_packets(&self, ack_number: SequenceNumber) -> usize {
+        let mut size = 0;
+        let mut inflight_packets = self.inflight_packets.write().await;
+
+        inflight_packets
+            .retain(|_, p| {
+                !p.is_seq_less_equal(ack_number) || (false, size += p.size()).0
+            });
+
+        self.atomic.in_flight.fetch_sub(size as u32, Ordering::AcqRel);
+        size
+    }
+
+    async fn remove_packet(&self, ack_number: SequenceNumber) -> usize {
+        let mut inflight_packets = self.inflight_packets.write().await;
+
+        let size = inflight_packets.get(&ack_number).map(|p| p.size()).unwrap_or(0);
+        inflight_packets.remove(&ack_number);
+
+        self.atomic.in_flight.fetch_sub(size as u32, Ordering::AcqRel);
+        size
+    }
+
+    fn inflight_size(&self) -> usize {
+        self.atomic.in_flight.load(Ordering::Acquire) as usize
+    }
+
     fn utp_state(&self) -> UtpState {
         self.atomic.utp_state.load(Ordering::Acquire).into()
     }
@@ -134,7 +178,7 @@ impl Default for State {
             // flight_size: 0,
             // srtt: 0,
             // rttvar: 0,
-            inflight_packets: RwLock::new(VecDeque::with_capacity(64)),
+            inflight_packets: Default::default(),
             // delay_history: DelayHistory::new(),
             // ack_duplicate: 0,
             // last_ack: SequenceNumber::zero(),
@@ -218,7 +262,7 @@ impl UtpListener {
     }
 
     async fn new_connection(&self, sockaddr: SocketAddr) -> Sender<UtpEvent> {
-        println!("NEW CONNECTION {:?}", sockaddr);
+        //println!("NEW CONNECTION {:?}", sockaddr);
         let socket = if sockaddr.is_ipv4() {
             Arc::clone(&self.v4)
         } else {
@@ -300,7 +344,7 @@ impl UtpListener {
 
             let timestamp = Timestamp::now();
 
-            println!("INCOMING {:?} {:?}", buffer.len(), addr);
+            //println!("INCOMING {:?} {:?}", buffer.len(), addr);
 
             if buffer.len() < HEADER_SIZE {
                 continue;
@@ -343,6 +387,7 @@ struct UtpManager {
     /// The await could block and lead to a deadlock state
     state: Arc<State>,
     addr: SocketAddr,
+    writer_user: Sender<WriterUserCommand>,
     writer: Sender<WriterCommand>,
 
     timeout: Instant,
@@ -351,6 +396,13 @@ struct UtpManager {
     ntimeout: usize,
 
     on_connected: Option<Sender<bool>>,
+
+    ack_duplicate: u8,
+    last_ack: SequenceNumber,
+
+    delay_history: DelayHistory,
+
+    tmp_packet_losts: Vec<SequenceNumber>,
 }
 
 pub enum UtpEvent {
@@ -391,8 +443,9 @@ impl UtpManager {
         state: Arc<State>,
     ) -> UtpManager {
         let (writer, writer_rcv) = channel(10);
+        let (writer_user, writer_user_rcv) = channel(10);
 
-        let writer_actor = UtpWriter::new(socket.clone(), addr, writer_rcv, Arc::clone(&state));
+        let writer_actor = UtpWriter::new(socket.clone(), addr, writer_user_rcv, writer_rcv, Arc::clone(&state));
         task::spawn(async move {
             writer_actor.start().await;
         });
@@ -403,9 +456,14 @@ impl UtpManager {
             recv,
             writer,
             state,
+            writer_user,
             timeout: Instant::now() + Duration::from_secs(3),
             ntimeout: 0,
-            on_connected: None
+            on_connected: None,
+            last_ack: SequenceNumber::zero(),
+            ack_duplicate: 0,
+            delay_history: DelayHistory::new(),
+            tmp_packet_losts: Vec::new(),
         }
     }
 
@@ -417,7 +475,7 @@ impl UtpManager {
         UtpStream {
             // reader_command: self.reader.clone(),
             // reader_result: self._reader_result_rcv.clone(),
-            writer_command: self.writer.clone()
+            writer_user_command: self.writer_user.clone()
         }
     }
 
@@ -443,48 +501,65 @@ impl UtpManager {
         match event {
             UtpEvent::IncomingBytes { buffer, timestamp } => {
                 let packet = PacketRef::ref_from_incoming(&buffer, timestamp);
-                self.dispatch(packet).await?;
+                match self.dispatch(packet).await {
+                    Err(UtpError::PacketLost) => {
+                        self.writer.send(WriterCommand::ResendPacket { only_lost: true }).await;
+                    }
+                    Err(e) => return Err(e),
+                    Ok(_) => {}
+                }
             }
             UtpEvent::Tick => {
-                println!("TICK RECEIVED {} {:?}", self.ntimeout, Instant::now());
                 if Instant::now() > self.timeout {
-                    if self.ntimeout >= 3 {
-                        println!("RETURN ERRR", );
-                        return Err(Error::new(ErrorKind::TimedOut, "utp connect timed out").into());
+
+                    let flight_size = self.state.inflight_size();
+
+                    {
+                        let vec = self.state.inflight_packets.read().await;
+                        //println!("RECEIVED TICK ntimeout={:?} inflight={:?} {:?}", self.ntimeout, flight_size, vec);
                     }
-                    self.on_timeout().await;
+                    self.on_timeout().await?;
                     // Resend packets
-                } else {
-                    // self.ntimeout = 0;
                 }
             }
         }
         Ok(())
     }
 
-    async fn on_timeout(&mut self) {
+    async fn on_timeout(&mut self) -> Result<()> {
+        use UtpState::*;
+
         let utp_state = self.state.utp_state();
 
-        use UtpState::*;
+        if (utp_state == SynSent && self.ntimeout >= 3)
+            || self.ntimeout >= 7
+        {
+            return Err(Error::new(ErrorKind::TimedOut, "utp connect timed out").into());
+        }
 
         match utp_state {
             SynSent => {
                 self.writer.send(WriterCommand::SendSyn).await;
             }
             Connected => {
-
+                if self.state.inflight_size() > 0 {
+                    self.writer.send(WriterCommand::ResendPacket { only_lost: false }).await;
+                }
             }
             _ => {}
         }
 
-        // If packet inflight
-        self.ntimeout += 1;
+        if self.state.inflight_size() > 0 {
+            self.ntimeout += 1;
+        }
 
         self.timeout = Instant::now() + Duration::from_secs(1);
+
+        Ok(())
     }
 
     async fn dispatch(&mut self, packet: PacketRef<'_>) -> Result<()> {
-        println!("DISPATCH HEADER: {:?}", packet.header());
+        //println!("DISPATCH HEADER: {:?}", packet.header());
 
         let delay = packet.received_at.delay(packet.get_timestamp());
         // self.delay = Delay::since(packet.get_timestamp());
@@ -496,7 +571,7 @@ impl UtpManager {
 
         match (packet.get_type()?, utp_state) {
             (PacketType::Syn, UtpState::None) => {
-                println!("RECEIVED SYN {:?}", self.addr);
+                //println!("RECEIVED SYN {:?}", self.addr);
                 // Set self.remote
                 let connection_id = packet.get_connection_id();
 
@@ -526,6 +601,8 @@ impl UtpManager {
                 if let Some(notify) = self.on_connected.take() {
                     notify.send(true).await;
                 };
+
+                self.state.remove_packets(packet.get_ack_number()).await;
             }
             (PacketType::State, UtpState::Connected) => {
                 let remote_window = self.state.remote_window();
@@ -534,7 +611,7 @@ impl UtpManager {
                     panic!("WINDOW SIZE CHANGED {:?}", packet.get_window_size());
                 }
 
-                //self.handle_state(packet).await?;
+                self.handle_state(packet).await?;
                 // let current_delay = packet.get_timestamp_diff();
                 // let base_delay = std::cmp::min();
                 // current_delay = acknowledgement.delay
@@ -558,56 +635,177 @@ impl UtpManager {
         Ok(())
     }
 
-}
 
-#[derive(Debug)]
-struct UtpReader {
-    rcv: Receiver<ReaderCommand>,
-    send: Sender<ReaderResult>,
-    /// Do not await while locking the state
-    /// The await could block and lead to a deadlock state
-    state: Arc<RwLock<State>>,
-}
+    async fn handle_state(&mut self, packet: PacketRef<'_>) -> Result<()> {
+        let ack_number = packet.get_ack_number();
 
-impl UtpReader {
-    fn new(
-        rcv: Receiver<ReaderCommand>,
-        send: Sender<ReaderResult>,
-        state: Arc<RwLock<State>>,
-    ) -> UtpReader {
-        UtpReader { rcv, send, state }
+        // println!("ACK RECEIVED {:?} LAST_ACK {:?} DUP {:?} INFLIGHT {:?}",
+        //          ack_number, self.last_ack, self.ack_duplicate, self.state.inflight_size());
+
+        let in_flight = self.state.inflight_size();
+        let mut bytes_newly_acked = 0;
+
+        let before = self.state.inflight_size();
+        bytes_newly_acked += self.state.remove_packets(ack_number).await;
+        // {
+        //     let mut inflight_packets = self.state.inflight_packets.write().await;
+        //     inflight_packets
+        //         .retain(|p| {
+        //             !p.is_seq_less_equal(ack_number) || (false, bytes_newly_acked += p.size()).0
+        //         });
+        // }
+        //println!("PACKETS IN FLIGHT {:?}", self.inflight_packets.len());
+        //        println!("PACKETS IN FLIGHT {:?}", self.inflight_packets.as_slices());
+
+        // println!("BEFORE {:?} AFTER {:?}", before, self.state.inflight_size());
+
+        let mut lost = false;
+
+        if self.last_ack == ack_number {
+            self.ack_duplicate = self.ack_duplicate.saturating_add(1);
+            if self.ack_duplicate >= 3 {
+                self.tmp_packet_losts.push(ack_number + 1);
+                // self.mark_packet_as_lost(ack_number + 1).await;
+                // self.lost_packets.push_back(ack_number + 1);
+                lost = true;
+                //return Err(UtpError::PacketLost);
+            }
+        } else {
+            self.ack_duplicate = 0;
+            self.last_ack = ack_number;
+        }
+
+        if packet.has_extension() {
+            //println!("HAS EXTENSIONS !", );
+            for select_ack in packet.iter_extensions() {
+                lost = select_ack.has_missing_ack() || lost;
+                //println!("SACKS ACKED: {:?}", select_ack.nackeds());
+                for ack_bit in select_ack {
+                    match ack_bit {
+                        SelectiveAckBit::Missing(seq_num) => {
+                            self.tmp_packet_losts.push(seq_num);
+                            //self.mark_packet_as_lost(seq_num).await;
+                        }
+                        SelectiveAckBit::Acked(seq_num) => {
+                            //println!("SACKED {:?}", seq_num);
+                            bytes_newly_acked += self.state.remove_packet(seq_num).await;
+                        }
+                    }
+                }
+            }
+        }
+
+        let delay = packet.get_timestamp_diff();
+        if !delay.is_zero() {
+            self.delay_history.add_delay(delay);
+            self.apply_congestion_control(bytes_newly_acked, in_flight);
+        }
+
+        if lost {
+            self.mark_packets_as_lost().await;
+            // println!("MISSING FROM SACK {:?}", self.lost_packets);
+            return Err(UtpError::PacketLost);
+        }
+
+        self.writer.send(WriterCommand::Acks).await;
+
+        Ok(())
     }
 
-    async fn start(self) {
+    async fn mark_packets_as_lost(&mut self) {
+        let mut inflight_packets = self.state.inflight_packets.write().await;
+        for seq in &self.tmp_packet_losts {
+            if let Some(packet) = inflight_packets.get_mut(seq) {
+                packet.lost = true;
+            };
+        }
+        self.tmp_packet_losts.clear();
+    }
 
+    // /// Returns the number of bytes currently in flight (sent but not acked)
+    // async fn inflight_size(&self) -> usize {
+    //     let inflight_packets = self.state.inflight_packets.read().await;
+    //     inflight_packets.iter().map(Packet::size).sum()
+    // }
+
+    fn apply_congestion_control(&mut self, bytes_newly_acked: usize, in_flight: usize) {
+        let lowest_relative = self.delay_history.lowest_relative();
+
+        let cwnd = self.state.cwnd() as usize;
+
+        let cwnd_reached = in_flight + bytes_newly_acked + self.packet_size() > cwnd;
+
+        if cwnd_reached {
+            let window_factor = I48F16::from_num(bytes_newly_acked as i64) / in_flight as i64;
+            let delay_factor = I48F16::from_num(TARGET - lowest_relative.as_i64()) / TARGET;
+
+            let gain = (window_factor * delay_factor) * 3000;
+
+            let cwnd = self.state.remote_window().min((cwnd as i32 + gain.to_num::<i32>()).max(0) as u32);
+            self.state.set_cwnd(cwnd);
+
+            //println!("!! CWND CHANGED !! {:?} WIN_FACT {:?} DELAY_FACT {:?} GAIN {:?}", cwnd, window_factor, delay_factor, gain);
+        }
+    }
+
+    fn packet_size(&self) -> usize {
+        let is_ipv4 = self.addr.is_ipv4();
+
+        // TODO: Change this when MTU discovery is implemented
+        if is_ipv4 {
+            UDP_IPV4_MTU - HEADER_SIZE
+        } else {
+            UDP_IPV6_MTU - HEADER_SIZE
+        }
     }
 }
 
-impl Drop for UtpReader {
-    fn drop(&mut self) {
-        println!("UtpReader Dropped", );
-    }
-}
+// #[derive(Debug)]
+// struct UtpReader {
+//     rcv: Receiver<ReaderCommand>,
+//     send: Sender<ReaderResult>,
+//     /// Do not await while locking the state
+//     /// The await could block and lead to a deadlock state
+//     state: Arc<RwLock<State>>,
+// }
 
-#[derive(Debug)]
-struct ReaderCommand {
-    length: usize
-}
+// impl UtpReader {
+//     fn new(
+//         rcv: Receiver<ReaderCommand>,
+//         send: Sender<ReaderResult>,
+//         state: Arc<RwLock<State>>,
+//     ) -> UtpReader {
+//         UtpReader { rcv, send, state }
+//     }
 
-#[derive(Debug)]
-struct ReaderResult {
-    data: Vec<u8>
-}
+//     async fn start(self) {
+
+//     }
+// }
+
+// impl Drop for UtpReader {
+//     fn drop(&mut self) {
+//         println!("UtpReader Dropped", );
+//     }
+// }
+
+// #[derive(Debug)]
+// struct ReaderCommand {
+//     length: usize
+// }
+
+// #[derive(Debug)]
+// struct ReaderResult {
+//     data: Vec<u8>
+// }
 
 #[derive(Debug)]
 struct UtpWriter {
     socket: Arc<UdpSocket>,
     addr: SocketAddr,
+    user_command: Receiver<WriterUserCommand>,
     command: Receiver<WriterCommand>,
-    /// Do not await while locking the state
-    /// The await could block and lead to a deadlock state
     state: Arc<State>
-    // result: Sender<WriterResult>,
 }
 
 impl Drop for UtpWriter {
@@ -627,9 +825,14 @@ enum WriterCommand {
     /// Syn is a special case
     SendSyn,
     ResendPacket {
-
+        only_lost: bool
     },
-    Close
+    Close,
+    Acks,
+}
+
+struct WriterUserCommand {
+    data: Vec<u8>
 }
 
 // #[derive(Debug)]
@@ -641,37 +844,177 @@ impl UtpWriter {
     pub fn new(
         socket: Arc<UdpSocket>,
         addr: SocketAddr,
+        user_command: Receiver<WriterUserCommand>,
         command: Receiver<WriterCommand>,
         state: Arc<State>,
     ) -> UtpWriter {
-        UtpWriter { socket, addr, command, state }
+        UtpWriter { socket, addr, user_command, command, state }
+    }
+
+    async fn poll(&self) -> Option<WriterCommand> {
+        let user_cmd = self.user_command.recv();
+        let cmd = self.command.recv();
+        pin_mut!(user_cmd); // Pin on the stack
+        pin_mut!(cmd); // Pin on the stack
+
+        let fun = |cx: &mut Context<'_>| {
+            match FutureExt::poll_unpin(&mut cmd, cx) {
+                v @ Poll::Ready(_) => return v,
+                _ => {}
+            }
+
+            match FutureExt::poll_unpin(&mut user_cmd, cx).map(|cmd| {
+                cmd.map(|c| WriterCommand::WriteData { data: c.data })
+            }) {
+                v @ Poll::Ready(_) => v,
+                _ => Poll::Pending
+            }
+        };
+
+        future::poll_fn(fun).await
+            //.map_err(Into::into)
     }
 
     pub async fn start(mut self) {
-        use WriterCommand::*;
-
-        while let Some(cmd) = self.command.recv().await {
-            match cmd {
-                WriteData { ref data } => {
-                    self.send(data).await.unwrap()
-                },
-                SendPacket { packet } => {
-                    self.send_packet(packet).await.unwrap();
-                }
-                ResendPacket { } => {}
-                SendSyn => {
-                    self.send_syn().await.unwrap();
-                }
-                Close => {
-                    return;
-                }
-            }
+//        while let Some(cmd) = self.command.recv().await {
+        while let Some(cmd) = self.poll().await {
+            self.handle_cmd(cmd).await.unwrap();
         }
     }
 
-    async fn send(&mut self, data: &[u8]) -> Result<()> {
+    async fn handle_cmd(&mut self, cmd: WriterCommand) -> Result<()> {
+        use WriterCommand::*;
+
+        match cmd {
+            WriteData { ref data } => {
+                self.send(data).await.unwrap()
+            },
+            SendPacket { packet } => {
+                self.send_packet(packet).await.unwrap();
+            }
+            ResendPacket { only_lost } => {
+                self.resend_packets(only_lost).await.unwrap();
+            }
+            SendSyn => {
+                self.send_syn().await.unwrap();
+            }
+            Close => {
+                return Ok(());
+            }
+            Acks => {
+                return Ok(());
+            }
+        }
         Ok(())
     }
+
+    async fn handle_manager_cmd(&mut self, cmd: WriterCommand) -> Result<()> {
+        use WriterCommand::*;
+
+        match cmd {
+            SendPacket { packet } => {
+                self.send_packet(packet).await.unwrap();
+            }
+            ResendPacket { only_lost } => {
+                self.resend_packets(only_lost).await.unwrap();
+            }
+            SendSyn => {
+                self.send_syn().await.unwrap();
+            }
+            Close => {
+                return Ok(());
+            }
+            Acks => {
+                return Ok(());
+            }
+            WriteData { .. } => {
+                unreachable!();
+            },
+        }
+        Ok(())
+    }
+
+    async fn resend_packets(&mut self, only_lost: bool) -> Result<()> {
+        let mut inflight_packets = self.state.inflight_packets.write().await;
+
+        // println!("RESENDING ONLY_LOST={:?} INFLIGHT_LEN={:?} CWND={:?}", only_lost, inflight_packets.len(), self.state.cwnd());
+
+        let mut resent = 0;
+
+        for packet in inflight_packets.values_mut() {
+            if !only_lost || packet.lost {
+                // let packet_size = packet.size();
+
+                // if !packet.resent {
+                packet.set_ack_number(self.state.ack_number());
+                packet.update_timestamp();
+
+                // println!("== RESENDING {:?}", &**packet);
+//                println!("== RESENDING {:?} CWND={:?} POS {:?} {:?}", start, self.cwnd, start, &**packet);
+
+                resent += 1;
+                self.socket.send_to(packet.as_bytes(), self.addr).await?;
+
+                packet.resent = true;
+                packet.lost = false;
+            }
+        }
+
+        // println!("RESENT: {:?}", resent);
+        Ok(())
+    }
+
+    async fn send(&mut self, data: &[u8]) -> Result<()> {
+        let packet_size = self.packet_size();
+        let packets = data.chunks(packet_size).map(Packet::new);
+
+        let mut size = 0;
+
+        //let mut packet_total = 0;
+
+        for packet in packets {
+            //println!("LOOP SEND", );
+            //packet_total += 1;
+            size += packet.payload_len();
+
+            self.ensure_window_is_large_enough(packet.size()).await?;
+
+            self.send_packet(packet).await?;
+        }
+
+        eprintln!("DOOOONE", );
+
+
+        Ok(())
+    }
+
+    fn packet_size(&self) -> usize {
+        let is_ipv4 = self.addr.is_ipv4();
+
+        // TODO: Change this when MTU discovery is implemented
+        if is_ipv4 {
+            UDP_IPV4_MTU - HEADER_SIZE
+        } else {
+            UDP_IPV6_MTU - HEADER_SIZE
+        }
+    }
+
+    async fn ensure_window_is_large_enough(&mut self, packet_size: usize) -> Result<()> {
+        while packet_size + self.state.inflight_size() > self.state.cwnd() as usize {
+            //println!("BLOCKED BY CWND {:?} {:?} {:?}", packet_size, self.state.inflight_size(), self.state.cwnd());
+            match self.command.recv().await {
+                Some(cmd) => self.handle_manager_cmd(cmd).await?,
+                _ => return Err(UtpError::MustClose)
+            }
+            // self.receive_and_handle_lost_packets().await?;
+        }
+        Ok(())
+    }
+
+    // /// Returns the number of bytes currently in flight (sent but not acked)
+    // async fn inflight_size(&self) -> usize {
+    //     self.state.inflight_packets.read().await.iter().map(Packet::size).sum()
+    // }
 
     async fn send_packet(&mut self, mut packet: Packet) -> Result<()> {
         let ack_number = self.state.ack_number();
@@ -683,17 +1026,18 @@ impl UtpWriter {
         packet.set_connection_id(send_id);
         packet.set_window_size(1_048_576);
 
-        println!("SENDING NEW PACKET ! {:?}", packet);
+        //println!("SENDING NEW PACKET ! {:?}", packet);
 
         // println!("SENDING {:?}", &*packet);
         packet.update_timestamp();
 
         self.socket.send_to(packet.as_bytes(), self.addr).await?;
 
-        {
-            let mut inflight_packets = self.state.inflight_packets.write().await;
-            inflight_packets.push_back(packet);
-        }
+        self.state.add_packet_inflight(packet).await;
+        // {
+        //     let mut inflight_packets = self.state.inflight_packets.write().await;
+        //     inflight_packets.push_back(packet);
+        // }
 
         Ok(())
     }
@@ -704,19 +1048,20 @@ impl UtpWriter {
 
         let mut packet = Packet::syn();
         packet.set_connection_id(recv_id);
-        packet.set_seq_number(seq_number);
+        packet.set_packet_seq_number(seq_number);
         packet.set_window_size(1_048_576);
 
-        println!("SENDING {:#?}", packet);
+        //println!("SENDING {:#?}", packet);
 
         packet.update_timestamp();
         self.socket.send_to(packet.as_bytes(), self.addr).await?;
 
         self.state.set_utp_state(UtpState::SynSent);
-        {
-            let mut inflight_packets = self.state.inflight_packets.write().await;
-            inflight_packets.push_back(packet);
-        }
+        self.state.add_packet_inflight(packet).await;
+        // {
+        //     let mut inflight_packets = self.state.inflight_packets.write().await;
+        //     inflight_packets.push_back(packet);
+        // }
 
         Ok(())
     }
@@ -726,7 +1071,7 @@ impl UtpWriter {
 pub struct UtpStream {
     // reader_command: Sender<ReaderCommand>,
     // reader_result: Receiver<ReaderResult>,
-    writer_command: Sender<WriterCommand>,
+    writer_user_command: Sender<WriterUserCommand>,
 }
 
 impl UtpStream {
@@ -740,8 +1085,6 @@ impl UtpStream {
 
     pub async fn write(&self, data: &[u8]) {
         let data = Vec::from_slice(data);
-        self.writer_command.send(WriterCommand::WriteData {
-            data
-        }).await;
+        self.writer_user_command.send(WriterUserCommand { data }).await;
     }
 }
