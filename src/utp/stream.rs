@@ -24,7 +24,7 @@ use super::{
 use super::socket::{
     INIT_CWND, MSS,
     State as UtpState,
-    TARGET
+    TARGET, MIN_CWND
 };
 use super::tick::Tick;
 use crate::utils::FromSlice;
@@ -403,6 +403,8 @@ struct UtpManager {
     delay_history: DelayHistory,
 
     tmp_packet_losts: Vec<SequenceNumber>,
+
+    nlost: usize
 }
 
 pub enum UtpEvent {
@@ -464,6 +466,7 @@ impl UtpManager {
             ack_duplicate: 0,
             delay_history: DelayHistory::new(),
             tmp_packet_losts: Vec::new(),
+            nlost: 0
         }
     }
 
@@ -551,6 +554,8 @@ impl UtpManager {
 
         if self.state.inflight_size() > 0 {
             self.ntimeout += 1;
+        } else {
+            println!("NLOST {:?}", self.nlost);
         }
 
         self.timeout = Instant::now() + Duration::from_secs(1);
@@ -702,6 +707,12 @@ impl UtpManager {
         }
 
         if lost {
+            let cwnd = self.state.cwnd();
+            let cwnd = cwnd.min((cwnd / 2).max(MIN_CWND * MSS));
+            self.state.set_cwnd(cwnd);
+
+            self.nlost += self.tmp_packet_losts.len();
+
             self.mark_packets_as_lost().await;
             // println!("MISSING FROM SACK {:?}", self.lost_packets);
             return Err(UtpError::PacketLost);
