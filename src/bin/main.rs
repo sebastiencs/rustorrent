@@ -29,6 +29,9 @@ use async_std::net::{SocketAddr, IpAddr, Ipv4Addr};
 //fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
 fn main() {
 
+    // Acquire: load
+    // Release: store
+
     // println!("1 << 16 = {}", 1 << 16);
     // println!("2 * (1 << 16) = {}", 2 * (1 << 16));
     // println!("(2 * (1 << 16)) >> 16 = {}", (2 * (1 << 16)) >> 16);
@@ -37,6 +40,14 @@ fn main() {
     // println!("397 / 2 = {}", 397 / 2);
     // println!("(397 * (1 << 16)) / 2 = {}", (397 * (1 << 16)) / 2);
     // println!("((397 * (1 << 16)) / 2) >> 16 = {}", ((397 * (1 << 16)) / 2) >> 16);
+
+    use std::sync::atomic::{AtomicU16, Ordering};
+
+    let foo = AtomicU16::new(u16::max_value());
+    // assert_eq!(foo.fetch_add(10, Ordering::SeqCst), 0);
+
+    println!("FOO {:?}", foo.fetch_add(1, Ordering::SeqCst));
+    println!("FOO {:?}", foo.load(Ordering::SeqCst));
 
     async_std::task::block_on(async {
         let mut listener = utp::stream::UtpListener::new(10001).await.unwrap();

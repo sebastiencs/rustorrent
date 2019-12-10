@@ -45,10 +45,11 @@ impl Tick {
         {
             let streams = streams.read().await;
             for addr in streams.values() {
-                if addr.is_full() {
-                    addrs_full.push(addr.clone());
-                } else {
+                // TODO: Use try_send when available
+                if !addr.is_full() {
                     addr.send(UtpEvent::Tick).await;
+                } else {
+                    addrs_full.push(addr.clone());
                 }
             }
         }

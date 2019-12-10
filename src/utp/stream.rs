@@ -10,7 +10,6 @@ use hashbrown::HashMap;
 
 use std::collections::VecDeque;
 use std::cell::RefCell;
-use std::time::Duration;
 
 use crate::udp_ext::WithTimeout;
 
@@ -24,6 +23,14 @@ use super::socket::{
 };
 use super::tick::Tick;
 use crate::utils::FromSlice;
+
+use std::sync::atomic::{AtomicU8, AtomicU16};
+
+// struct AtomicState {
+//     utp_state: AtomicU8,
+//     ack_number: AtomicU16,
+//     seq_number: AtomicU16,
+// }
 
 #[derive(Debug)]
 struct State {
@@ -39,9 +46,9 @@ struct State {
     /// Packets sent but we didn't receive an ack for them
     inflight_packets: VecDeque<Packet>,
 
-    /// Notify we're connected
-    /// True if connected
-    on_connected: Option<Sender<bool>>,
+    // /// Notify we're connected
+    // /// True if connected
+    // on_connected: Option<Sender<bool>>,
 }
 
 impl State {
@@ -78,7 +85,7 @@ impl Default for State {
             // last_ack: SequenceNumber::zero(),
             // lost_packets: VecDeque::with_capacity(100),
             // nlost: 0,
-            on_connected: None
+            // on_connected: None
         }
     }
 }
@@ -134,11 +141,11 @@ impl UtpListener {
         let (on_connected, is_connected) = channel(1);
 
         let mut state = State::with_utp_state(UtpState::MustConnect);
-        state.on_connected = Some(on_connected);
         let state = Arc::new(RwLock::new(state));
 
         let (sender, receiver) = channel(10);
-        let manager = UtpManager::new_with_state(socket, sockaddr, receiver, state);
+        let mut manager = UtpManager::new_with_state(socket, sockaddr, receiver, state);
+        manager.set_on_connected(on_connected);
 
         {
             let mut streams = self.streams.write().await;
@@ -274,6 +281,8 @@ impl UtpListener {
     }
 }
 
+use std::time::{Instant, Duration};
+
 #[derive(Debug)]
 struct UtpManager {
     socket: Arc<UdpSocket>,
@@ -283,10 +292,17 @@ struct UtpManager {
     state: Arc<RwLock<State>>,
     addr: SocketAddr,
     writer: Sender<WriterCommand>,
-    reader: Sender<ReaderCommand>,
-    _reader_rcv: Receiver<ReaderCommand>,
-    reader_result: Sender<ReaderResult>,
-    _reader_result_rcv: Receiver<ReaderResult>,
+    // reader: Sender<ReaderCommand>,
+    // _reader_rcv: Receiver<ReaderCommand>,
+    // reader_result: Sender<ReaderResult>,
+    // _reader_result_rcv: Receiver<ReaderResult>,
+
+    timeout: Instant,
+    /// Number of consecutive times we've been timeout
+    /// After 3 times we close the socket
+    ntimeout: usize,
+
+    on_connected: Option<Sender<bool>>,
 }
 
 // pub struct IncomingBytes {
@@ -300,6 +316,16 @@ pub enum UtpEvent {
         timestamp: Timestamp
     },
     Tick
+}
+
+impl Drop for UtpManager {
+    fn drop(&mut self) {
+        if let Some(notify) = self.on_connected.take() {
+            task::spawn(async move {
+                notify.send(false).await
+            });
+        }
+    }
 }
 
 impl UtpManager {
@@ -341,8 +367,15 @@ impl UtpManager {
             reader,
             _reader_rcv,
             reader_result,
-            _reader_result_rcv
+            _reader_result_rcv,
+            timeout: Instant::now() + Duration::from_secs(3),
+            ntimeout: 0,
+            on_connected: None
         }
+    }
+
+    pub fn set_on_connected(&mut self, on_connected: Sender<bool>) {
+        self.on_connected = Some(on_connected);
     }
 
     pub fn get_stream(&self) -> UtpStream {
@@ -353,11 +386,12 @@ impl UtpManager {
         }
     }
 
-    async fn start(self) {
+    async fn start(mut self) -> Result<()> {
         self.ensure_connected().await;
         while let Some(incoming) = self.recv.recv().await {
-            self.process_incoming(incoming).await;
+            self.process_incoming(incoming).await?;
         }
+        Ok(())
     }
 
     async fn ensure_connected(&self) {
@@ -373,20 +407,51 @@ impl UtpManager {
         self.writer.send(WriterCommand::SendSyn).await;
     }
 
-    async fn process_incoming(&self, event: UtpEvent) -> Result<()> {
+    async fn process_incoming(&mut self, event: UtpEvent) -> Result<()> {
         match event {
             UtpEvent::IncomingBytes { buffer, timestamp } => {
                 let packet = PacketRef::ref_from_incoming(&buffer, timestamp);
                 self.dispatch(packet).await?;
             }
             UtpEvent::Tick => {
-                println!("TICK RECEIVED", );
+                println!("TICK RECEIVED {} {:?}", self.ntimeout, Instant::now());
+                if Instant::now() > self.timeout {
+                    if self.ntimeout >= 3 {
+                        return Err(Error::new(ErrorKind::TimedOut, "utp connect timed out").into());
+                    }
+                    self.on_timeout().await;
+                    // Resend packets
+                } else {
+                    // self.ntimeout = 0;
+                }
             }
         }
         Ok(())
     }
 
-    async fn dispatch(&self, packet: PacketRef<'_>) -> Result<()> {
+    async fn on_timeout(&mut self) {
+        let utp_state = {
+            let state = self.state.read().await;
+            state.utp_state
+        };
+
+        use UtpState::*;
+
+        match utp_state {
+            SynSent => {
+                self.writer.send(WriterCommand::SendSyn).await;
+            }
+            Connected => {
+
+            }
+            _ => {}
+        }
+
+        self.ntimeout += 1;
+        self.timeout = Instant::now() + Duration::from_secs(1);
+    }
+
+    async fn dispatch(&mut self, packet: PacketRef<'_>) -> Result<()> {
         println!("DISPATCH HEADER: {:?}", packet.header());
 
         let delay = packet.received_at.delay(packet.get_timestamp());
@@ -396,6 +461,9 @@ impl UtpManager {
             let state = self.state.read().await;
             (state.utp_state, state.remote_window)
         };
+
+        self.ntimeout = 0;
+        self.timeout = Instant::now() + Duration::from_secs(1);
 
         match (packet.get_type()?, utp_state) {
             (PacketType::Syn, UtpState::None) => {
@@ -428,15 +496,14 @@ impl UtpManager {
                 // https://engineering.bittorrent.com/2015/08/27/drdos-udp-based-protocols-and-bittorrent/
                 // https://www.usenix.org/system/files/conference/woot15/woot15-paper-adamsky.pdf
                 // https://github.com/bittorrent/libutp/commit/13d33254262d46b638d35c4bc1a2f76cea885760
-                let notify = {
+                {
                     let mut state = self.state.write().await;
                     state.utp_state = UtpState::Connected;
                     state.ack_number = packet.get_seq_number() - 1;
                     state.remote_window = packet.get_window_size();
                     println!("CONNECTED !", );
-                    state.on_connected.take()
                 };
-                if let Some(notify) = notify {
+                if let Some(notify) = self.on_connected.take() {
                     notify.send(true).await;
                 };
 
@@ -495,6 +562,12 @@ impl UtpReader {
     }
 }
 
+impl Drop for UtpReader {
+    fn drop(&mut self) {
+        println!("UtpReader Dropped", );
+    }
+}
+
 #[derive(Debug)]
 struct ReaderCommand {
     length: usize
@@ -514,6 +587,12 @@ struct UtpWriter {
     /// The await could block and lead to a deadlock state
     state: Arc<RwLock<State>>
     // result: Sender<WriterResult>,
+}
+
+impl Drop for UtpWriter {
+    fn drop(&mut self) {
+        println!("UtpWriter Dropped", );
+    }
 }
 
 #[derive(Debug)]
