@@ -95,8 +95,9 @@ impl State {
     async fn remove_packet(&self, ack_number: SequenceNumber) -> usize {
         let mut inflight_packets = self.inflight_packets.write().await;
 
-        let size = inflight_packets.get(&ack_number).map(|p| p.size()).unwrap_or(0);
-        inflight_packets.remove(&ack_number);
+        let size = inflight_packets.remove(&ack_number)
+                                   .map(|p| p.size())
+                                   .unwrap_or(0);
 
         self.atomic.in_flight.fetch_sub(size as u32, Ordering::AcqRel);
         size
@@ -419,14 +420,11 @@ pub enum UtpEvent {
 impl Drop for UtpManager {
     fn drop(&mut self) {
         println!("DROP UTP MANAGER", );
-        let on_connected = self.on_connected.take();
-        let writer = self.writer.clone();
-        task::spawn(async move {
-            if let Some(on_connected) = on_connected {
+        if let Some(on_connected) = self.on_connected.take() {
+            task::spawn(async move {
                 on_connected.send(false).await
-            };
-            writer.send(WriterCommand::Close).await
-        });
+            });
+        };
     }
 }
 
@@ -500,7 +498,7 @@ impl UtpManager {
             return;
         }
 
-        self.writer.send(WriterCommand::SendSyn).await;
+        self.writer.send(WriterCommand::SendPacket { packet_type: PacketType::Syn }).await;
     }
 
     async fn process_incoming(&mut self, event: UtpEvent) -> Result<()> {
@@ -511,21 +509,13 @@ impl UtpManager {
                     Err(UtpError::PacketLost) => {
                         self.writer.send(WriterCommand::ResendPacket { only_lost: true }).await;
                     }
-                    Err(e) => return Err(e),
-                    Ok(_) => {}
+                    Ok(_) => {},
+                    Err(e) => return Err(e)
                 }
             }
             UtpEvent::Tick => {
                 if Instant::now() > self.timeout {
-
-                    let flight_size = self.state.inflight_size();
-
-                    {
-                        let vec = self.state.inflight_packets.read().await;
-                        //println!("RECEIVED TICK ntimeout={:?} inflight={:?} {:?}", self.ntimeout, flight_size, vec);
-                    }
                     self.on_timeout().await?;
-                    // Resend packets
                 }
             }
         }
@@ -545,7 +535,7 @@ impl UtpManager {
 
         match utp_state {
             SynSent => {
-                self.writer.send(WriterCommand::SendSyn).await;
+                self.writer.send(WriterCommand::SendPacket { packet_type: PacketType::Syn }).await;
             }
             Connected => {
                 if self.state.inflight_size() > 0 {
@@ -591,7 +581,7 @@ impl UtpManager {
                 self.state.set_remote_window(packet.get_window_size());
 
                 self.writer.send(WriterCommand::SendPacket {
-                    packet: Packet::new_type(PacketType::State)
+                    packet_type: PacketType::State
                 }).await;
             }
             (PacketType::Syn, _) => {
@@ -770,7 +760,7 @@ impl UtpManager {
             let cwnd = self.state.remote_window().min(cwnd);
             self.state.set_cwnd(cwnd);
 
-            println!("CWND: {:?} BEFORE={}", cwnd, before);
+            //println!("CWND: {:?} BEFORE={}", cwnd, before);
 
             //println!("!! CWND CHANGED !! {:?} WIN_FACT {:?} DELAY_FACT {:?} GAIN {:?}",
             // cwnd, window_factor, delay_factor, gain);
@@ -849,14 +839,12 @@ enum WriterCommand {
         data: Vec<u8>,
     },
     SendPacket {
-        packet: Packet
+        packet_type: PacketType
     },
-    /// Syn is a special case
-    SendSyn,
     ResendPacket {
         only_lost: bool
     },
-    Close,
+    // Close,
     Acks,
 }
 
@@ -901,7 +889,6 @@ impl UtpWriter {
         };
 
         future::poll_fn(fun).await
-            //.map_err(Into::into)
     }
 
     pub async fn start(mut self) {
@@ -918,17 +905,11 @@ impl UtpWriter {
             WriteData { ref data } => {
                 self.send(data).await.unwrap()
             },
-            SendPacket { packet } => {
-                self.send_packet(packet).await.unwrap();
+            SendPacket { packet_type } => {
+                self.send_packet(Packet::new_type(packet_type)).await.unwrap();
             }
             ResendPacket { only_lost } => {
                 self.resend_packets(only_lost).await.unwrap();
-            }
-            SendSyn => {
-                self.send_syn().await.unwrap();
-            }
-            Close => {
-                return Ok(());
             }
             Acks => {
                 return Ok(());
@@ -941,17 +922,15 @@ impl UtpWriter {
         use WriterCommand::*;
 
         match cmd {
-            SendPacket { packet } => {
-                self.send_packet(packet).await.unwrap();
+            SendPacket { packet_type } => {
+                if packet_type == PacketType::Syn {
+                    self.send_syn().await.unwrap();
+                } else {
+                    self.send_packet(Packet::new_type(packet_type)).await.unwrap();
+                }
             }
             ResendPacket { only_lost } => {
                 self.resend_packets(only_lost).await.unwrap();
-            }
-            SendSyn => {
-                self.send_syn().await.unwrap();
-            }
-            Close => {
-                return Ok(());
             }
             Acks => {
                 return Ok(());

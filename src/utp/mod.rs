@@ -337,7 +337,7 @@ impl From<std::io::Error> for UtpError {
 
 type Result<T> = std::result::Result<T, UtpError>;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum PacketType {
     /// regular data packet. Socket is in connected state and has
     /// data to send. An ST_DATA packet always has a data payload.
@@ -628,6 +628,10 @@ impl Payload {
     pub fn len(&self) -> usize {
         self.len
     }
+}
+
+pub struct PacketPool {
+    pool: Vec<Packet>
 }
 
 #[repr(C, packed)]

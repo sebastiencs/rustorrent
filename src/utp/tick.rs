@@ -40,21 +40,9 @@ impl Tick {
     }
 
     async fn send_tick(streams: Arc<RwLock<HashMap<SocketAddr, Sender<UtpEvent>>>>) {
-        let mut addrs_full = Vec::with_capacity(64);
-
-        {
-            let streams = streams.read().await;
-            for addr in streams.values() {
-                // TODO: Use try_send when available
-                if !addr.is_full() {
-                    addr.send(UtpEvent::Tick).await;
-                } else {
-                    addrs_full.push(addr.clone());
-                }
-            }
-        }
-
-        for addr in &addrs_full {
+        let streams = streams.read().await;
+        for addr in streams.values().filter(|p| !p.is_full()) {
+            // Tick it only when it's not too busy
             addr.send(UtpEvent::Tick).await;
         }
     }
