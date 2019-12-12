@@ -407,6 +407,10 @@ struct UtpManager {
     slow_start: bool,
 
     next_cwnd_decrease: Instant,
+
+    rtt: usize,
+    rtt_var: usize,
+    rto: usize
 }
 
 pub enum UtpEvent {
@@ -467,7 +471,10 @@ impl UtpManager {
             tmp_packet_losts: Vec::new(),
             nlost: 0,
             slow_start: true,
-            next_cwnd_decrease: Instant::now()
+            next_cwnd_decrease: Instant::now(),
+            rtt: 0,
+            rtt_var: 0,
+            rto: 0
         }
     }
 
@@ -553,9 +560,10 @@ impl UtpManager {
             self.ntimeout += 1;
         } else {
             println!("NLOST {:?}", self.nlost);
+            // println!("RTO {:?} RTT {:?} RTT_VAR {:?}", self.rto, self.rtt, self.rtt_var);
         }
 
-        self.timeout = Instant::now() + Duration::from_secs(1);
+        self.timeout = Instant::now() + Duration::from_millis(self.rto as u64);
 
         Ok(())
     }
@@ -569,7 +577,7 @@ impl UtpManager {
         let utp_state = self.state.utp_state();
 
         self.ntimeout = 0;
-        self.timeout = Instant::now() + Duration::from_secs(1);
+        self.timeout = Instant::now() + Duration::from_millis(self.rto as u64);
 
         match (packet.get_type()?, utp_state) {
             (PacketType::Syn, UtpState::None) => {
@@ -631,6 +639,7 @@ impl UtpManager {
 
     async fn handle_state(&mut self, packet: PacketRef<'_>) -> Result<()> {
         let ack_number = packet.get_ack_number();
+        let received_at = packet.received_at;
 
         // println!("ACK RECEIVED {:?} LAST_ACK {:?} DUP {:?} INFLIGHT {:?}",
         //          ack_number, self.last_ack, self.ack_duplicate, self.state.inflight_size());
@@ -639,7 +648,8 @@ impl UtpManager {
         let mut bytes_newly_acked = 0;
 
         // let before = self.state.inflight_size();
-        bytes_newly_acked += self.state.remove_packets(ack_number).await;
+        bytes_newly_acked += self.ack_packets(ack_number, received_at).await;
+        // bytes_newly_acked += self.state.remove_packets(ack_number).await;
         //println!("PACKETS IN FLIGHT {:?}", self.inflight_packets.len());
         //        println!("PACKETS IN FLIGHT {:?}", self.inflight_packets.as_slices());
 
@@ -669,7 +679,8 @@ impl UtpManager {
                             self.tmp_packet_losts.push(seq_num);
                         }
                         SelectiveAckBit::Acked(seq_num) => {
-                            bytes_newly_acked += self.state.remove_packet(seq_num).await;
+                            bytes_newly_acked += self.ack_one_packet(seq_num, received_at).await;
+//                            bytes_newly_acked += self.state.remove_packet(seq_num).await;
                         }
                     }
                 }
@@ -706,9 +717,73 @@ impl UtpManager {
             return Err(UtpError::PacketLost);
         }
 
+        self.rto = 500.max(self.rtt + self.rtt_var * 4);
+
         self.writer.send(WriterCommand::Acks).await;
 
         Ok(())
+    }
+
+    fn update_rtt(
+        packet: &Packet,
+        ack_received_at: Timestamp,
+        mut rtt: usize,
+        mut rtt_var: usize
+    ) -> (usize, usize)
+    {
+        if !packet.resent {
+            let rtt_packet = packet.get_timestamp().elapsed_millis(ack_received_at) as usize;
+
+            if rtt == 0 {
+                rtt = rtt_packet;
+                rtt_var = rtt_packet / 2;
+            } else {
+                let delta: i64 = rtt as i64 - rtt_packet as i64;
+                rtt_var = (rtt_var as i64 + (delta.abs() - rtt_var as i64) / 4) as usize;
+                rtt = rtt - (rtt / 8) + (rtt_packet / 8);
+            }
+        }
+        (rtt, rtt_var)
+    }
+
+    async fn ack_packets(&mut self, ack_number: SequenceNumber, ack_received_at: Timestamp) -> usize {
+        // We need to make temporary vars to make the borrow checker happy
+        let (mut rtt, mut rtt_var) = (self.rtt, self.rtt_var);
+
+        let mut size = 0;
+        let mut inflight_packets = self.state.inflight_packets.write().await;
+
+        inflight_packets
+            .retain(|_, p| {
+                !p.is_seq_less_equal(ack_number) || {
+                    let (r, rv) = Self::update_rtt(p, ack_received_at, rtt, rtt_var);
+                    rtt = r;
+                    rtt_var = rv;
+                    size += p.size();
+                    false
+                }
+            });
+
+        self.rtt = rtt;
+        self.rtt_var = rtt_var;
+
+        self.state.atomic.in_flight.fetch_sub(size as u32, Ordering::AcqRel);
+        size
+    }
+
+    async fn ack_one_packet(&mut self, ack_number: SequenceNumber, ack_received_at: Timestamp) -> usize {
+        let mut inflight_packets = self.state.inflight_packets.write().await;
+        let mut size = 0;
+
+        if let Some(ref packet) = inflight_packets.remove(&ack_number) {
+            let (r, rv) = Self::update_rtt(packet, ack_received_at, self.rtt, self.rtt_var);
+            self.rtt = r;
+            self.rtt_var = rv;
+            size = packet.size();
+            self.state.atomic.in_flight.fetch_sub(size as u32, Ordering::AcqRel);
+        }
+
+        size
     }
 
     async fn mark_packets_as_lost(&mut self) {

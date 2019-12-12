@@ -484,7 +484,7 @@ impl UtpSocket {
         if packet.has_extension() {
             println!("HAS EXTENSIONS !", );
             let mut lost = false;
-            for select_ack in packet.iter_extensions() {
+            for select_ack in packet.iter_sacks() {
                 lost = select_ack.has_missing_ack() || lost;
                 println!("SACKS ACKED: {:?}", select_ack.nackeds());
                 for ack_bit in select_ack {
