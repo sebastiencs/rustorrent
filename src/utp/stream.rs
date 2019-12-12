@@ -498,7 +498,9 @@ impl UtpManager {
             return;
         }
 
-        self.writer.send(WriterCommand::SendPacket { packet_type: PacketType::Syn }).await;
+        self.writer.send(WriterCommand::SendPacket {
+            packet_type: PacketType::Syn
+        }).await;
     }
 
     async fn process_incoming(&mut self, event: UtpEvent) -> Result<()> {
@@ -507,7 +509,9 @@ impl UtpManager {
                 let packet = PacketRef::ref_from_incoming(&buffer, timestamp);
                 match self.dispatch(packet).await {
                     Err(UtpError::PacketLost) => {
-                        self.writer.send(WriterCommand::ResendPacket { only_lost: true }).await;
+                        self.writer.send(WriterCommand::ResendPacket {
+                            only_lost: true
+                        }).await;
                     }
                     Ok(_) => {},
                     Err(e) => return Err(e)
@@ -530,7 +534,7 @@ impl UtpManager {
         if (utp_state == SynSent && self.ntimeout >= 3)
             || self.ntimeout >= 7
         {
-            return Err(Error::new(ErrorKind::TimedOut, "utp connect timed out").into());
+            return Err(Error::new(ErrorKind::TimedOut, "utp timed out").into());
         }
 
         match utp_state {
@@ -557,7 +561,7 @@ impl UtpManager {
     }
 
     async fn dispatch(&mut self, packet: PacketRef<'_>) -> Result<()> {
-        //println!("DISPATCH HEADER: {:?}", packet.header());
+        // println!("DISPATCH HEADER: {:?}", packet.header());
 
         let delay = packet.received_at.delay(packet.get_timestamp());
         // self.delay = Delay::since(packet.get_timestamp());
@@ -570,7 +574,6 @@ impl UtpManager {
         match (packet.get_type()?, utp_state) {
             (PacketType::Syn, UtpState::None) => {
                 //println!("RECEIVED SYN {:?}", self.addr);
-                // Set self.remote
                 let connection_id = packet.get_connection_id();
 
                 self.state.set_utp_state(UtpState::Connected);
@@ -610,14 +613,6 @@ impl UtpManager {
                 }
 
                 self.handle_state(packet).await?;
-                // let current_delay = packet.get_timestamp_diff();
-                // let base_delay = std::cmp::min();
-                // current_delay = acknowledgement.delay
-                // base_delay = min(base_delay, current_delay)
-                // queuing_delay = current_delay - base_delay
-                // off_target = (TARGET - queuing_delay) / TARGET
-                // cwnd += GAIN * off_target * bytes_newly_acked * MSS / cwnd
-                // Ack received
             }
             (PacketType::State, _) => {
                 // Wrong Packet
@@ -643,15 +638,8 @@ impl UtpManager {
         let in_flight = self.state.inflight_size();
         let mut bytes_newly_acked = 0;
 
-        let before = self.state.inflight_size();
+        // let before = self.state.inflight_size();
         bytes_newly_acked += self.state.remove_packets(ack_number).await;
-        // {
-        //     let mut inflight_packets = self.state.inflight_packets.write().await;
-        //     inflight_packets
-        //         .retain(|p| {
-        //             !p.is_seq_less_equal(ack_number) || (false, bytes_newly_acked += p.size()).0
-        //         });
-        // }
         //println!("PACKETS IN FLIGHT {:?}", self.inflight_packets.len());
         //        println!("PACKETS IN FLIGHT {:?}", self.inflight_packets.as_slices());
 
@@ -663,10 +651,7 @@ impl UtpManager {
             self.ack_duplicate = self.ack_duplicate.saturating_add(1);
             if self.ack_duplicate >= 3 {
                 self.tmp_packet_losts.push(ack_number + 1);
-                // self.mark_packet_as_lost(ack_number + 1).await;
-                // self.lost_packets.push_back(ack_number + 1);
                 lost = true;
-                //return Err(UtpError::PacketLost);
             }
         } else {
             self.ack_duplicate = 0;
@@ -675,17 +660,15 @@ impl UtpManager {
 
         if packet.has_extension() {
             //println!("HAS EXTENSIONS !", );
-            for select_ack in packet.iter_extensions() {
+            for select_ack in packet.iter_sacks() {
                 lost = select_ack.has_missing_ack() || lost;
                 //println!("SACKS ACKED: {:?}", select_ack.nackeds());
                 for ack_bit in select_ack {
                     match ack_bit {
                         SelectiveAckBit::Missing(seq_num) => {
                             self.tmp_packet_losts.push(seq_num);
-                            //self.mark_packet_as_lost(seq_num).await;
                         }
                         SelectiveAckBit::Acked(seq_num) => {
-                            //println!("SACKED {:?}", seq_num);
                             bytes_newly_acked += self.state.remove_packet(seq_num).await;
                         }
                     }
@@ -742,7 +725,7 @@ impl UtpManager {
         let lowest_relative = self.delay_history.lowest_relative();
 
         let cwnd = self.state.cwnd() as usize;
-        let before = cwnd;
+        // let before = cwnd;
 
         let cwnd_reached = in_flight + bytes_newly_acked + self.packet_size() > cwnd;
 
@@ -779,45 +762,6 @@ impl UtpManager {
     }
 }
 
-// #[derive(Debug)]
-// struct UtpReader {
-//     rcv: Receiver<ReaderCommand>,
-//     send: Sender<ReaderResult>,
-//     /// Do not await while locking the state
-//     /// The await could block and lead to a deadlock state
-//     state: Arc<RwLock<State>>,
-// }
-
-// impl UtpReader {
-//     fn new(
-//         rcv: Receiver<ReaderCommand>,
-//         send: Sender<ReaderResult>,
-//         state: Arc<RwLock<State>>,
-//     ) -> UtpReader {
-//         UtpReader { rcv, send, state }
-//     }
-
-//     async fn start(self) {
-
-//     }
-// }
-
-// impl Drop for UtpReader {
-//     fn drop(&mut self) {
-//         println!("UtpReader Dropped", );
-//     }
-// }
-
-// #[derive(Debug)]
-// struct ReaderCommand {
-//     length: usize
-// }
-
-// #[derive(Debug)]
-// struct ReaderResult {
-//     data: Vec<u8>
-// }
-
 #[derive(Debug)]
 struct UtpWriter {
     socket: Arc<UdpSocket>,
@@ -844,18 +788,12 @@ enum WriterCommand {
     ResendPacket {
         only_lost: bool
     },
-    // Close,
     Acks,
 }
 
 struct WriterUserCommand {
     data: Vec<u8>
 }
-
-// #[derive(Debug)]
-// struct WriterResult {
-//     data: Vec<u8>
-// }
 
 impl UtpWriter {
     pub fn new(
@@ -892,7 +830,6 @@ impl UtpWriter {
     }
 
     pub async fn start(mut self) {
-//        while let Some(cmd) = self.command.recv().await {
         while let Some(cmd) = self.poll().await {
             self.handle_cmd(cmd).await.unwrap();
         }
@@ -906,7 +843,11 @@ impl UtpWriter {
                 self.send(data).await.unwrap()
             },
             SendPacket { packet_type } => {
-                self.send_packet(Packet::new_type(packet_type)).await.unwrap();
+                if packet_type == PacketType::Syn {
+                    self.send_syn().await.unwrap();
+                } else {
+                    self.send_packet(Packet::new_type(packet_type)).await.unwrap();
+                }
             }
             ResendPacket { only_lost } => {
                 self.resend_packets(only_lost).await.unwrap();
@@ -947,20 +888,17 @@ impl UtpWriter {
 
         // println!("RESENDING ONLY_LOST={:?} INFLIGHT_LEN={:?} CWND={:?}", only_lost, inflight_packets.len(), self.state.cwnd());
 
-        let mut resent = 0;
+        // let mut resent = 0;
 
         for packet in inflight_packets.values_mut() {
             if !only_lost || packet.lost {
-                // let packet_size = packet.size();
-
-                // if !packet.resent {
                 packet.set_ack_number(self.state.ack_number());
                 packet.update_timestamp();
 
                 // println!("== RESENDING {:?}", &**packet);
 //                println!("== RESENDING {:?} CWND={:?} POS {:?} {:?}", start, self.cwnd, start, &**packet);
 
-                resent += 1;
+                // resent += 1;
                 self.socket.send_to(packet.as_bytes(), self.addr).await?;
 
                 packet.resent = true;
@@ -976,22 +914,12 @@ impl UtpWriter {
         let packet_size = self.packet_size();
         let packets = data.chunks(packet_size).map(Packet::new);
 
-        let mut size = 0;
-
-        //let mut packet_total = 0;
-
         for packet in packets {
-            //println!("LOOP SEND", );
-            //packet_total += 1;
-            size += packet.payload_len();
-
             self.ensure_window_is_large_enough(packet.size()).await?;
-
             self.send_packet(packet).await?;
         }
 
         eprintln!("DOOOONE", );
-
 
         Ok(())
     }
@@ -1010,19 +938,15 @@ impl UtpWriter {
     async fn ensure_window_is_large_enough(&mut self, packet_size: usize) -> Result<()> {
         while packet_size + self.state.inflight_size() > self.state.cwnd() as usize {
             //println!("BLOCKED BY CWND {:?} {:?} {:?}", packet_size, self.state.inflight_size(), self.state.cwnd());
+
+            // Too many packets in flight, we wait for acked or lost packets
             match self.command.recv().await {
                 Some(cmd) => self.handle_manager_cmd(cmd).await?,
                 _ => return Err(UtpError::MustClose)
             }
-            // self.receive_and_handle_lost_packets().await?;
         }
         Ok(())
     }
-
-    // /// Returns the number of bytes currently in flight (sent but not acked)
-    // async fn inflight_size(&self) -> usize {
-    //     self.state.inflight_packets.read().await.iter().map(Packet::size).sum()
-    // }
 
     async fn send_packet(&mut self, mut packet: Packet) -> Result<()> {
         let ack_number = self.state.ack_number();
@@ -1036,16 +960,11 @@ impl UtpWriter {
 
         //println!("SENDING NEW PACKET ! {:?}", packet);
 
-        // println!("SENDING {:?}", &*packet);
         packet.update_timestamp();
 
         self.socket.send_to(packet.as_bytes(), self.addr).await?;
 
         self.state.add_packet_inflight(seq_number, packet).await;
-        // {
-        //     let mut inflight_packets = self.state.inflight_packets.write().await;
-        //     inflight_packets.push_back(packet);
-        // }
 
         Ok(())
     }
@@ -1066,10 +985,6 @@ impl UtpWriter {
 
         self.state.set_utp_state(UtpState::SynSent);
         self.state.add_packet_inflight(seq_number, packet).await;
-        // {
-        //     let mut inflight_packets = self.state.inflight_packets.write().await;
-        //     inflight_packets.push_back(packet);
-        // }
 
         Ok(())
     }

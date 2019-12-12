@@ -918,7 +918,7 @@ impl<'a> PacketRef<'a> {
         &self.packet_ref.header
     }
 
-    pub fn iter_extensions(&self) -> ExtensionIterator {
+    pub fn iter_sacks(&self) -> ExtensionIterator {
         ExtensionIterator::new(self)
     }
 }
