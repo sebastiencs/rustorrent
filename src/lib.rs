@@ -15,3 +15,4 @@ pub mod sha1;
 pub mod utp;
 pub mod time;
 pub mod cache_line;
+pub mod memory_pool;
