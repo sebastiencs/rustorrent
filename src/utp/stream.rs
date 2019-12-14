@@ -14,7 +14,7 @@ use std::cell::RefCell;
 
 use crate::udp_ext::WithTimeout;
 use crate::utils::Map;
-use crate::memory_pool::{MemPool, PoolArc};
+use crate::memory_pool::{Arena, ArenaArc};
 
 use super::{
     UtpError, Result, SequenceNumber, Packet, PacketRef,
@@ -67,11 +67,11 @@ struct State {
     atomic: AtomicState,
 
     /// Packets sent but we didn't receive an ack for them
-    inflight_packets: RwLock<Map<SequenceNumber, PoolArc<Packet>>>,
+    inflight_packets: RwLock<Map<SequenceNumber, ArenaArc<Packet>>>,
 }
 
 impl State {
-    async fn add_packet_inflight(&self, seq_num: SequenceNumber, packet: PoolArc<Packet>) {
+    async fn add_packet_inflight(&self, seq_num: SequenceNumber, packet: ArenaArc<Packet>) {
         let size = packet.size();
 
         let mut inflight_packets = self.inflight_packets.write().await;
@@ -908,13 +908,13 @@ impl UtpWriter {
     }
 
     pub async fn start(mut self) {
-        let mut packet_pool = MemPool::new();
+        let mut packet_pool = Arena::new();
         while let Some(cmd) = self.poll().await {
             self.handle_cmd(cmd, &mut packet_pool).await.unwrap();
         }
     }
 
-    async fn handle_cmd(&mut self, cmd: WriterCommand, packet_pool: &mut MemPool<Packet>) -> Result<()> {
+    async fn handle_cmd(&mut self, cmd: WriterCommand, packet_pool: &mut Arena<Packet>) -> Result<()> {
         use WriterCommand::*;
 
         match cmd {
@@ -939,7 +939,7 @@ impl UtpWriter {
         Ok(())
     }
 
-    async fn handle_manager_cmd(&mut self, cmd: WriterCommand, packet_pool: &mut MemPool<Packet>) -> Result<()> {
+    async fn handle_manager_cmd(&mut self, cmd: WriterCommand, packet_pool: &mut Arena<Packet>) -> Result<()> {
         use WriterCommand::*;
 
         match cmd {
@@ -991,7 +991,7 @@ impl UtpWriter {
         Ok(())
     }
 
-    async fn send(&mut self, data: &[u8], packet_pool: &mut MemPool<Packet>) -> Result<()> {
+    async fn send(&mut self, data: &[u8], packet_pool: &mut Arena<Packet>) -> Result<()> {
         let packet_size = self.packet_size();
 
         let packets = data.chunks(packet_size);
@@ -1021,7 +1021,7 @@ impl UtpWriter {
         }
     }
 
-    async fn ensure_window_is_large_enough(&mut self, packet_size: usize, packet_pool: &mut MemPool<Packet>) -> Result<()> {
+    async fn ensure_window_is_large_enough(&mut self, packet_size: usize, packet_pool: &mut Arena<Packet>) -> Result<()> {
         while packet_size + self.state.inflight_size() > self.state.cwnd() as usize {
             //println!("BLOCKED BY CWND {:?} {:?} {:?}", packet_size, self.state.inflight_size(), self.state.cwnd());
 
@@ -1034,7 +1034,7 @@ impl UtpWriter {
         Ok(())
     }
 
-    async fn send_packet(&mut self, mut packet: PoolArc<Packet>) -> Result<()> {
+    async fn send_packet(&mut self, mut packet: ArenaArc<Packet>) -> Result<()> {
         let ack_number = self.state.ack_number();
         let seq_number = self.state.increment_seq();
         let send_id = self.state.send_id();
@@ -1055,7 +1055,7 @@ impl UtpWriter {
         Ok(())
     }
 
-    async fn send_syn(&mut self, packet_pool: &mut MemPool<Packet>) -> Result<()> {
+    async fn send_syn(&mut self, packet_pool: &mut Arena<Packet>) -> Result<()> {
         let seq_number = self.state.increment_seq();
         let recv_id = self.state.recv_id();
 
