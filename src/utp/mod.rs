@@ -615,6 +615,12 @@ struct Payload {
 }
 
 impl Payload {
+    fn new_in_place(place: &mut Payload, data: &[u8]) {
+        let data_len = data.len();
+        place.data[..data_len].copy_from_slice(data);
+        place.len = data_len;
+    }
+
     fn new(data: &[u8]) -> Payload {
         let data_len = data.len();
         let mut payload = [0; 1500];
@@ -674,6 +680,15 @@ impl DerefMut for Packet {
 }
 
 impl Packet {
+    pub fn new_in_place(place: &mut Packet, data: &[u8]) {
+        place.header = Header::default();
+        Payload::new_in_place(&mut place.payload,  data);
+        place.seq_number = SequenceNumber::zero();
+        place.resent = false;
+        place.last_sent = Timestamp::zero();
+        place.lost = false;
+    }
+
     pub fn new(data: &[u8]) -> Packet {
         Packet {
             header: Header::default(),

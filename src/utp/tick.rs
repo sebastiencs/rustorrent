@@ -41,9 +41,21 @@ impl Tick {
 
     async fn send_tick(streams: Arc<RwLock<HashMap<SocketAddr, Sender<UtpEvent>>>>) {
         let streams = streams.read().await;
-        for addr in streams.values().filter(|p| !p.is_full()) {
+        for addr in streams.values() {
             // Tick it only when it's not too busy
-            addr.send(UtpEvent::Tick).await;
+            if !addr.is_full() {
+                addr.send(UtpEvent::Tick).await;
+            } else {
+                println!("ADDR FULL !", );
+            }
         }
     }
+
+    // async fn send_tick(streams: Arc<RwLock<HashMap<SocketAddr, Sender<UtpEvent>>>>) {
+    //     let streams = streams.read().await;
+    //     for addr in streams.values().filter(|p| !p.is_full()) {
+    //         // Tick it only when it's not too busy
+    //         addr.send(UtpEvent::Tick).await;
+    //     }
+    // }
 }
