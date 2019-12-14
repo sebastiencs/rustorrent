@@ -14,7 +14,7 @@ use std::cell::RefCell;
 
 use crate::udp_ext::WithTimeout;
 use crate::utils::Map;
-use crate::memory_pool::{Arena, ArenaArc};
+use crate::memory_pool::{Arena, ArenaArc, SharedArena};
 
 use super::{
     UtpError, Result, SequenceNumber, Packet, PacketRef,
@@ -196,6 +196,7 @@ pub struct UtpListener {
     v6: Arc<UdpSocket>,
     /// The hashmap might be modified by different tasks so we wrap it in a RwLock
     streams: Arc<RwLock<HashMap<SocketAddr, Sender<UtpEvent>>>>,
+    packet_arena: Arc<SharedArena<Packet>>
 }
 
 enum IncomingEvent {
@@ -217,6 +218,7 @@ impl UtpListener {
             v4: Arc::new(v4),
             v6: Arc::new(v6),
             streams: Default::default(),
+            packet_arena: Default::default()
         });
 
         listener.clone().start();
@@ -241,7 +243,7 @@ impl UtpListener {
         let state = Arc::new(state);
 
         let (sender, receiver) = channel(10);
-        let mut manager = UtpManager::new_with_state(socket, sockaddr, receiver, state);
+        let mut manager = UtpManager::new_with_state(socket, sockaddr, receiver, state, self.packet_arena.clone());
         manager.set_on_connected(on_connected);
 
         {
@@ -269,7 +271,7 @@ impl UtpListener {
         };
 
         let (sender, receiver) = channel(10);
-        let manager = UtpManager::new(socket, sockaddr, receiver);
+        let manager = UtpManager::new(socket, sockaddr, receiver, self.packet_arena.clone());
 
         {
             let mut streams = self.streams.write().await;
@@ -389,6 +391,8 @@ struct UtpManager {
     writer_user: Sender<WriterUserCommand>,
     writer: Sender<WriterCommand>,
 
+    packet_arena: Arc<SharedArena<Packet>>,
+
     timeout: Instant,
     /// Number of consecutive times we've been timeout
     /// After 3 times we close the socket
@@ -437,9 +441,10 @@ impl UtpManager {
     fn new(
         socket: Arc<UdpSocket>,
         addr: SocketAddr,
-        recv: Receiver<UtpEvent>
+        recv: Receiver<UtpEvent>,
+        packet_arena: Arc<SharedArena<Packet>>
     ) -> UtpManager {
-        Self::new_with_state(socket, addr, recv, Default::default())
+        Self::new_with_state(socket, addr, recv, Default::default(), packet_arena)
     }
 
     fn new_with_state(
@@ -447,11 +452,15 @@ impl UtpManager {
         addr: SocketAddr,
         recv: Receiver<UtpEvent>,
         state: Arc<State>,
+        packet_arena: Arc<SharedArena<Packet>>
     ) -> UtpManager {
         let (writer, writer_rcv) = channel(10);
         let (writer_user, writer_user_rcv) = channel(10);
 
-        let writer_actor = UtpWriter::new(socket.clone(), addr, writer_user_rcv, writer_rcv, Arc::clone(&state));
+        let writer_actor = UtpWriter::new(
+            socket.clone(), addr, writer_user_rcv,
+            writer_rcv, Arc::clone(&state), packet_arena.clone()
+        );
         task::spawn(async move {
             writer_actor.start().await;
         });
@@ -463,6 +472,7 @@ impl UtpManager {
             writer,
             state,
             writer_user,
+            packet_arena,
             timeout: Instant::now() + Duration::from_secs(3),
             ntimeout: 0,
             on_connected: None,
@@ -847,6 +857,7 @@ struct UtpWriter {
     user_command: Receiver<WriterUserCommand>,
     command: Receiver<WriterCommand>,
     state: Arc<State>,
+    packet_arena: Arc<SharedArena<Packet>>
 }
 
 impl Drop for UtpWriter {
@@ -880,8 +891,9 @@ impl UtpWriter {
         user_command: Receiver<WriterUserCommand>,
         command: Receiver<WriterCommand>,
         state: Arc<State>,
+        packet_arena: Arc<SharedArena<Packet>>
     ) -> UtpWriter {
-        UtpWriter { socket, addr, user_command, command, state }
+        UtpWriter { socket, addr, user_command, command, state, packet_arena }
     }
 
     async fn poll(&self) -> Option<WriterCommand> {
@@ -908,24 +920,23 @@ impl UtpWriter {
     }
 
     pub async fn start(mut self) {
-        let mut packet_pool = Arena::new();
         while let Some(cmd) = self.poll().await {
-            self.handle_cmd(cmd, &mut packet_pool).await.unwrap();
+            self.handle_cmd(cmd).await.unwrap();
         }
     }
 
-    async fn handle_cmd(&mut self, cmd: WriterCommand, packet_pool: &mut Arena<Packet>) -> Result<()> {
+    async fn handle_cmd(&mut self, cmd: WriterCommand) -> Result<()> {
         use WriterCommand::*;
 
         match cmd {
             WriteData { ref data } => {
-                self.send(data, packet_pool).await.unwrap()
+                self.send(data).await.unwrap()
             },
             SendPacket { packet_type } => {
                 if packet_type == PacketType::Syn {
-                    self.send_syn(packet_pool).await.unwrap();
+                    self.send_syn().await.unwrap();
                 } else {
-                    let packet = packet_pool.alloc(Packet::new_type(packet_type));
+                    let packet = self.packet_arena.alloc(Packet::new_type(packet_type)).await;
                     self.send_packet(packet).await.unwrap();
                 }
             }
@@ -939,15 +950,15 @@ impl UtpWriter {
         Ok(())
     }
 
-    async fn handle_manager_cmd(&mut self, cmd: WriterCommand, packet_pool: &mut Arena<Packet>) -> Result<()> {
+    async fn handle_manager_cmd(&mut self, cmd: WriterCommand) -> Result<()> {
         use WriterCommand::*;
 
         match cmd {
             SendPacket { packet_type } => {
                 if packet_type == PacketType::Syn {
-                    self.send_syn(packet_pool).await.unwrap();
+                    self.send_syn().await.unwrap();
                 } else {
-                    let packet = packet_pool.alloc(Packet::new_type(packet_type));
+                    let packet = self.packet_arena.alloc(Packet::new_type(packet_type)).await;
                     self.send_packet(packet).await.unwrap();
                 }
             }
@@ -991,17 +1002,17 @@ impl UtpWriter {
         Ok(())
     }
 
-    async fn send(&mut self, data: &[u8], packet_pool: &mut Arena<Packet>) -> Result<()> {
+    async fn send(&mut self, data: &[u8]) -> Result<()> {
         let packet_size = self.packet_size();
 
         let packets = data.chunks(packet_size);
 
         for packet in packets {
-            let packet = unsafe { packet_pool.alloc_with(|packet_uninit| {
+            let packet = unsafe { self.packet_arena.alloc_with(|packet_uninit| {
                 Packet::new_in_place(packet_uninit, packet)
-            }) };
+            }).await };
 
-            self.ensure_window_is_large_enough(packet.size(), packet_pool).await?;
+            self.ensure_window_is_large_enough(packet.size()).await?;
             self.send_packet(packet).await?;
         }
 
@@ -1021,13 +1032,13 @@ impl UtpWriter {
         }
     }
 
-    async fn ensure_window_is_large_enough(&mut self, packet_size: usize, packet_pool: &mut Arena<Packet>) -> Result<()> {
+    async fn ensure_window_is_large_enough(&mut self, packet_size: usize) -> Result<()> {
         while packet_size + self.state.inflight_size() > self.state.cwnd() as usize {
             //println!("BLOCKED BY CWND {:?} {:?} {:?}", packet_size, self.state.inflight_size(), self.state.cwnd());
 
             // Too many packets in flight, we wait for acked or lost packets
             match self.command.recv().await {
-                Some(cmd) => self.handle_manager_cmd(cmd, packet_pool).await?,
+                Some(cmd) => self.handle_manager_cmd(cmd).await?,
                 _ => return Err(UtpError::MustClose)
             }
         }
@@ -1055,7 +1066,7 @@ impl UtpWriter {
         Ok(())
     }
 
-    async fn send_syn(&mut self, packet_pool: &mut Arena<Packet>) -> Result<()> {
+    async fn send_syn(&mut self) -> Result<()> {
         let seq_number = self.state.increment_seq();
         let recv_id = self.state.recv_id();
 
@@ -1071,7 +1082,7 @@ impl UtpWriter {
 
         self.state.set_utp_state(UtpState::SynSent);
 
-        let packet = packet_pool.alloc(packet);
+        let packet = self.packet_arena.alloc(packet).await;
         self.state.add_packet_inflight(seq_number, packet).await;
 
         Ok(())
