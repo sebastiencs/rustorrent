@@ -17,12 +17,12 @@ use crate::utils::Map;
 use crate::memory_pool::{Arena, ArenaArc, SharedArena};
 
 use super::{
-    UtpError, Result, SequenceNumber, Packet, PacketRef,
+    UtpError, Result, SequenceNumber, Packet,
     Timestamp, PacketType, ConnectionId, HEADER_SIZE,
     SelectiveAckBit, SelectiveAck, DelayHistory, Delay, RelativeDelay,
-    UDP_IPV4_MTU, UDP_IPV6_MTU
+    UDP_IPV4_MTU, UDP_IPV6_MTU, PACKET_MAX_SIZE
 };
-use super::socket::{
+use super::{
     INIT_CWND, MSS,
     State as UtpState,
     TARGET, MIN_CWND
@@ -336,25 +336,28 @@ impl UtpListener {
         loop {
             let (buffer, addr) = match self.poll_event(&mut buffer_v4[..], &mut buffer_v6[..]).await? {
                 V4((size, addr)) => {
-                    (Vec::from_slice(&buffer_v4[..size]), addr)
+                    (&buffer_v4[..size], addr)
                 },
                 V6((size, addr)) => {
-                    (Vec::from_slice(&buffer_v6[..size]), addr)
+                    (&buffer_v6[..size], addr)
                 },
             };
 
-            let timestamp = Timestamp::now();
-
-            //println!("INCOMING {:?} {:?}", buffer.len(), addr);
-
-            if buffer.len() < HEADER_SIZE {
+            if buffer.len() < HEADER_SIZE || buffer.len() > PACKET_MAX_SIZE {
                 continue;
             }
 
+            let timestamp = Timestamp::now();
+
+            let packet = unsafe {
+                self.packet_arena.alloc_with(|packet_uninit| {
+                    Packet::from_incoming_in_place(packet_uninit, buffer, timestamp)
+                }).await
+            };
 
             {
                 if let Some(addr) = self.streams.read().await.get(&addr) {
-                    let incoming = UtpEvent::IncomingBytes { buffer, timestamp };
+                    let incoming = UtpEvent::IncomingPacket { packet };
 
                     // self.streams is still borrowed at this point
                     // can add.send() blocks and so self.streams be deadlock ?
@@ -365,10 +368,8 @@ impl UtpListener {
                 }
             }
 
-            let packet = PacketRef::ref_from_incoming(&buffer, timestamp);
-
             if let Ok(PacketType::Syn) = packet.get_type() {
-                let incoming = UtpEvent::IncomingBytes { buffer, timestamp };
+                let incoming = UtpEvent::IncomingPacket { packet };
                 self.new_connection(addr)
                     .await
                     .send(incoming)
@@ -419,10 +420,13 @@ struct UtpManager {
 }
 
 pub enum UtpEvent {
-    IncomingBytes {
-        buffer: Vec<u8>,
-        timestamp: Timestamp
+    IncomingPacket {
+        packet: ArenaArc<Packet>
     },
+    // IncomingBytes {
+    //     buffer: Vec<u8>,
+    //     timestamp: Timestamp
+    // },
     Tick
 }
 
@@ -523,8 +527,7 @@ impl UtpManager {
 
     async fn process_incoming(&mut self, event: UtpEvent) -> Result<()> {
         match event {
-            UtpEvent::IncomingBytes { buffer, timestamp } => {
-                let packet = PacketRef::ref_from_incoming(&buffer, timestamp);
+            UtpEvent::IncomingPacket { packet } => {
                 match self.dispatch(packet).await {
                     Err(UtpError::PacketLost) => {
                         self.writer.send(WriterCommand::ResendPacket {
@@ -581,10 +584,10 @@ impl UtpManager {
         Ok(())
     }
 
-    async fn dispatch(&mut self, packet: PacketRef<'_>) -> Result<()> {
+    async fn dispatch(&mut self, packet: ArenaArc<Packet>) -> Result<()> {
         // println!("DISPATCH HEADER: {:?}", packet.header());
 
-        let delay = packet.received_at.delay(packet.get_timestamp());
+        let delay = packet.received_at().delay(packet.get_timestamp());
         // self.delay = Delay::since(packet.get_timestamp());
 
         let utp_state = self.state.utp_state();
@@ -650,9 +653,9 @@ impl UtpManager {
     }
 
 
-    async fn handle_state(&mut self, packet: PacketRef<'_>) -> Result<()> {
+    async fn handle_state(&mut self, packet: ArenaArc<Packet>) -> Result<()> {
         let ack_number = packet.get_ack_number();
-        let received_at = packet.received_at;
+        let received_at = packet.received_at();
 
         // println!("ACK RECEIVED {:?} LAST_ACK {:?} DUP {:?} INFLIGHT {:?}",
         //          ack_number, self.last_ack, self.ack_duplicate, self.state.inflight_size());
