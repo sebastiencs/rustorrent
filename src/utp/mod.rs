@@ -1,12 +1,81 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::cmp::{PartialOrd, Ord};
 use std::io::ErrorKind;
+use std::ops::{Deref, DerefMut, Add, Sub, AddAssign, SubAssign};
 
-pub mod socket;
 pub mod stream;
 pub mod tick;
 
 use stream::UtpEvent;
+
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+pub enum State {
+    /// not yet connected
+	None,
+	/// sent a syn packet, not received any acks
+	SynSent,
+	/// syn-ack received and in normal operation
+	/// of sending and receiving data
+	Connected,
+	/// fin sent, but all packets up to the fin packet
+	/// have not yet been acked. We might still be waiting
+	/// for a FIN from the other end
+	FinSent,
+    ///
+    MustConnect
+	// /// ====== states beyond this point =====
+	// /// === are considered closing states ===
+	// /// === and will cause the socket to ====
+	// /// ============ be deleted =============
+	// /// the socket has been gracefully disconnected
+	// /// and is waiting for the client to make a
+	// /// socket call so that we can communicate this
+	// /// fact and actually delete all the state, or
+	// /// there is an error on this socket and we're
+	// /// waiting to communicate this to the client in
+	// /// a callback. The error in either case is stored
+	// /// in m_error. If the socket has gracefully shut
+	// /// down, the error is error::eof.
+	// ErrorWait,
+	// /// there are no more references to this socket
+	// /// and we can delete it
+	// Delete
+}
+
+impl From<u8> for State {
+    fn from(n: u8) -> State {
+        match n {
+            0 => State::None,
+            1 => State::SynSent,
+            2 => State::Connected,
+            3 => State::FinSent,
+            4 => State::MustConnect,
+            _ => unreachable!()
+        }
+    }
+}
+
+impl From<State> for u8 {
+    fn from(s: State) -> u8 {
+        match s {
+            State::None => 0,
+            State::SynSent => 1,
+            State::Connected => 2,
+            State::FinSent => 3,
+            State::MustConnect => 4,
+        }
+    }
+}
+
+pub const BASE_HISTORY: usize = 10;
+pub const INIT_CWND: u32 = 2;
+pub const MIN_CWND: u32 = 2;
+/// Sender's Maximum Segment Size
+/// Set to Ethernet MTU
+pub const MSS: u32 = 1400;
+pub const TARGET: i64 = 100_000; //100;
+pub const GAIN: u32 = 1;
+pub const ALLOWED_INCREASE: u32 = 1;
 
 /// A safe type using wrapping_{add,sub} for +/-/cmp operations
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -608,9 +677,11 @@ impl ConnectionId {
     }
 }
 
+const PAYLOAD_SIZE: usize = 1500;
+
 #[repr(C, packed)]
 struct Payload {
-    data: [u8; 1500],
+    data: [u8; PAYLOAD_SIZE],
     len: usize
 }
 
@@ -623,7 +694,7 @@ impl Payload {
 
     fn new(data: &[u8]) -> Payload {
         let data_len = data.len();
-        let mut payload = [0; 1500];
+        let mut payload = [0; PAYLOAD_SIZE];
         payload[..data_len].copy_from_slice(data);
         Payload {
             data: payload,
@@ -640,6 +711,8 @@ pub struct PacketPool {
     pool: Vec<Packet>
 }
 
+const PACKET_MAX_SIZE: usize = HEADER_SIZE + PAYLOAD_SIZE;
+
 #[repr(C, packed)]
 pub struct Packet {
     header: Header,
@@ -650,8 +723,8 @@ pub struct Packet {
     /// True if this packet was resent
     resent: bool,
     last_sent: Timestamp,
-    lost: bool
-//    resent_time: Timestamp,
+    lost: bool,
+    received_at: Option<Timestamp>,
 }
 
 impl std::fmt::Debug for Packet {
@@ -683,10 +756,31 @@ impl Packet {
     pub fn new_in_place(place: &mut Packet, data: &[u8]) {
         place.header = Header::default();
         Payload::new_in_place(&mut place.payload,  data);
+        // Fill rest of Packet with non-uninitialized data
+        // Ensure that we don't invoke any Drop here
         place.seq_number = SequenceNumber::zero();
         place.resent = false;
         place.last_sent = Timestamp::zero();
         place.lost = false;
+        place.received_at = None
+    }
+
+    pub fn from_incoming_in_place(place: &mut Packet, data: &[u8], timestamp: Timestamp) {
+        let slice = unsafe { &mut *(place as *mut Packet as *mut [u8; PACKET_MAX_SIZE]) };
+        let data_len = data.len();
+
+        assert!(data_len >= HEADER_SIZE && data_len < PACKET_MAX_SIZE);
+
+        slice[..data_len].copy_from_slice(data);
+
+        // Fill rest of Packet with non-uninitialized data
+        // Ensure that we don't invoke any Drop here
+        place.payload.len = data_len - HEADER_SIZE;
+        place.seq_number = place.get_seq_number();
+        place.resent = false;
+        place.last_sent = Timestamp::zero();
+        place.lost = false;
+        place.received_at = Some(timestamp);
     }
 
     pub fn new(data: &[u8]) -> Packet {
@@ -696,7 +790,8 @@ impl Packet {
             seq_number: SequenceNumber::zero(),
             resent: false,
             last_sent: Timestamp::zero(),
-            lost: false
+            lost: false,
+            received_at: None,
         }
     }
 
@@ -707,7 +802,8 @@ impl Packet {
             seq_number: SequenceNumber::zero(),
             resent: false,
             last_sent: Timestamp::zero(),
-            lost: false
+            lost: false,
+            received_at: None,
         }
     }
 
@@ -718,12 +814,21 @@ impl Packet {
             seq_number: SequenceNumber::zero(),
             resent: false,
             last_sent: Timestamp::zero(),
-            lost: false
+            lost: false,
+            received_at: None,
         }
+    }
+
+    pub fn received_at(&self) -> Timestamp {
+        self.received_at.expect("Packet wasn't received")
     }
 
     pub fn payload_len(&self) -> usize {
         self.payload.len()
+    }
+
+    pub fn iter_sacks(&self) -> ExtensionIterator {
+        ExtensionIterator::new(self)
     }
 
     pub fn update_timestamp(&mut self) {
@@ -844,9 +949,9 @@ pub struct ExtensionIterator<'a> {
 }
 
 impl<'a> ExtensionIterator<'a> {
-    pub fn new(packet: &'a PacketRef) -> ExtensionIterator<'a> {
+    pub fn new(packet: &'a Packet) -> ExtensionIterator<'a> {
         let current_type = packet.get_extension_type();
-        let slice = &packet.packet_ref.payload.data[..packet.len - HEADER_SIZE];
+        let slice = &packet.payload.data[..packet.size() - HEADER_SIZE];
         let ack_number = packet.get_ack_number();
 
         // for byte in &packet.packet_ref.payload.data[..packet.len - HEADER_SIZE] {
@@ -887,54 +992,6 @@ impl<'a> Iterator for ExtensionIterator<'a> {
                 }
             }
         }
-    }
-}
-
-pub struct PacketRef<'a> {
-    packet_ref: &'a Packet,
-    len: usize,
-    received_at: Timestamp,
-}
-
-use std::ops::{Deref, DerefMut, Add, Sub, AddAssign, SubAssign};
-
-impl Deref for PacketRef<'_> {
-    type Target = Header;
-
-    fn deref(&self) -> &Header {
-        &self.packet_ref.header
-    }
-}
-
-impl<'a> PacketRef<'a> {
-    fn ref_from_buffer(buffer: &[u8]) -> Result<PacketRef> {
-        let received_at = Timestamp::now();
-        let len = buffer.len();
-        if len < HEADER_SIZE {
-            return Err(UtpError::Malformed);
-        }
-        Ok(PacketRef {
-            len,
-            received_at,
-            packet_ref: unsafe { &*(buffer.as_ptr() as *const Packet) },
-        })
-    }
-
-    fn ref_from_incoming(buffer: &[u8], timestamp: Timestamp) -> PacketRef {
-        let len = buffer.len();
-        PacketRef {
-            len,
-            received_at: timestamp,
-            packet_ref: unsafe { &*(buffer.as_ptr() as *const Packet) },
-        }
-    }
-
-    fn header(&self) -> &Header {
-        &self.packet_ref.header
-    }
-
-    pub fn iter_sacks(&self) -> ExtensionIterator {
-        ExtensionIterator::new(self)
     }
 }
 
