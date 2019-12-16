@@ -40,6 +40,8 @@ async-std = { version = "1", features = ["unstable"] }
 
 fixed = { version = "0.4", default-features = false }
 
+crossbeam-epoch = { version = "0.8", default-features = false }
+
 # TODO: Make it optional
 packed_simd = { version = "0.3.3" }
 #packed_simd = { version = "0.3.3", features = ["into_bits"] }
