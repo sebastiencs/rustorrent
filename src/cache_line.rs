@@ -1,48 +1,47 @@
 
-
-// CACHE_LINE_SIZE is the size of a cache line on this specific architecture.
-#[cfg(target_arch = "x86")]
-pub const CACHE_LINE_SIZE: usize = 64;
-#[cfg(target_arch = "x86_64")]
-pub const CACHE_LINE_SIZE: usize = 64;
-#[cfg(target_arch = "mips")]
-pub const CACHE_LINE_SIZE: usize = 32;
-#[cfg(target_arch = "powerpc")]
-pub const CACHE_LINE_SIZE: usize = 64; // maybe 128?
-#[cfg(target_arch = "powerpc64")]
-pub const CACHE_LINE_SIZE: usize = 128;
-#[cfg(target_arch = "arm")]
-pub const CACHE_LINE_SIZE: usize = 32;
-#[cfg(target_arch = "aarch64")]
-pub const CACHE_LINE_SIZE: usize = 32; // aka arm64
-#[cfg(target_arch = "s390x")]
-pub const CACHE_LINE_SIZE: usize = 256;
-
-// Use CacheAligned to align a struct to the size of this architectures cache line size.
 #[cfg_attr(
     any(
-        target_arch = "x86_64",
+        target_arch = "mips",
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "mips64",
+        target_arch = "mips64el"
+    ),
+    repr(align(32))
+)]
+#[cfg_attr(
+    any(
         target_arch = "x86",
-        target_arch = "powerpc"
+        target_arch = "powerpc",
+// https://community.arm.com/developer/ip-products/processors/f/cortex-a-forum/13570/cortex-a7-cache-line-size
+        target_arch = "armv7",
+        target_arch = "armv7r",
     ),
     repr(align(64))
 )]
 #[cfg_attr(
     any(
-        target_arch = "mips",
-        target_arch = "arm",
-        target_arch = "aarch64"
+        target_arch = "x86_64",
+        target_arch = "powerpc64",
     ),
-    repr(align(32))
+    repr(align(128))
 )]
-#[cfg_attr(any(target_arch = "powerpc64"), repr(align(128)))]
 #[cfg_attr(any(target_arch = "s390x"), repr(align(256)))]
+#[cfg_attr(any(target_arch = "wasm32"), repr(align(0)))]
 #[derive(Debug)]
-pub struct CacheAligned<T: Sized>(pub T);
+pub struct CacheAligned<T: Sized>(T);
 
 impl<T> CacheAligned<T> {
     pub fn new(v: T) -> CacheAligned<T> {
-        CacheAligned { 0: v }
+        CacheAligned(v)
+    }
+}
+
+impl<T: Copy + Clone> Copy for CacheAligned<T> {}
+
+impl<T: Clone> Clone for CacheAligned<T> {
+    fn clone(&self) -> CacheAligned<T> {
+        CacheAligned(self.0.clone())
     }
 }
 
