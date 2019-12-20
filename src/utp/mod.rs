@@ -2,6 +2,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::cmp::{PartialOrd, Ord};
 use std::io::ErrorKind;
 use std::ops::{Deref, DerefMut, Add, Sub, AddAssign, SubAssign};
+use std::mem::MaybeUninit;
 
 pub mod stream;
 pub mod tick;
@@ -753,7 +754,9 @@ impl DerefMut for Packet {
 }
 
 impl Packet {
-    pub fn new_in_place(place: &mut Packet, data: &[u8]) {
+    pub fn new_in_place(place: &mut MaybeUninit<Packet>, data: &[u8]) {
+        let place = unsafe { &mut *place.as_mut_ptr() };
+
         place.header = Header::default();
         Payload::new_in_place(&mut place.payload,  data);
         // Fill rest of Packet with non-uninitialized data
@@ -765,13 +768,17 @@ impl Packet {
         place.received_at = None
     }
 
-    pub fn from_incoming_in_place(place: &mut Packet, data: &[u8], timestamp: Timestamp) {
-        let slice = unsafe { &mut *(place as *mut Packet as *mut [u8; PACKET_MAX_SIZE]) };
+//    pub fn from_incoming_in_place(place: &mut Packet, data: &[u8], timestamp: Timestamp) {
+    pub fn from_incoming_in_place(place: &mut MaybeUninit<Packet>, data: &[u8], timestamp: Timestamp) {
+        //let slice = unsafe { &mut *(place as *mut Packet as *mut [u8; PACKET_MAX_SIZE]) };
+        let slice = unsafe { &mut *(place.as_mut_ptr() as *mut [u8; PACKET_MAX_SIZE]) };
         let data_len = data.len();
 
         assert!(data_len >= HEADER_SIZE && data_len < PACKET_MAX_SIZE);
 
         slice[..data_len].copy_from_slice(data);
+
+        let place = unsafe { &mut *place.as_mut_ptr() };
 
         // Fill rest of Packet with non-uninitialized data
         // Ensure that we don't invoke any Drop here

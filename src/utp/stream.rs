@@ -14,7 +14,7 @@ use std::cell::RefCell;
 
 use crate::udp_ext::WithTimeout;
 use crate::utils::Map;
-use crate::memory_pool::{Arena, ArenaArc, SharedArena};
+use crate::memory_pool::{ArenaBox, SharedArena};
 
 use super::{
     UtpError, Result, SequenceNumber, Packet,
@@ -67,11 +67,11 @@ struct State {
     atomic: AtomicState,
 
     /// Packets sent but we didn't receive an ack for them
-    inflight_packets: RwLock<Map<SequenceNumber, ArenaArc<Packet>>>,
+    inflight_packets: RwLock<Map<SequenceNumber, ArenaBox<Packet>>>,
 }
 
 impl State {
-    async fn add_packet_inflight(&self, seq_num: SequenceNumber, packet: ArenaArc<Packet>) {
+    async fn add_packet_inflight(&self, seq_num: SequenceNumber, packet: ArenaBox<Packet>) {
         let size = packet.size();
 
         let mut inflight_packets = self.inflight_packets.write().await;
@@ -350,9 +350,9 @@ impl UtpListener {
             let timestamp = Timestamp::now();
 
             let packet = unsafe {
-                self.packet_arena.alloc_with(|packet_uninit| {
+                self.packet_arena.alloc_in_place(|packet_uninit| {
                     Packet::from_incoming_in_place(packet_uninit, buffer, timestamp)
-                }).await
+                })
             };
 
             {
@@ -421,7 +421,7 @@ struct UtpManager {
 
 pub enum UtpEvent {
     IncomingPacket {
-        packet: ArenaArc<Packet>
+        packet: ArenaBox<Packet>
     },
     // IncomingBytes {
     //     buffer: Vec<u8>,
@@ -584,7 +584,7 @@ impl UtpManager {
         Ok(())
     }
 
-    async fn dispatch(&mut self, packet: ArenaArc<Packet>) -> Result<()> {
+    async fn dispatch(&mut self, packet: ArenaBox<Packet>) -> Result<()> {
         // println!("DISPATCH HEADER: {:?}", packet.header());
 
         let delay = packet.received_at().delay(packet.get_timestamp());
@@ -653,7 +653,7 @@ impl UtpManager {
     }
 
 
-    async fn handle_state(&mut self, packet: ArenaArc<Packet>) -> Result<()> {
+    async fn handle_state(&mut self, packet: ArenaBox<Packet>) -> Result<()> {
         let ack_number = packet.get_ack_number();
         let received_at = packet.received_at();
 
@@ -933,13 +933,16 @@ impl UtpWriter {
 
         match cmd {
             WriteData { ref data } => {
-                self.send(data).await.unwrap()
+                // loop {
+                //     println!("== SEND FILE ! {:#?}", self.packet_arena);
+                    self.send(data).await.unwrap();
+                // }
             },
             SendPacket { packet_type } => {
                 if packet_type == PacketType::Syn {
                     self.send_syn().await.unwrap();
                 } else {
-                    let packet = self.packet_arena.alloc(Packet::new_type(packet_type)).await;
+                    let packet = self.packet_arena.alloc(Packet::new_type(packet_type));
                     self.send_packet(packet).await.unwrap();
                 }
             }
@@ -961,7 +964,7 @@ impl UtpWriter {
                 if packet_type == PacketType::Syn {
                     self.send_syn().await.unwrap();
                 } else {
-                    let packet = self.packet_arena.alloc(Packet::new_type(packet_type)).await;
+                    let packet = self.packet_arena.alloc(Packet::new_type(packet_type));
                     self.send_packet(packet).await.unwrap();
                 }
             }
@@ -1011,9 +1014,9 @@ impl UtpWriter {
         let packets = data.chunks(packet_size);
 
         for packet in packets {
-            let packet = unsafe { self.packet_arena.alloc_with(|packet_uninit| {
+            let packet = unsafe { self.packet_arena.alloc_in_place(|packet_uninit| {
                 Packet::new_in_place(packet_uninit, packet)
-            }).await };
+            }) };
 
             self.ensure_window_is_large_enough(packet.size()).await?;
             self.send_packet(packet).await?;
@@ -1048,7 +1051,7 @@ impl UtpWriter {
         Ok(())
     }
 
-    async fn send_packet(&mut self, mut packet: ArenaArc<Packet>) -> Result<()> {
+    async fn send_packet(&mut self, mut packet: ArenaBox<Packet>) -> Result<()> {
         let ack_number = self.state.ack_number();
         let seq_number = self.state.increment_seq();
         let send_id = self.state.send_id();
@@ -1085,7 +1088,7 @@ impl UtpWriter {
 
         self.state.set_utp_state(UtpState::SynSent);
 
-        let packet = self.packet_arena.alloc(packet).await;
+        let packet = self.packet_arena.alloc(packet);
         self.state.add_packet_inflight(seq_number, packet).await;
 
         Ok(())
