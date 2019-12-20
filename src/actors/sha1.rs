@@ -139,35 +139,35 @@ mod tests {
     fn compare_sum_simd() {
         let vec1 = vec![5; 20];
         let vec2 = vec1.clone();
-        assert_eq!(compare_sum(&vec1, &vec2), vec1 == vec2)
+        assert_eq!(compare_20_bytes(&vec1, &vec2), vec1 == vec2)
     }
 
     #[test]
     fn compare_sum_simd_slice() {
         let full = [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1];
-        assert_eq!(compare_sum(&full, &full), full == full);
+        assert_eq!(compare_20_bytes(&full, &full), full == full);
 
         let slice = [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0];
-        assert_eq!(compare_sum(&slice, &full), slice == full);
+        assert_eq!(compare_20_bytes(&slice, &full), slice == full);
 
         let slice = [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1];
-        assert_eq!(compare_sum(&slice, &full), slice == full);
+        assert_eq!(compare_20_bytes(&slice, &full), slice == full);
 
         let slice = [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0];
-        assert_eq!(compare_sum(&slice, &full), slice == full);
+        assert_eq!(compare_20_bytes(&slice, &full), slice == full);
 
         let slice = [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0];
-        assert_eq!(compare_sum(&full, &slice), full == slice);
+        assert_eq!(compare_20_bytes(&full, &slice), full == slice);
 
         // test with the 17th byte
         let slice = [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,1,1,1];
-        assert_eq!(compare_sum(&slice, &full), slice == full);
-        assert_eq!(compare_sum(&slice, &slice), slice == slice);
+        assert_eq!(compare_20_bytes(&slice, &full), slice == full);
+        assert_eq!(compare_20_bytes(&slice, &slice), slice == slice);
 
         // test with the 16th byte
         let slice = [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,1,1,1,1];
-        assert_eq!(compare_sum(&slice, &full), slice == full);
-        assert_eq!(compare_sum(&slice, &slice), slice == slice);
+        assert_eq!(compare_20_bytes(&slice, &full), slice == full);
+        assert_eq!(compare_20_bytes(&slice, &slice), slice == slice);
     }
 
     #[test]
