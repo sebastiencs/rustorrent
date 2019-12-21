@@ -9,10 +9,27 @@ edition = "2018"
 # debug = true
 
 # # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-# [profile.bench]
-# debug = true
 
+[profile.bench]
 debug = true
+
+[profile.release]
+debug = true
+
+[[bin]]
+name = "main"
+path = "src/bin/main.rs"
+bench = false
+
+[lib]
+bench = false
+
+[dev-dependencies]
+criterion = "0.3"
+
+[[bench]]
+name = "mempool"
+harness = false
 
 [dependencies]
 # serde_bencode = "^0.2.0"

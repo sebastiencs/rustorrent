@@ -140,25 +140,74 @@ use std::mem::ManuallyDrop;
 //     arena.stats();
 // }
 
-#[bench]
-fn arena(b: &mut Bencher) {
-    println!("HELLO", );
-    let mut arena = Arena::<MyStruct>::with_capacity(220000000);
-    let obj = MyStruct::default();
-    // let mut vec = Vec::with_capacity(100000000);
-    println!("HELLO2", );
+use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId, PlotConfiguration, AxisScale};
 
-    b.iter(|| {
-        //ManuallyDrop::new(arena.alloc(obj.clone()));
-        ManuallyDrop::new(arena.alloc(MyStruct::default()));
-        // ManuallyDrop::new(arena.alloc_in_place(|uninit| {
-        //     unsafe { std::ptr::copy(&obj, uninit.as_mut_ptr(), 1); }
-        // }))
-    });
-    arena.stats();
-
-    println!("NPAGES {:?}", arena.npages());
+#[inline]
+fn fibonacci(n: u64) -> u64 {
+    match n {
+        0 => 1,
+        1 => 1,
+        n => fibonacci(n-1) + fibonacci(n-2),
+    }
 }
+
+pub fn criterion_benchmark(c: &mut Criterion) {
+    let mut arena = Arena::<MyStruct>::with_capacity(10000000);
+
+    let my_struct = MyStruct::default();
+    let size = std::mem::size_of::<MyStruct>();
+
+    // c.bench_with_input(BenchmarkId::new("input_default", 1), &my_struct, |b, s| {
+    //     b.iter_with_large_drop(|| arena.alloc(black_box(*s)))
+    // });
+
+    let mut group = c.benchmark_group("My Group");
+
+    let plot_config = PlotConfiguration::default()
+        .summary_scale(AxisScale::Linear);
+
+    group.plot_config(plot_config);
+
+    group.bench_function("arena", |b| {
+        b.iter_with_large_drop(|| arena.alloc(black_box(MyStruct::default())))
+    });
+
+    // group.bench_function("normal", |b| {
+    //     b.iter_with_large_drop(|| Box::new(black_box(MyStruct::default())))
+    // });
+
+    group.finish();
+}
+
+criterion_group!{
+    name = benches;
+    config = Criterion::default().with_plots();
+    targets = criterion_benchmark
+}
+
+// criterion_group!(benches, criterion_benchmark);
+
+criterion_main!(benches);
+
+// #[bench]
+// fn arena(b: &mut Bencher) {
+//     println!("HELLO", );
+//     let mut arena = Arena::<MyStruct>::with_capacity(220000000);
+//     let obj = MyStruct::default();
+//     // let mut vec = Vec::with_capacity(100000000);
+//     println!("HELLO2", );
+
+//     b.iter(|| {
+//         //ManuallyDrop::new(arena.alloc(obj.clone()));
+//         ManuallyDrop::new(arena.alloc(MyStruct::default()));
+//         // ManuallyDrop::new(arena.alloc_in_place(|uninit| {
+//         //     unsafe { std::ptr::copy(&obj, uninit.as_mut_ptr(), 1); }
+//         // }))
+//     });
+//     arena.stats();
+
+//     println!("NPAGES {:?}", arena.npages());
+// }
 
 // #[bench]
 // fn arena_arc(b: &mut Bencher) {

@@ -55,7 +55,8 @@ fn main() {
         // let listener2 = Arc::clone(&listener);
         // listener.start();
 
-        let stream = listener.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
+        let stream = listener.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 0, 131)), 7000)).await.unwrap();
+        //let stream = listener.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
 
         let stdin = io::stdin();
         let mut buffer = Vec::new();

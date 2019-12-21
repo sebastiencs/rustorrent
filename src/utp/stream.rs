@@ -933,10 +933,11 @@ impl UtpWriter {
 
         match cmd {
             WriteData { ref data } => {
-                // loop {
-                //     println!("== SEND FILE ! {:#?}", self.packet_arena);
+                loop {
                     self.send(data).await.unwrap();
-                // }
+                    println!("== SEND DATA {:#?}", self.packet_arena);
+                    self.packet_arena.resize(1600);
+                }
             },
             SendPacket { packet_type } => {
                 if packet_type == PacketType::Syn {
