@@ -142,17 +142,9 @@ use std::mem::ManuallyDrop;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId, PlotConfiguration, AxisScale};
 
-#[inline]
-fn fibonacci(n: u64) -> u64 {
-    match n {
-        0 => 1,
-        1 => 1,
-        n => fibonacci(n-1) + fibonacci(n-2),
-    }
-}
-
 pub fn criterion_benchmark(c: &mut Criterion) {
     let mut arena = Arena::<MyStruct>::with_capacity(10000000);
+    let mut shared_arena = SharedArena::<MyStruct>::with_capacity(10000000);
 
     let my_struct = MyStruct::default();
     let size = std::mem::size_of::<MyStruct>();
@@ -161,15 +153,23 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     //     b.iter_with_large_drop(|| arena.alloc(black_box(*s)))
     // });
 
-    let mut group = c.benchmark_group("My Group");
+    let mut group = c.benchmark_group("SimpleAlloc");
 
     let plot_config = PlotConfiguration::default()
         .summary_scale(AxisScale::Linear);
 
     group.plot_config(plot_config);
 
-    group.bench_function("arena", |b| {
-        b.iter_with_large_drop(|| arena.alloc(black_box(MyStruct::default())))
+    // group.bench_function("arena", |b| {
+    //     b.iter_with_large_drop(|| arena.alloc(black_box(MyStruct::default())))
+    // });
+
+    // group.bench_function("arena_arc", |b| {
+    //     b.iter_with_large_drop(|| arena.alloc_arc(black_box(MyStruct::default())))
+    // });
+
+    group.bench_function("shared_arena", |b| {
+        b.iter_with_large_drop(|| shared_arena.alloc(black_box(MyStruct::default())))
     });
 
     // group.bench_function("normal", |b| {
