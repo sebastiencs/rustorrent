@@ -100,7 +100,7 @@ pub fn acquire_free_node_u32(a_bitfield: &CacheAligned<AtomicU32>) -> Option<usi
 //     });
 // }
 
-use rustorrent::memory_pool::{Arena, SharedArena, ArenaBox};
+use rustorrent::memory_pool::{Arena, SharedArena, ArenaBox, Pool};
 
 #[derive(Copy, Clone)]
 struct MyStruct {
@@ -145,6 +145,7 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion, Benchmark
 pub fn criterion_benchmark(c: &mut Criterion) {
     let mut arena = Arena::<MyStruct>::with_capacity(10000000);
     let mut shared_arena = SharedArena::<MyStruct>::with_capacity(10000000);
+    let mut pool = Pool::<MyStruct>::with_capacity(10000000);
 
     let my_struct = MyStruct::default();
     let size = std::mem::size_of::<MyStruct>();
@@ -168,8 +169,12 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     //     b.iter_with_large_drop(|| arena.alloc_arc(black_box(MyStruct::default())))
     // });
 
-    group.bench_function("shared_arena", |b| {
-        b.iter_with_large_drop(|| shared_arena.alloc(black_box(MyStruct::default())))
+    // group.bench_function("shared_arena", |b| {
+    //     b.iter_with_large_drop(|| shared_arena.alloc(black_box(MyStruct::default())))
+    // });
+
+    group.bench_function("pool", |b| {
+        b.iter_with_large_drop(|| pool.alloc(black_box(MyStruct::default())))
     });
 
     // group.bench_function("normal", |b| {
