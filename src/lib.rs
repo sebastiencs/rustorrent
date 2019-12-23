@@ -1,4 +1,6 @@
 
+#![feature(const_generics)]
+
 pub mod de;
 pub mod metadata;
 pub mod session;
