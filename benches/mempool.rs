@@ -161,25 +161,25 @@ pub fn criterion_benchmark(c: &mut Criterion) {
 
     group.plot_config(plot_config);
 
-    // group.bench_function("arena", |b| {
-    //     b.iter_with_large_drop(|| arena.alloc(black_box(MyStruct::default())))
-    // });
+    group.bench_function("arena", |b| {
+        b.iter_with_large_drop(|| arena.alloc(black_box(MyStruct::default())))
+    });
 
-    // group.bench_function("arena_arc", |b| {
-    //     b.iter_with_large_drop(|| arena.alloc_arc(black_box(MyStruct::default())))
-    // });
+    group.bench_function("arena_arc", |b| {
+        b.iter_with_large_drop(|| arena.alloc_arc(black_box(MyStruct::default())))
+    });
 
-    // group.bench_function("shared_arena", |b| {
-    //     b.iter_with_large_drop(|| shared_arena.alloc(black_box(MyStruct::default())))
-    // });
+    group.bench_function("shared_arena", |b| {
+        b.iter_with_large_drop(|| shared_arena.alloc(black_box(MyStruct::default())))
+    });
 
     group.bench_function("pool", |b| {
         b.iter_with_large_drop(|| pool.alloc(black_box(MyStruct::default())))
     });
 
-    // group.bench_function("normal", |b| {
-    //     b.iter_with_large_drop(|| Box::new(black_box(MyStruct::default())))
-    // });
+    group.bench_function("normal", |b| {
+        b.iter_with_large_drop(|| Box::new(black_box(MyStruct::default())))
+    });
 
     group.finish();
 }
