@@ -1,12 +1,9 @@
 
-
-
-
-
-use serde::{de, Deserializer, Deserialize};
-use serde::de::Visitor;
-
 pub mod ser;
+pub mod de;
+
+use serde::de::Visitor;
+use serde::{de as serde_de, Deserializer, Deserialize};
 
 #[derive(Debug)]
 pub struct PtrBuf<'a> {
@@ -26,7 +23,7 @@ impl<'a, 'de: 'a> Deserialize<'de> for PtrBuf<'a> {
             }
             fn visit_borrowed_bytes<E>(self, slice: &'de [u8]) -> Result<PtrBuf<'de>, E>
             where
-                E: de::Error,
+                E: serde_de::Error,
             {
                 Ok(PtrBuf { slice })
             }

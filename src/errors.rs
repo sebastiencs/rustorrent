@@ -1,7 +1,7 @@
 
 
 
-use crate::de::DeserializeError;
+use crate::bencode::de::DeserializeError;
 use crate::actors::tracker::http::HttpError;
 
 #[derive(Debug)]

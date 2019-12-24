@@ -118,7 +118,7 @@ impl<'a> TryFrom<&'a [u8]> for MessagePeer<'a> {
 
                 match id {
                     0 => {
-                        let handshake = crate::de::from_bytes(&buffer[1..])?;
+                        let handshake = crate::bencode::de::from_bytes(&buffer[1..])?;
                         MessagePeer::Extension(ExtendedMessage::Handshake(handshake))
                     }
                     _ => {
@@ -607,7 +607,7 @@ impl Peer {
             }
             Extension(ExtendedMessage::Message { id, buffer }) => {
                 if id == 1 {
-                    if let Ok(addrs) = crate::de::from_bytes::<PEXMessage>(buffer) {
+                    if let Ok(addrs) = crate::bencode::de::from_bytes::<PEXMessage>(buffer) {
                         self.supervisor.send(TorrentNotification::PeerDiscovered {
                             addrs: addrs.into()
                         }).await;

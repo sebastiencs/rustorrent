@@ -6,7 +6,6 @@
     clippy::large_enum_variant
 )]
 
-pub mod de;
 pub mod metadata;
 pub mod session;
 pub mod bitfield;

@@ -9,7 +9,7 @@
 use std::io::{self, Read};
 
 use rustorrent::session::Session;
-use rustorrent::de;
+use rustorrent::bencode::de;
 use rustorrent::utp;
 
 use async_std::net::{SocketAddr, IpAddr, Ipv4Addr};

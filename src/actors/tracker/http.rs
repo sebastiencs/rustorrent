@@ -120,7 +120,7 @@ pub struct AnnounceResponse {
     pub peers6: Option<Peers6>,
 }
 
-use crate::de::{DeserializeError, from_bytes};
+use crate::bencode::de::{DeserializeError, from_bytes};
 
 #[derive(Debug)]
 pub enum HttpError {
