@@ -27,7 +27,7 @@
 
 <br />
 
-Rustorrent is intented to be a full featured BitTorrent library.  
+Rustorrent is intented to be a full featured BitTorrent implementation.  
 It is in active development and is not usable yet.
 
 The library uses asynchronous Rust code with [async-std](https://github.com/async-rs/async-std)
