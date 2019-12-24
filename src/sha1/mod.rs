@@ -13,6 +13,9 @@ pub fn sha1(data: &[u8]) -> [u8; 20] {
         }
     }
 
+    // TODO: Implement for ARM
+
+    // Fallback: use the extern crate sha1
     sha1::Sha1::from(data).digest().bytes()
 }
 

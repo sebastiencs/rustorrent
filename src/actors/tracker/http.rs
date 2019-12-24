@@ -1,4 +1,4 @@
-use async_std::sync::{Sender, Receiver, channel};
+
 use async_std::net::{SocketAddr, ToSocketAddrs, TcpStream};
 use async_trait::async_trait;
 use async_std::prelude::*;
@@ -8,11 +8,11 @@ use url::Url;
 
 use std::sync::Arc;
 
-use crate::metadata::Torrent;
+
 use crate::supervisors::torrent::Result;
 use crate::errors::TorrentError;
 use super::{TrackerConnection, TrackerData};
-use crate::actors::peer::PeerExternId;
+
 
 async fn peers_from_dict(peers: &[Peer], addrs: &mut Vec<SocketAddr>) {
     for peer in peers {
@@ -338,6 +338,7 @@ impl TrackerConnection for HttpConnection {
 }
 
 impl HttpConnection {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(
         data: Arc<TrackerData>,
         addr: Vec<Arc<SocketAddr>>,

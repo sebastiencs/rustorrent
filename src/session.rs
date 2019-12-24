@@ -76,6 +76,8 @@ impl Session {
     }
 
     pub fn add_torrent(&mut self, torrent: Torrent) {
-        self.actor.send(SessionCommand::AddTorrent(torrent));
+        self.actor
+            .send(SessionCommand::AddTorrent(torrent))
+            .expect("Error contacting session");
     }
 }

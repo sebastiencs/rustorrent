@@ -360,7 +360,7 @@ impl Peer {
                 cursor.write_u8(0).unwrap();
                 cursor.write_all(&bytes).unwrap();
             }
-            MessagePeer::Extension(ExtendedMessage::Message { id, buffer }) => {
+            MessagePeer::Extension(ExtendedMessage::Message { .. }) => {
 
             }
             //MessagePeer::Extension { .. } => unreachable!()
@@ -600,7 +600,7 @@ impl Peer {
             KeepAlive => {
                 println!("KEEP ALICE");
             }
-            Extension(ExtendedMessage::Handshake(handshake)) => {
+            Extension(ExtendedMessage::Handshake(_handshake)) => {
                 self.send_extended_handshake().await?;
                 //self.maybe_send_request().await;
                 //println!("[{}] EXTENDED HANDSHAKE SENT", self.id);

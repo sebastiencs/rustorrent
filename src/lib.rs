@@ -1,5 +1,10 @@
 
-#![feature(const_generics)]
+#![allow(
+    dead_code,
+    clippy::new_without_default,
+    clippy::single_match,
+    clippy::large_enum_variant
+)]
 
 pub mod de;
 pub mod metadata;

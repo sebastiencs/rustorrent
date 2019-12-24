@@ -1,16 +1,13 @@
 
 use serde;
 use serde::de::Visitor;
-use serde::de::{DeserializeOwned, DeserializeSeed, EnumAccess, MapAccess, SeqAccess, Unexpected,
-                VariantAccess};
+use serde::de::{DeserializeSeed, MapAccess, SeqAccess};
 use serde::forward_to_deserialize_any;
 
 use serde::Deserialize;
 
 use std::fmt;
 use std::sync::Arc;
-
-use crate::actors::peer::PeerExternId;
 
 #[derive(Debug, PartialEq)]
 pub enum DeserializeError {
@@ -60,7 +57,7 @@ where
 
     let info_hash = if !de.start_info.is_null() && de.end_info > de.start_info {
         let len = de.end_info as usize - de.start_info as usize;
-        let mut slice = unsafe { std::slice::from_raw_parts(de.start_info, len) };
+        let slice = unsafe { std::slice::from_raw_parts(de.start_info, len) };
         sha1::Sha1::from(&slice[..]).digest().bytes().to_vec()
     } else {
         //eprintln!("START={:?} END={:?}", de.start_info, de.end_info);
@@ -234,7 +231,7 @@ impl<'a, 'de> BencAccess<'a, 'de> {
     fn new(de: &'a mut Deserializer<'de>) -> BencAccess<'a, 'de> {
         if de.info_depth >= 1 {
             de.info_depth += 1;
-            let s = de.input;
+            let _s = de.input;
             //println!("DEPTH[NEW]={:?} {:?}", de.info_depth, String::from_utf8((&s[0..std::cmp::min(50, s.len())]).to_vec()));
         }
         BencAccess { de }
@@ -255,7 +252,7 @@ impl<'a, 'de> MapAccess<'de> for BencAccess<'a, 'de> {
                 //println!("FOUND END !");
                 self.de.end_info = self.de.input.as_ptr();
             }
-            let s = self.de.input;
+            let _s = self.de.input;
             //println!("DEPTH[END_DICT]={:?} {:?}", self.de.info_depth, String::from_utf8((&s[0..std::cmp::min(50, s.len())]).to_vec()));
             return Ok(None)
         }
@@ -285,7 +282,7 @@ impl<'a, 'de> SeqAccess<'de> for BencAccess<'a, 'de> {
             if self.de.info_depth >= 1 {
                 self.de.info_depth -= 1;
             }
-            let s = self.de.input;
+            let _s = self.de.input;
             //println!("DEPTH[END_LIST]={:?} {:?}", self.de.info_depth, String::from_utf8((&s[0..std::cmp::min(50, s.len())]).to_vec()));
             // println!("DEPTH={}", self.de.info_depth);
             return Ok(None);

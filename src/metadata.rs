@@ -7,7 +7,7 @@ use std::iter::Iterator;
 use std::sync::Arc;
 use std::ops::Deref;
 
-use crate::actors::peer::PeerExternId;
+
 
 type StackVec<T> = SmallVec<[T; 16]>;
 

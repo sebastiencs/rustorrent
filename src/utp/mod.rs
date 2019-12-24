@@ -1,4 +1,4 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+
 use std::cmp::{PartialOrd, Ord};
 use std::io::ErrorKind;
 use std::ops::{Deref, DerefMut, Add, Sub, AddAssign, SubAssign};
@@ -730,8 +730,9 @@ pub struct Packet {
 
 impl std::fmt::Debug for Packet {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let seq_number = self.seq_number;
         f.debug_struct("Packet")
-         .field("seq_nr", &self.seq_number)
+         .field("seq_nr", &seq_number)
          .field("header", &self.header)
          .finish()
     }

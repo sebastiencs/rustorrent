@@ -141,7 +141,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         self.serialize_f64(f64::from(v))
     }
 
-    fn serialize_f64(self, v: f64) -> Result<()> {
+    fn serialize_f64(self, _v: f64) -> Result<()> {
         Err(SerializeError::InvalidInput("float not supported".to_owned()))
     }
 
@@ -245,8 +245,8 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         T: ?Sized + Serialize,
     {
         self.append("d");
-        self.serialize_str(variant);
-        value.serialize(&mut *self);
+        self.serialize_str(variant)?;
+        value.serialize(&mut *self)?;
         self.append("e");
         Ok(())
     }
@@ -293,7 +293,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         _len: usize,
     ) -> Result<Self::SerializeTupleVariant> {
         self.append("d");
-        self.serialize_str(variant);
+        self.serialize_str(variant)?;
         self.append("l");
         Ok(self)
     }
@@ -327,7 +327,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         _len: usize,
     ) -> Result<Self::SerializeStructVariant> {
         self.append("d");
-        self.serialize_str(variant);
+        self.serialize_str(variant)?;
         self.append("d");
         Ok(self)
     }

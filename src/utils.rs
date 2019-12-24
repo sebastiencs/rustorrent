@@ -8,7 +8,7 @@ use byteorder::{BigEndian, ReadBytesExt};
 use std::time::Duration;
 use std::io::Cursor;
 use std::net::{SocketAddrV4, SocketAddrV6, Ipv4Addr, Ipv6Addr};
-use std::convert::TryInto;
+
 
 pub trait FromSlice<T> {
     fn from_slice(slice: &[T]) -> Vec<T>;

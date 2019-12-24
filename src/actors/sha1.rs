@@ -2,7 +2,7 @@
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use async_std::sync as a_sync;
 use async_std::task;
-use sha1::Sha1;
+
 
 use std::sync::Arc;
 

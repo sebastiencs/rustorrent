@@ -310,6 +310,7 @@ pub(super) unsafe fn compute_sha1(data: &[u8]) -> [u8; 20] {
         process_blocks(&mut state, blocks, _mm_loadu_si128);
     }
 
+    #[allow(clippy::identity_op)]
     [
         (state.s0 >> 24) as u8,
         (state.s0 >> 16) as u8,

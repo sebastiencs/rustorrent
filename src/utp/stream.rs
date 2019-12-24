@@ -5,21 +5,21 @@ use async_std::io::{ErrorKind, Error};
 use async_std::net::{SocketAddr, UdpSocket, SocketAddrV4, SocketAddrV6, Ipv4Addr, Ipv6Addr};
 use futures::task::{Context, Poll};
 use futures::{future, pin_mut};
-use futures::future::{Fuse, FutureExt};
+use futures::future::{FutureExt};
 use hashbrown::HashMap;
 use fixed::types::I48F16;
 
-use std::collections::VecDeque;
-use std::cell::RefCell;
 
-use crate::udp_ext::WithTimeout;
+
+
+
 use crate::utils::Map;
 use crate::memory_pool::{ArenaBox, SharedArena};
 
 use super::{
     UtpError, Result, SequenceNumber, Packet,
     Timestamp, PacketType, ConnectionId, HEADER_SIZE,
-    SelectiveAckBit, SelectiveAck, DelayHistory, Delay, RelativeDelay,
+    SelectiveAckBit, DelayHistory,
     UDP_IPV4_MTU, UDP_IPV6_MTU, PACKET_MAX_SIZE
 };
 use super::{
@@ -349,11 +349,9 @@ impl UtpListener {
 
             let timestamp = Timestamp::now();
 
-            let packet = unsafe {
-                self.packet_arena.alloc_in_place(|packet_uninit| {
-                    Packet::from_incoming_in_place(packet_uninit, buffer, timestamp)
-                })
-            };
+            let packet = self.packet_arena.alloc_in_place(|packet_uninit| {
+                Packet::from_incoming_in_place(packet_uninit, buffer, timestamp)
+            });
 
             {
                 if let Some(addr) = self.streams.read().await.get(&addr) {
@@ -587,7 +585,7 @@ impl UtpManager {
     async fn dispatch(&mut self, packet: ArenaBox<Packet>) -> Result<()> {
         // println!("DISPATCH HEADER: {:?}", packet.header());
 
-        let delay = packet.received_at().delay(packet.get_timestamp());
+        let _delay = packet.received_at().delay(packet.get_timestamp());
         // self.delay = Delay::since(packet.get_timestamp());
 
         let utp_state = self.state.utp_state();
@@ -1015,9 +1013,9 @@ impl UtpWriter {
         let packets = data.chunks(packet_size);
 
         for packet in packets {
-            let packet = unsafe { self.packet_arena.alloc_in_place(|packet_uninit| {
+            let packet = self.packet_arena.alloc_in_place(|packet_uninit| {
                 Packet::new_in_place(packet_uninit, packet)
-            }) };
+            });
 
             self.ensure_window_is_large_enough(packet.size()).await?;
             self.send_packet(packet).await?;
@@ -1104,7 +1102,7 @@ pub struct UtpStream {
 }
 
 impl UtpStream {
-    pub async fn read(&self, data: &mut [u8]) {
+    pub async fn read(&self, _data: &mut [u8]) {
         // self.reader_command.send(ReaderCommand {
         //     length: data.len()
         // }).await;

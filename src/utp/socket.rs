@@ -9,7 +9,7 @@ use std::{iter::Iterator, collections::VecDeque};
 use std::iter;
 
 use super::{
-    ConnectionId, Result, UtpError, Packet, PacketRef, PacketType,
+    ConnectionId, Result, UtpError, Packet, PacketType,
     Header, Delay, Timestamp, SequenceNumber, HEADER_SIZE,
     UDP_IPV4_MTU, UDP_IPV6_MTU, DelayHistory, RelativeDelay,
     SelectiveAckBit

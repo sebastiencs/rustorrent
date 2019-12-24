@@ -1,16 +1,15 @@
-use std::io::Cursor;
+
 use std::convert::TryFrom;
 use std::io::Write;
 use std::convert::TryInto;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use url::Url;
-use async_std::sync::{Sender, Receiver, channel};
-use async_std::{task, future};
-use async_std::net::{SocketAddr, ToSocketAddrs};
+
+
+
+use async_std::net::{SocketAddr};
 use async_trait::async_trait;
-use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 
 use crate::supervisors::torrent::Result;
 use crate::errors::TorrentError;
@@ -61,7 +60,7 @@ impl ConnectRequest {
     pub fn new(transaction_id: u32) -> ConnectRequest {
         ConnectRequest {
             transaction_id,
-            protocol_id: 0x41727101980,
+            protocol_id: 0x0417_2710_1980,
             action: Action::Connect,
         }
     }
@@ -285,11 +284,12 @@ pub struct UdpConnection {
 }
 
 use async_std::net::UdpSocket;
-use rand::prelude::*;
+
 use crate::udp_ext::WithTimeout;
 use async_std::io::ErrorKind;
 
 impl UdpConnection {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(
         data: Arc<TrackerData>,
         addrs: Vec<Arc<SocketAddr>>
@@ -306,7 +306,7 @@ impl UdpConnection {
     }
 
     fn next_addr(&mut self) -> &Arc<SocketAddr> {
-        if (self.current_addr >= self.addrs.len()) {
+        if self.current_addr >= self.addrs.len() {
             self.all_addrs_tried = true;
             self.current_addr = 0;
         }
@@ -331,7 +331,7 @@ impl UdpConnection {
                 self.connect().await?;
             }
 
-            let mut socket = &self.state.as_ref().unwrap().socket;
+            let socket = &self.state.as_ref().unwrap().socket;
 
             socket.send(&self.buffer[..send_size]).await?;
 
@@ -346,7 +346,7 @@ impl UdpConnection {
                     attempts += 1;
                     continue;
                 }
-                Err(e) => Err(e)?
+                Err(e) => return Err(e.into())
             };
 
             let buffer = self.buffer
@@ -384,7 +384,7 @@ impl UdpConnection {
                     attempts += 1;
                     continue;
                 }
-                Err(e) => Err(e)?
+                Err(e) => return Err(e.into())
             };
 
             let buffer = self.buffer
@@ -405,11 +405,9 @@ impl UdpConnection {
     }
 
     pub fn write_to_buffer(&mut self, msg: TrackerMessage) -> usize {
-        use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-        use std::io::Cursor;
-        use TrackerMessage;
+        use byteorder::{BigEndian, WriteBytesExt};
 
-        let mut buffer = &mut self.buffer;;
+        let buffer = &mut self.buffer;
 
         // Cursor doesn't work with SmallVec
         match msg {
@@ -447,8 +445,7 @@ impl UdpConnection {
     }
 
     pub fn read_response(&self, buffer: &[u8]) -> Result<TrackerMessage> {
-        use {TrackerMessage, AnnounceResponse};
-        use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+        use byteorder::{BigEndian, ReadBytesExt};
         use std::io::Cursor;
 
         let mut cursor = Cursor::new(buffer);
@@ -531,7 +528,7 @@ impl TrackerConnection for UdpConnection {
         let req = ScrapeRequest::from(&*self).into();
         let n = self.write_to_buffer(req);
 
-        let resp: ScrapeResponse = self.get_response(n).await?;
+        let _resp: ScrapeResponse = self.get_response(n).await?;
 
         Ok(())
     }

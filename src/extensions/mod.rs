@@ -1,5 +1,5 @@
 
-use serde::de::DeserializeOwned;
+
 use serde::{self, Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 
