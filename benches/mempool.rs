@@ -100,7 +100,8 @@ pub fn acquire_free_node_u32(a_bitfield: &CacheAligned<AtomicU32>) -> Option<usi
 //     });
 // }
 
-use rustorrent::memory_pool::{Arena, SharedArena, ArenaBox, Pool};
+use rustorrent::memory_pool::{Arena, SharedArena, ArenaBox};
+//use rustorrent::memory_pool::{Arena, SharedArena, ArenaBox, Pool};
 
 #[derive(Copy, Clone)]
 struct MyStruct {
@@ -143,9 +144,9 @@ use std::mem::ManuallyDrop;
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId, PlotConfiguration, AxisScale};
 
 pub fn criterion_benchmark(c: &mut Criterion) {
-    let mut arena = Arena::<MyStruct>::with_capacity(10000000);
+    let mut arena = Arena::<MyStruct>::with_capacity(10);
     let mut shared_arena = SharedArena::<MyStruct>::with_capacity(10000000);
-    let mut pool = Pool::<MyStruct>::with_capacity(10000000);
+    // let mut pool = Pool::<MyStruct>::with_capacity(10000000);
 
     let my_struct = MyStruct::default();
     let size = std::mem::size_of::<MyStruct>();
@@ -153,6 +154,14 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     // c.bench_with_input(BenchmarkId::new("input_default", 1), &my_struct, |b, s| {
     //     b.iter_with_large_drop(|| arena.alloc(black_box(*s)))
     // });
+
+    // {
+    //     let mut arena = Arena::<MyStruct>::with_capacity(10000000);
+
+    //     c.bench_function("arena_with_drop", |b| {
+    //         b.iter(|| arena.alloc(black_box(MyStruct::default())))
+    //     });
+    // }
 
     let mut group = c.benchmark_group("SimpleAlloc");
 
@@ -165,21 +174,21 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         b.iter_with_large_drop(|| arena.alloc(black_box(MyStruct::default())))
     });
 
-    group.bench_function("arena_arc", |b| {
-        b.iter_with_large_drop(|| arena.alloc_arc(black_box(MyStruct::default())))
-    });
+    // group.bench_function("arena_arc", |b| {
+    //     b.iter_with_large_drop(|| arena.alloc_arc(black_box(MyStruct::default())))
+    // });
 
-    group.bench_function("shared_arena", |b| {
-        b.iter_with_large_drop(|| shared_arena.alloc(black_box(MyStruct::default())))
-    });
+    // group.bench_function("shared_arena", |b| {
+    //     b.iter_with_large_drop(|| shared_arena.alloc(black_box(MyStruct::default())))
+    // });
 
-    group.bench_function("pool", |b| {
-        b.iter_with_large_drop(|| pool.alloc(black_box(MyStruct::default())))
-    });
+    // group.bench_function("pool", |b| {
+    //     b.iter_with_large_drop(|| pool.alloc(black_box(MyStruct::default())))
+    // });
 
-    group.bench_function("normal", |b| {
-        b.iter_with_large_drop(|| Box::new(black_box(MyStruct::default())))
-    });
+    // group.bench_function("normal", |b| {
+    //     b.iter_with_large_drop(|| Box::new(black_box(MyStruct::default())))
+    // });
 
     group.finish();
 }
