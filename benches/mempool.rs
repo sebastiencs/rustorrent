@@ -100,7 +100,7 @@ pub fn acquire_free_node_u32(a_bitfield: &CacheAligned<AtomicU32>) -> Option<usi
 //     });
 // }
 
-use rustorrent::memory_pool::{Arena, SharedArena, ArenaBox};
+use rustorrent::memory_pool::{Arena, SharedArena, ArenaBox, NewArena};
 //use rustorrent::memory_pool::{Arena, SharedArena, ArenaBox, Pool};
 
 #[derive(Copy, Clone)]
@@ -145,6 +145,7 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion, Benchmark
 
 pub fn criterion_benchmark(c: &mut Criterion) {
     let mut arena = Arena::<MyStruct>::with_capacity(100000000);
+    let mut new_arena = NewArena::<MyStruct>::with_capacity(1000000);
     let mut shared_arena = SharedArena::<MyStruct>::with_capacity(10000000);
     // let mut pool = Pool::<MyStruct>::with_capacity(10000000);
 
@@ -163,19 +164,19 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     //     });
     // }
 
-    let now = std::time::Instant::now();
-    for _ in 0..100_000 {
-        Box::new(black_box(MyStruct::default()));
-        // println!("STAT: {:?}", arena.stats());
-    }
-    println!("TIME2 {:?}", now.elapsed());
+    // let now = std::time::Instant::now();
+    // for _ in 0..100_000 {
+    //     Box::new(black_box(MyStruct::default()));
+    //     // println!("STAT: {:?}", arena.stats());
+    // }
+    // println!("TIME2 {:?}", now.elapsed());
 
-    let now = std::time::Instant::now();
-    for _ in 0..100_000 {
-        arena.alloc(black_box(MyStruct::default()));
-        // println!("STAT: {:?}", arena.stats());
-    }
-    println!("TIME {:?}", now.elapsed());
+    // let now = std::time::Instant::now();
+    // for _ in 0..100_000 {
+    //     arena.alloc(black_box(MyStruct::default()));
+    //     // println!("STAT: {:?}", arena.stats());
+    // }
+    // println!("TIME {:?}", now.elapsed());
 
     // c.bench_function("arena_1000", |b| {
 
@@ -189,11 +190,19 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     group.plot_config(plot_config);
 
     // // println!("STAT: {:?}", arena.stats());
+
     // group.bench_function("arena", |b| {
-    //     //b.iter(|| arena.alloc(black_box(MyStruct::default())))
-    //     b.iter_with_large_drop(|| arena.alloc(black_box(MyStruct::default())))
+    //     b.iter(|| arena.alloc(black_box(MyStruct::default())))
+    //     //b.iter_with_large_drop(|| arena.alloc(black_box(MyStruct::default())))
     // });
 
+    // group.bench_function("new_arena", |b| {
+    //     //b.iter(|| arena.alloc(black_box(MyStruct::default())))
+    //     b.iter_with_large_drop(|| new_arena.alloc(black_box(MyStruct::default())))
+    // });
+
+
+    // return;
 
     // group.bench_function("arena_arc", |b| {
     //     b.iter_with_large_drop(|| arena.alloc_arc(black_box(MyStruct::default())))
@@ -208,8 +217,8 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     // });
 
     // group.bench_function("normal", |b| {
-    //     b.iter_with_large_drop(|| Box::new(black_box(MyStruct::default())))
-    //     //b.iter(|| Box::new(black_box(MyStruct::default())))
+    //     //b.iter_with_large_drop(|| Box::new(black_box(MyStruct::default())))
+    //     b.iter(|| Box::new(black_box(MyStruct::default())))
     // });
 
     group.finish();
@@ -258,7 +267,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
                     let start = Instant::now();
                     for _ in 0..n {
                         let res = arena.alloc(black_box(MyStruct::default()));
-                        vec.push(black_box(res));
+                        vec.push(res);
                     }
                     duration += start.elapsed();
                 }
@@ -266,6 +275,28 @@ pub fn criterion_benchmark(c: &mut Criterion) {
                 duration
             });
         });
+
+        // group.bench_with_input(BenchmarkId::new("NewArena", i), &i, move |b, n| {
+        //     let n = *n;
+
+        //     b.iter_custom(move |iters| {
+        //         let mut duration = Duration::new(0, 0);
+
+        //         for _ in 0..iters {
+        //             let mut arena = NewArena::<MyStruct>::with_capacity(n);
+        //             let mut vec = Vec::with_capacity(n);
+
+        //             let start = Instant::now();
+        //             for _ in 0..n {
+        //                 let res = arena.alloc(black_box(MyStruct::default()));
+        //                 vec.push(black_box(res));
+        //             }
+        //             duration += start.elapsed();
+        //         }
+
+        //         duration
+        //     });
+        // });
 
         // group.bench_with_input(BenchmarkId::new("Iterative", i), i,
         //     |b, i| b.iter(|| fibonacci_fast(*i)));
