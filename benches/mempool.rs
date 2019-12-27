@@ -100,7 +100,7 @@ pub fn acquire_free_node_u32(a_bitfield: &CacheAligned<AtomicU32>) -> Option<usi
 //     });
 // }
 
-use rustorrent::memory_pool::{Arena, SharedArena, ArenaBox};
+use rustorrent::memory_pool::{Arena, SharedArena, ArenaBox, Pool};
 //use rustorrent::memory_pool::{Arena, SharedArena, ArenaBox, Pool};
 
 #[derive(Copy, Clone)]
@@ -146,7 +146,7 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion, Benchmark
 pub fn criterion_benchmark(c: &mut Criterion) {
     let mut arena = Arena::<MyStruct>::with_capacity(100000000);
     let mut shared_arena = SharedArena::<MyStruct>::with_capacity(10000000);
-    // let mut pool = Pool::<MyStruct>::with_capacity(10000000);
+    let mut pool = Pool::<MyStruct>::with_capacity(10000000);
 
     let my_struct = MyStruct::default();
     let size = std::mem::size_of::<MyStruct>();
@@ -252,6 +252,28 @@ pub fn criterion_benchmark(c: &mut Criterion) {
 
 
         use std::time::{Instant, Duration};
+
+        group.bench_with_input(BenchmarkId::new("Pool", i), &i, move |b, n| {
+            let n = *n;
+
+            b.iter_custom(move |iters| {
+                let mut duration = Duration::new(0, 0);
+
+                for _ in 0..iters {
+                    let mut arena = Pool::<MyStruct>::with_capacity(n);
+                    let mut vec = Vec::with_capacity(n);
+
+                    let start = Instant::now();
+                    for _ in 0..n {
+                        let res = arena.alloc(black_box(MyStruct::default()));
+                        vec.push(res);
+                    }
+                    duration += start.elapsed();
+                }
+
+                duration
+            });
+        });
 
         group.bench_with_input(BenchmarkId::new("Arena", i), &i, move |b, n| {
             let n = *n;
