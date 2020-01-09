@@ -934,7 +934,7 @@ impl UtpWriter {
                 loop {
                     self.send(data).await.unwrap();
                     println!("== SEND DATA {:#?}", self.packet_arena);
-                    self.packet_arena.resize(1600);
+                    //self.packet_arena.resize(1600);
                 }
             },
             SendPacket { packet_type } => {

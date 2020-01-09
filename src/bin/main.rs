@@ -23,7 +23,7 @@ use async_std::net::{SocketAddr, IpAddr, Ipv4Addr};
 fn main() {
 
     use std::mem::ManuallyDrop;
-    use rustorrent::memory_pool::Arena;
+    use rustorrent::memory_pool::SharedArena;
 
     #[derive(Copy, Clone)]
     struct MyStruct {
@@ -45,7 +45,7 @@ fn main() {
     }
 
     let mut vec = Vec::with_capacity(100000000);
-    let mut arena = Arena::<MyStruct>::with_capacity(100000000);
+    let mut arena = SharedArena::<MyStruct>::with_capacity(100000000);
 
     let now = std::time::Instant::now();
     for _ in 0..100000000 {
@@ -140,7 +140,7 @@ fn main() {
     // println!("STEP_3: {:?}", end);
 
 
-//     use rustorrent::memory_pool::Arena;
+//     use rustorrent::memory_pool::SharedArena;
 
 //     #[derive(Copy, Clone)]
 //     struct MyStruct {
@@ -162,7 +162,7 @@ fn main() {
 
 //     let now;
 //     {
-//         let mut arena = Arena::<MyStruct>::with_capacity(100000000);
+//         let mut arena = SharedArena::<MyStruct>::with_capacity(100000000);
 //         let obj = MyStruct::default();
 
 //         // println!("ICIII", );
