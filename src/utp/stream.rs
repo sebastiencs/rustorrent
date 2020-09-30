@@ -14,7 +14,7 @@ use fixed::types::I48F16;
 
 
 use crate::utils::Map;
-use crate::memory_pool::{ArenaBox, SharedArena};
+use shared_arena::{ArenaBox, SharedArena};
 
 use super::{
     UtpError, Result, SequenceNumber, Packet,
@@ -349,7 +349,7 @@ impl UtpListener {
 
             let timestamp = Timestamp::now();
 
-            let packet = self.packet_arena.alloc_in_place(|packet_uninit| {
+            let packet = self.packet_arena.alloc_with(|packet_uninit| {
                 Packet::from_incoming_in_place(packet_uninit, buffer, timestamp)
             });
 
@@ -1013,7 +1013,7 @@ impl UtpWriter {
         let packets = data.chunks(packet_size);
 
         for packet in packets {
-            let packet = self.packet_arena.alloc_in_place(|packet_uninit| {
+            let packet = self.packet_arena.alloc_with(|packet_uninit| {
                 Packet::new_in_place(packet_uninit, packet)
             });
 

@@ -42,6 +42,7 @@ serde = { version = "1.0", features = ["derive"] }
 # serde_derive = "^1.0.0"
 # serde_urlencoded = "0.6"
 serde_bytes = "0.11"
+shared_arena = "0.8"
 
 smallvec = { version = "1.0", features = ["serde"] }
 memchr = "2"
@@ -75,5 +76,5 @@ fixed = { version = "0.4", default-features = false }
 crossbeam-epoch = { version = "0.8", default-features = false }
 
 # TODO: Make it optional
-packed_simd = { version = "0.3.3" }
+# packed_simd = { version = "0.3.3" }
 #packed_simd = { version = "0.3.3", features = ["into_bits"] }

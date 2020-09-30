@@ -21,6 +21,6 @@ pub mod sha1;
 pub mod utp;
 pub mod time;
 pub mod cache_line;
-pub mod memory_pool;
+// pub mod memory_pool;
 
 //https://blog.cloudflare.com/how-to-receive-a-million-packets/

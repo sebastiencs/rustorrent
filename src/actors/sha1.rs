@@ -22,20 +22,21 @@ pub enum Sha1Task {
 
 use std::thread;
 
-use packed_simd::u128x1;
-
 #[allow(clippy::cast_ptr_alignment)]
 #[inline(never)]
 pub fn compare_20_bytes(sum1: &[u8], sum2: &[u8]) -> bool {
     if sum1.len() == 20 && sum2.len() == 20 {
         unsafe {
-            let first1 = u128x1::from_slice_unaligned(&*(sum1 as *const [u8] as *const [u128]));
-            let first2 = u128x1::from_slice_unaligned(&*(sum2 as *const [u8] as *const [u128]));
+            let first1: *const u64 = sum1.as_ptr().offset(0) as *const u64;
+            let first2: *const u64 = sum2.as_ptr().offset(0) as *const u64;
 
-            let sum1: *const u32 = sum1.as_ptr().offset(16) as *const u32;
-            let sum2: *const u32 = sum2.as_ptr().offset(16) as *const u32;
+            let second1: *const u64 = sum1.as_ptr().offset(8) as *const u64;
+            let second2: *const u64 = sum2.as_ptr().offset(8) as *const u64;
 
-            first1 == first2 && *sum1 == *sum2
+            let third1: *const u32 = sum1.as_ptr().offset(16) as *const u32;
+            let third2: *const u32 = sum2.as_ptr().offset(16) as *const u32;
+
+            *first1 == *first2 && *second1 == *second2 && *third1 == *third2
         }
     }
     else {

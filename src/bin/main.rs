@@ -22,49 +22,49 @@ use async_std::net::{SocketAddr, IpAddr, Ipv4Addr};
 //fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
 fn main() {
 
-    use std::mem::ManuallyDrop;
-    use rustorrent::memory_pool::SharedArena;
+    // use std::mem::ManuallyDrop;
+    // use rustorrent::memory_pool::SharedArena;
 
-    #[derive(Copy, Clone)]
-    struct MyStruct {
-        a: Option<usize>,
-        b: &'static str,
-        c: usize,
-        // d: [usize; 64]
-    }
+    // #[derive(Copy, Clone)]
+    // struct MyStruct {
+    //     a: Option<usize>,
+    //     b: &'static str,
+    //     c: usize,
+    //     // d: [usize; 64]
+    // }
 
-    impl Default for MyStruct {
-        fn default() -> MyStruct {
-            MyStruct {
-                a: None,
-                b: "hello",
-                c: 90909,
-                // d: unsafe { std::mem::zeroed() }
-            }
-        }
-    }
+    // impl Default for MyStruct {
+    //     fn default() -> MyStruct {
+    //         MyStruct {
+    //             a: None,
+    //             b: "hello",
+    //             c: 90909,
+    //             // d: unsafe { std::mem::zeroed() }
+    //         }
+    //     }
+    // }
 
-    let mut vec = Vec::with_capacity(100000000);
-    let mut arena = SharedArena::<MyStruct>::with_capacity(100000000);
+    // let mut vec = Vec::with_capacity(100000000);
+    // let mut arena = SharedArena::<MyStruct>::with_capacity(100000000);
 
-    let now = std::time::Instant::now();
-    for _ in 0..100000000 {
-        vec.push(arena.alloc(MyStruct::default()));
-        // ManuallyDrop::new(arena.alloc(MyStruct::default()));
-        // println!("STAT: {:?}", arena.stats());
-    }
-    println!("TIME {:?}", now.elapsed());
+    // let now = std::time::Instant::now();
+    // for _ in 0..100000000 {
+    //     vec.push(arena.alloc(MyStruct::default()));
+    //     // ManuallyDrop::new(arena.alloc(MyStruct::default()));
+    //     // println!("STAT: {:?}", arena.stats());
+    // }
+    // println!("TIME {:?}", now.elapsed());
 
-    let mut vec = Vec::with_capacity(100000000);
+    // let mut vec = Vec::with_capacity(100000000);
 
-    let now = std::time::Instant::now();
-    for _ in 0..100000000 {
-        vec.push(Box::new(MyStruct::default()));
-        // println!("STAT: {:?}", arena.stats());
-    }
-    println!("TIME_BOX {:?}", now.elapsed());
+    // let now = std::time::Instant::now();
+    // for _ in 0..100000000 {
+    //     vec.push(Box::new(MyStruct::default()));
+    //     // println!("STAT: {:?}", arena.stats());
+    // }
+    // println!("TIME_BOX {:?}", now.elapsed());
 
-    return;
+    // return;
 
     // let mut vec = vec![1, 2, 3, 4, 5, 6];
 
