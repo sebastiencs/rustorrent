@@ -5,7 +5,7 @@ extern crate test;
 
 mod mempool;
 
-// use test::Bencher;
+use test::Bencher;
 
 // #[bench]
 // fn slice_compare_equal(b: &mut test::Bencher) {
@@ -18,18 +18,18 @@ mod mempool;
 //     b.bytes = vec1.len() as u64;
 // }
 
-// use rustorrent::actors::sha1::compare_20_bytes;
+use rustorrent::actors::sha1::compare_20_bytes;
 
-// #[bench]
-// fn simd_compare_equal(b: &mut Bencher) {
-//     let vec1 = vec![5; 20];
-//     let vec2 = vec1.clone();
+#[bench]
+fn simd_compare_equal(b: &mut Bencher) {
+    let vec1 = vec![5; 20];
+    let vec2 = vec1.clone();
 
-//     b.iter(|| {
-//         assert!(compare_20_bytes(&vec1, &vec2))
-//     });
-//     b.bytes = vec1.len() as u64;
-// }
+    b.iter(|| {
+        assert!(compare_20_bytes(&vec1, &vec2))
+    });
+    b.bytes = vec1.len() as u64;
+}
 
 // #[bench]
 // fn sha1_string_extern_crate(b: &mut Bencher) {

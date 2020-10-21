@@ -1,9 +1,10 @@
 
-use crossbeam_channel::{unbounded, Receiver, Sender};
-use async_std::sync as a_sync;
+use crossbeam_channel::{unbounded, Receiver as SyncReceiver, Sender as SyncSender};
+use async_std::sync::Sender;
 use async_std::task;
 
 
+use std::ptr::read_unaligned;
 use std::sync::Arc;
 
 use crate::pieces::PieceBuffer;
@@ -16,7 +17,7 @@ pub enum Sha1Task {
         /// Sum in the metadata file
         sum_metadata: Arc<Vec<u8>>,
         id: usize,
-        addr: a_sync::Sender<TorrentNotification>,
+        addr: Sender<TorrentNotification>,
     }
 }
 
@@ -27,16 +28,16 @@ use std::thread;
 pub fn compare_20_bytes(sum1: &[u8], sum2: &[u8]) -> bool {
     if sum1.len() == 20 && sum2.len() == 20 {
         unsafe {
-            let first1: *const u64 = sum1.as_ptr().offset(0) as *const u64;
-            let first2: *const u64 = sum2.as_ptr().offset(0) as *const u64;
+            let first1 = read_unaligned(sum1.as_ptr().offset(0) as *const u64);
+            let first2 = read_unaligned(sum2.as_ptr().offset(0) as *const u64);
 
-            let second1: *const u64 = sum1.as_ptr().offset(8) as *const u64;
-            let second2: *const u64 = sum2.as_ptr().offset(8) as *const u64;
+            let second1 = read_unaligned(sum1.as_ptr().offset(8) as *const u64);
+            let second2 = read_unaligned(sum2.as_ptr().offset(8) as *const u64);
 
-            let third1: *const u32 = sum1.as_ptr().offset(16) as *const u32;
-            let third2: *const u32 = sum2.as_ptr().offset(16) as *const u32;
+            let third1 = read_unaligned(sum1.as_ptr().offset(16) as *const u32);
+            let third2 = read_unaligned(sum2.as_ptr().offset(16) as *const u32);
 
-            *first1 == *first2 && *second1 == *second2 && *third1 == *third2
+            first1 == first2 && second1 == second2 && third1 == third2
         }
     }
     else {
@@ -52,7 +53,7 @@ struct Sha1Worker {
 }
 
 impl Sha1Worker {
-    fn start(mut self, recv: Receiver<Sha1Task>, task: impl Into<Option<Sha1Task>>) {
+    fn start(mut self, recv: SyncReceiver<Sha1Task>, task: impl Into<Option<Sha1Task>>) {
         if let Some(task) = task.into() {
             self.process(task);
         };
@@ -77,7 +78,7 @@ impl Sha1Worker {
         }
     }
 
-    fn send_result(&mut self, id: usize, valid: bool, addr: a_sync::Sender<TorrentNotification>) {
+    fn send_result(&mut self, id: usize, valid: bool, addr: Sender<TorrentNotification>) {
         use TorrentNotification::ResultChecksum;
 
         // if valid {
@@ -98,7 +99,7 @@ impl Sha1Worker {
 pub struct Sha1Workers;
 
 impl Sha1Workers {
-    pub fn new_pool() -> Sender<Sha1Task> {
+    pub fn new_pool() -> SyncSender<Sha1Task> {
         let (sender, receiver) = unbounded();
 
         thread::spawn(move || Self::start(receiver));
@@ -106,7 +107,7 @@ impl Sha1Workers {
         sender
     }
 
-    fn start(recv: Receiver<Sha1Task>) {
+    fn start(recv: SyncReceiver<Sha1Task>) {
         if let Ok(first_task) = recv.recv() {
             let handles = Self::init_pool(first_task, recv);
 
@@ -116,7 +117,7 @@ impl Sha1Workers {
         }
     }
 
-    fn init_pool(task: Sha1Task, receiver: Receiver<Sha1Task>) -> Vec<thread::JoinHandle<()>> {
+    fn init_pool(task: Sha1Task, receiver: SyncReceiver<Sha1Task>) -> Vec<thread::JoinHandle<()>> {
         let num_cpus = num_cpus::get().max(1);
         let mut handles = Vec::with_capacity(num_cpus);
 

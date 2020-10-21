@@ -3,7 +3,7 @@ use futures::future::{Fuse, FutureExt};
 use async_std::net::TcpStream;
 use async_std::io::BufReader;
 use async_std::prelude::*;
-use async_std::sync as a_sync;
+use async_std::sync::{channel, Sender};
 use coarsetime::Instant;
 
 use std::pin::Pin;
@@ -230,7 +230,7 @@ impl Eq for PeerExternId {}
 pub struct Peer {
     id: PeerId,
     addr: SocketAddr,
-    supervisor: a_sync::Sender<TorrentNotification>,
+    supervisor: Sender<TorrentNotification>,
     reader: BufReader<TcpStream>,
     buffer: Vec<u8>,
     /// Are we choked from the peer
@@ -258,7 +258,7 @@ impl Peer {
     pub async fn new(
         addr: SocketAddr,
         pieces_detail: Pieces,
-        supervisor: a_sync::Sender<TorrentNotification>,
+        supervisor: Sender<TorrentNotification>,
         extern_id: Arc<PeerExternId>
     ) -> Result<Peer> {
         let stream = TcpStream::connect(&addr).await?;
@@ -406,7 +406,7 @@ impl Peer {
 
     pub async fn start(&mut self) -> Result<()> {
 
-        let (addr, cmds) = a_sync::channel(1000);
+        let (addr, cmds) = channel(1000);
 
         let extern_id = self.do_handshake().await?;
 
