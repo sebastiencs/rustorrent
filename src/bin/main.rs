@@ -20,6 +20,7 @@ use async_std::net::{SocketAddr, IpAddr, Ipv4Addr};
 //use rustorrent::memory_pool::pool::CircularIterator;
 
 //fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+#[allow(unreachable_code)]
 fn main() {
 
     // use std::mem::ManuallyDrop;

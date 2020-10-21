@@ -1,5 +1,4 @@
 
-use serde;
 use serde::de::Visitor;
 use serde::de::{DeserializeSeed, MapAccess, SeqAccess};
 use serde::forward_to_deserialize_any;
@@ -297,7 +296,7 @@ impl<'a, 'de> SeqAccess<'de> for BencAccess<'a, 'de> {
 #[cfg(test)]
 mod tests {
 
-    use super::{Deserializer, DeserializeError, from_bytes, Result};
+    use super::{DeserializeError, from_bytes, Result};
     use serde::Deserialize;
 
     #[test]

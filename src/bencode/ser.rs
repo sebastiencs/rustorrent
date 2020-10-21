@@ -1,4 +1,3 @@
-use serde;
 use serde::{ser, Serialize};
 
 //use error::{Error, Result};

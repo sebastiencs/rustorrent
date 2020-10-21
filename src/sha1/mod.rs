@@ -1,4 +1,5 @@
 
+#[cfg(target_arch = "x86_64")]
 mod x86_sha;
 
 pub fn sha1(data: &[u8]) -> [u8; 20] {
@@ -25,7 +26,6 @@ mod tests {
 
     #[test]
     fn extern_vs_us_16k() {
-        use rand::Rng;
         use rand::RngCore;
 
         let mut rng = rand::thread_rng();
