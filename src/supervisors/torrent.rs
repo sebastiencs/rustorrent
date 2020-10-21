@@ -1,8 +1,8 @@
 
 use std::sync::Arc;
 use async_std::task;
-use async_std::sync as a_sync;
-use crossbeam_channel::Sender;
+use async_std::sync::{channel, Receiver, Sender};
+use crossbeam_channel::Sender as SyncSender;
 use slab::Slab;
 
 use std::net::SocketAddr;
@@ -20,7 +20,7 @@ struct PeerState {
     socket: SocketAddr,
     bitfield: BitField,
     queue_tasks: PeerTask,
-    addr: a_sync::Sender<PeerCommand>,
+    addr: Sender<PeerCommand>,
     extern_id: PeerExternId
 }
 
@@ -31,7 +31,7 @@ pub enum TorrentNotification {
     AddPeer {
         id: PeerId,
         queue: PeerTask,
-        addr: a_sync::Sender<PeerCommand>,
+        addr: Sender<PeerCommand>,
         socket: SocketAddr,
         extern_id: PeerExternId
     },
@@ -102,10 +102,10 @@ impl std::fmt::Debug for TorrentNotification {
 
 pub struct TorrentSupervisor {
     metadata: Arc<Torrent>,
-    receiver: a_sync::Receiver<TorrentNotification>,
+    receiver: Receiver<TorrentNotification>,
     // We keep a Sender to not close the channel
     // in case there is no peer
-    my_addr: a_sync::Sender<TorrentNotification>,
+    my_addr: Sender<TorrentNotification>,
 
     pieces_detail: Pieces,
 
@@ -113,7 +113,7 @@ pub struct TorrentSupervisor {
 
     pieces: Vec<Option<PieceInfo>>,
 
-    sha1_workers: Sender<Sha1Task>,
+    sha1_workers: SyncSender<Sha1Task>,
 
     pending_pieces: Slab<Arc<PieceBuffer>>,
 
@@ -123,8 +123,8 @@ pub struct TorrentSupervisor {
 pub type Result<T> = std::result::Result<T, TorrentError>;
 
 impl TorrentSupervisor {
-    pub fn new(torrent: Torrent, sha1_workers: Sender<Sha1Task>) -> TorrentSupervisor {
-        let (my_addr, receiver) = a_sync::channel(100);
+    pub fn new(torrent: Torrent, sha1_workers: SyncSender<Sha1Task>) -> TorrentSupervisor {
+        let (my_addr, receiver) = channel(100);
         let pieces_detail = Pieces::from(&torrent);
 
         let num_pieces = pieces_detail.num_pieces;
