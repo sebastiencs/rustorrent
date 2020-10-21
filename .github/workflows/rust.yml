@@ -1,0 +1,292 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    name: Build & Tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        rust:
+          - stable
+          - beta
+          - nightly
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Install toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: ${{ matrix.rust }}
+          override: true
+
+      - name: Remove criterion
+        if: ${{ runner.os != 'Windows' }} # sed doesn't work on windows
+        run: sed -i.bak '/criterion/d' ./Cargo.toml
+
+      - name: Build
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+
+      - name: Execute tests
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+
+  # sanitizers:
+  #   name: Sanitizer
+  #   runs-on: ubuntu-latest
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       mode:
+  #         - debug
+  #         - release
+  #       op:
+  #         - address
+  #         - leak
+  #         - memory
+  #   steps:
+  #     - uses: actions/checkout@v2
+  #     - name: Install Clang
+  #       run: |
+  #           sudo apt-get update
+  #           sudo apt-get install -y clang-10 llvm-10-dev
+  #           sudo ln -fs /usr/bin/clang-10 /usr/bin/clang
+  #           sudo ln -fs /usr/bin/clang++-10 /usr/bin/clang++
+  #           sudo ln -fs /usr/bin/llvm-symbolizer-10 /usr/bin/llvm-symbolizer
+  #     - name: Install toolchain
+  #       uses: actions-rs/toolchain@v1
+  #       with:
+  #         profile: minimal
+  #         toolchain: nightly
+  #         override: true
+  #         components: rust-src
+  #     - name: Remove criterion
+  #       run: sed -i.bak '/criterion/d' ./Cargo.toml
+  #     - name: Run ${{ matrix.op }} Sanitizer
+  #       run: ./scripts/sanitizer.sh ${{ matrix.op }} ${{ matrix.mode }}
+
+  # valgrind:
+  #   name: Valgrind
+  #   runs-on: ubuntu-latest
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       mode:
+  #         - debug
+  #         - release
+  #   steps:
+  #     - uses: actions/checkout@v2
+  #     - name: Install toolchain
+  #       uses: actions-rs/toolchain@v1
+  #       with:
+  #         profile: minimal
+  #         toolchain: nightly
+  #         override: true
+  #         components: rust-src
+  #     - name: Install Valgrind
+  #       run: sudo apt install -y valgrind
+  #     - name: Remove criterion
+  #       run: sed -i.bak '/criterion/d' ./Cargo.toml
+  #     - name: Run Valgrind
+  #       run: ./scripts/sanitizer.sh valgrind ${{ matrix.mode }}
+
+  lint:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: nightly
+          override: true
+          components: clippy
+          # components: rustfmt, clippy
+
+      # - uses: actions-rs/cargo@v1
+      #   with:
+      #     command: fmt
+      #     args: --all -- --check
+
+      - uses: actions-rs/cargo@v1
+        # if: always()
+        with:
+          command: clippy
+          args: --all-features -- -D warnings
+
+  grcov:
+    name: Coverage
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - i686-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Install 32 bits libs
+        run: sudo apt install -y gcc-multilib
+        if: ${{ matrix.target == 'i686-unknown-linux-gnu' }}
+
+      - name: Install toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          override: true
+          profile: minimal
+          target: ${{ matrix.target }}
+
+      - name: Install grcov
+        uses: actions-rs/install@v0.1
+        with:
+          crate: grcov
+
+      - name: Remove criterion
+        run: sed -i.bak '/criterion/d' ./Cargo.toml
+
+      - name: Execute tests
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --all-features --no-fail-fast --target ${{ matrix.target }}
+        env:
+          CARGO_INCREMENTAL: "0"
+          RUSTFLAGS: "-Zprofile -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Zpanic_abort_tests -Cpanic=abort"
+          RUSTDOCFLAGS: "-Cpanic=abort"
+
+      - id: coverage
+        name: Generate Coverage & Upload
+        run: |
+          grcov ./target/${{ matrix.target }}/debug/ -s . -t lcov --llvm --ignore-not-existing -o ./coverage.info --ignore "*rust/src*" --ignore "*registry*" --excl-line "grcov_ignore|assert"
+
+          # grcov ./target/debug/ -s src/ -t lcov --llvm --ignore-not-existing -o ./coverage.info --ignore "*registry*" --token ${{ secrets.CODECOV_TOKEN }} --excl-line "grcov_ignore|assert"
+
+      - uses: codecov/codecov-action@v1
+        name: Upload to codecov.io
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }} # not required for public repos
+          file: ./coverage.info
+          fail_ci_if_error: true
+
+  # benchmark:
+  #   name: Benchmark
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v2
+
+  #     - name: Install toolchain
+  #       uses: actions-rs/toolchain@v1
+  #       with:
+  #         toolchain: nightly
+  #         override: true
+  #         profile: minimal
+
+  #     - name: Run benchmark
+  #       run: cargo bench -- --noplot --output-format bencher | grep --line-buffered test | tee output.txt
+
+  #     - name: Store benchmark result
+  #       uses: rhysd/github-action-benchmark@v1
+  #       with:
+  #         name: Rust Benchmark
+  #         tool: 'cargo'
+  #         output-file-path: output.txt
+  #         github-token: ${{ secrets.PERSONAL_GITHUB_TOKEN }}
+  #         auto-push: true
+  #         # Show alert with commit comment on detecting possible performance regression
+  #         alert-threshold: '10%'
+  #         comment-on-alert: true
+  #         fail-on-alert: true
+
+  miri:
+    name: Miri
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          # 32 bits pointers
+          - i686-unknown-linux-gnu
+          # For big endian
+          - mips64-unknown-linux-gnuabi64
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Install toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: nightly
+          override: true
+          components: miri, rust-src
+
+      - name: Remove criterion
+        run: sed -i.bak '/criterion/d' ./Cargo.toml
+
+      # - uses: actions-rs/cargo@v1
+      #   name: Execute Miri
+      #   with:
+      #     command: miri
+      #     args: test --all-features --target ${{ matrix.target }}
+      #   env:
+      #     # Disable isolation to get randomness
+      #     MIRIFLAGS: "-Zmiri-disable-isolation"
+
+      - name: Execute Miri
+        run: |
+          cargo miri test --all-features --target ${{ matrix.target }}
+        env:
+          # Disable isolation to get randomness
+          MIRIFLAGS: "-Zmiri-disable-isolation"
+
+  # build:
+  #   name: Build Cross Platforms
+  #   runs-on: ubuntu-latest
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       target:
+  #         - arm-linux-androideabi
+  #         - armv7-linux-androideabi
+  #         - arm-unknown-linux-gnueabihf
+  #         - armv7-unknown-linux-gnueabihf
+  #         - powerpc64-unknown-linux-gnu
+  #         - aarch64-linux-android
+  #         - x86_64-pc-windows-gnu
+  #         - x86_64-pc-windows-msvc
+  #         - i686-pc-windows-gnu
+  #         - i686-pc-windows-msvc
+  #         - i686-unknown-linux-gnu
+
+  #   steps:
+  #     - uses: actions/checkout@v2
+  #     - uses: actions-rs/toolchain@v1
+  #       name: Install toolchain
+  #       with:
+  #         toolchain: stable
+  #         target: ${{ matrix.target }}
+  #         override: true
+
+  #     - name: Remove criterion
+  #       run: sed -i.bak '/criterion/d' ./Cargo.toml
+
+  #     - uses: actions-rs/cargo@v1
+  #       name: Build
+  #       with:
+  #         use-cross: true
+  #         command: build
+  #         args: --release --target=${{ matrix.target }}
