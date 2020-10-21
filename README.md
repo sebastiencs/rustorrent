@@ -31,7 +31,6 @@ Rustorrent is intented to be a full featured BitTorrent implementation.
 It is in active development and is not usable yet.
 
 The library uses asynchronous Rust code with [async-std](https://github.com/async-rs/async-std)
-and builds on the nightly toolchain to make use of SIMD instructions.
 
 ## Implemented [BEPs](https://www.bittorrent.org/beps/bep_0000.html)
 - [The BitTorrent Protocol Specification](https://www.bittorrent.org/beps/bep_0003.html)

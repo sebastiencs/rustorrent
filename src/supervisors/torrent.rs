@@ -182,7 +182,7 @@ impl TorrentSupervisor {
     async fn process_cmds(&mut self) {
         use TorrentNotification::*;
 
-        while let Some(msg) = self.receiver.recv().await {
+        while let Ok(msg) = self.receiver.recv().await {
             match msg {
                 UpdateBitfield { id, update } => {
                     if self.find_pieces_for_peer(id, &update).await {

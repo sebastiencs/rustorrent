@@ -384,7 +384,8 @@ pub enum UtpError {
     FamillyMismatch,
     PacketLost,
     MustClose,
-    IO(std::io::Error)
+    IO(std::io::Error),
+    RecvError(async_std::sync::RecvError),
 }
 
 impl UtpError {
@@ -755,7 +756,7 @@ impl DerefMut for Packet {
 }
 
 impl Packet {
-    pub fn new_in_place(place: &mut MaybeUninit<Packet>, data: &[u8]) {
+    pub fn new_in_place<'a>(place: &'a mut MaybeUninit<Packet>, data: &[u8]) -> &'a Packet {
         let place = unsafe { &mut *place.as_mut_ptr() };
 
         place.header = Header::default();
@@ -766,11 +767,13 @@ impl Packet {
         place.resent = false;
         place.last_sent = Timestamp::zero();
         place.lost = false;
-        place.received_at = None
+        place.received_at = None;
+
+        place
     }
 
 //    pub fn from_incoming_in_place(place: &mut Packet, data: &[u8], timestamp: Timestamp) {
-    pub fn from_incoming_in_place(place: &mut MaybeUninit<Packet>, data: &[u8], timestamp: Timestamp) {
+    pub fn from_incoming_in_place<'a>(place: &'a mut MaybeUninit<Packet>, data: &[u8], timestamp: Timestamp) -> &'a Packet {
         //let slice = unsafe { &mut *(place as *mut Packet as *mut [u8; PACKET_MAX_SIZE]) };
         let slice = unsafe { &mut *(place.as_mut_ptr() as *mut [u8; PACKET_MAX_SIZE]) };
         let data_len = data.len();
@@ -789,6 +792,8 @@ impl Packet {
         place.last_sent = Timestamp::zero();
         place.lost = false;
         place.received_at = Some(timestamp);
+
+        place
     }
 
     pub fn new(data: &[u8]) -> Packet {

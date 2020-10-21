@@ -255,7 +255,7 @@ impl UtpListener {
 
         task::spawn(async move { manager.start().await });
 
-        if let Some(true) = is_connected.recv().await {
+        if let Ok(true) = is_connected.recv().await {
             Ok(stream)
         } else {
             Err(Error::new(ErrorKind::TimedOut, "utp connect timed out").into())
@@ -505,7 +505,7 @@ impl UtpManager {
 
     async fn start(mut self) -> Result<()> {
         self.ensure_connected().await;
-        while let Some(incoming) = self.recv.recv().await {
+        while let Ok(incoming) = self.recv.recv().await {
             self.process_incoming(incoming).await.unwrap();
         }
         Ok(())
@@ -897,7 +897,7 @@ impl UtpWriter {
         UtpWriter { socket, addr, user_command, command, state, packet_arena }
     }
 
-    async fn poll(&self) -> Option<WriterCommand> {
+    async fn poll(&self) -> Result<WriterCommand> {
         let user_cmd = self.user_command.recv();
         let cmd = self.command.recv();
         pin_mut!(user_cmd); // Pin on the stack
@@ -917,11 +917,11 @@ impl UtpWriter {
             }
         };
 
-        future::poll_fn(fun).await
+        future::poll_fn(fun).await.map_err(|e| UtpError::RecvError(e))
     }
 
     pub async fn start(mut self) {
-        while let Some(cmd) = self.poll().await {
+        while let Ok(cmd) = self.poll().await {
             self.handle_cmd(cmd).await.unwrap();
         }
     }
@@ -1017,6 +1017,10 @@ impl UtpWriter {
                 Packet::new_in_place(packet_uninit, packet)
             });
 
+            // let data = arena.alloc_with(|uninit| {
+            //     Packet::new_with(uninit, source)
+            // })
+
             self.ensure_window_is_large_enough(packet.size()).await?;
             self.send_packet(packet).await?;
         }
@@ -1043,7 +1047,7 @@ impl UtpWriter {
 
             // Too many packets in flight, we wait for acked or lost packets
             match self.command.recv().await {
-                Some(cmd) => self.handle_manager_cmd(cmd).await?,
+                Ok(cmd) => self.handle_manager_cmd(cmd).await?,
                 _ => return Err(UtpError::MustClose)
             }
         }

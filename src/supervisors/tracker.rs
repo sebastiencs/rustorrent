@@ -114,12 +114,12 @@ impl TrackerSupervisor {
                 // we spawn another actor
                 let duration = Duration::from_secs(15);
                 match future::timeout(duration, self.recv.recv()).await {
-                    Ok(Some((url, instant, TrackerStatus::FoundPeers(n)))) => {
+                    Ok(Ok((url, instant, TrackerStatus::FoundPeers(n)))) => {
                         pending_status.push((url, instant, TrackerStatus::FoundPeers(n)));
                         // 1 is connected, stop the loop
                         break 'outer;
                     },
-                    Ok(Some((url, instant, msg))) => {
+                    Ok(Ok((url, instant, msg))) => {
                         pending_status.push((url, instant, msg));
                     }
                     _ => {} // We loop on urls until connected to one
@@ -151,7 +151,7 @@ impl TrackerSupervisor {
     }
 
     async fn wait_on_tracker_msg(&mut self) {
-        while let Some((url, instant, msg)) = self.recv.recv().await {
+        while let Ok((url, instant, msg)) = self.recv.recv().await {
             self.update_state(url, instant, msg);
 
             if !self.is_one_active() {

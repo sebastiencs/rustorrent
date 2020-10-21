@@ -376,7 +376,7 @@ impl Peer {
 
     async fn wait_event(
         &mut self,
-        mut cmds: Pin<&mut Fuse<impl Future<Output = Option<PeerCommand>>>>
+        mut cmds: Pin<&mut Fuse<impl Future<Output = std::result::Result<PeerCommand, async_std::sync::RecvError>>>>
     ) -> PeerWaitEvent {
         // use futures::async_await::*;
         use futures::task::{Context, Poll};
@@ -395,7 +395,7 @@ impl Peer {
                 _ => {}
             }
 
-            match FutureExt::poll_unpin(&mut cmds, cx).map(PeerWaitEvent::Supervisor) {
+            match FutureExt::poll_unpin(&mut cmds, cx).map(|v| v.ok()).map(PeerWaitEvent::Supervisor) {
                 v @ Poll::Ready(_) => v,
                 _ => Poll::Pending
             }
