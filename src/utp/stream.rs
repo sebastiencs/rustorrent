@@ -917,7 +917,7 @@ impl UtpWriter {
             }
         };
 
-        future::poll_fn(fun).await.map_err(|e| UtpError::RecvError(e))
+        future::poll_fn(fun).await.map_err(UtpError::RecvError)
     }
 
     pub async fn start(mut self) {

@@ -92,10 +92,7 @@ impl TrackerSupervisor {
     }
 
     pub fn is_scheme_supported(url: &Url) -> bool {
-        match url.scheme() {
-            "http" | "udp" => true,
-            _ => false
-        }
+        matches!(url.scheme(), "http" | "udp")
     }
 
     pub async fn start(mut self) {
