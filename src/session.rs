@@ -2,7 +2,7 @@ use crate::metadata::Torrent;
 //use crate::http_client::{self, AnnounceQuery, AnnounceResponse};
 
 //use crate::http_client::HttpError;
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{unbounded, Receiver as SyncReceiver, Sender as SyncSender};
 
 // enum MessageActor {
 //     AddPeer(PeerAddr),
@@ -15,9 +15,9 @@ use crate::supervisors::torrent::TorrentSupervisor;
 use crate::actors::sha1::{Sha1Workers, Sha1Task};
 
 struct SessionInner {
-    cmds: Receiver<SessionCommand>,
+    cmds: SyncReceiver<SessionCommand>,
     actors: Vec<TorrentSupervisor>,
-    sha1_workers: Sender<Sha1Task>
+    sha1_workers: SyncSender<Sha1Task>
 }
 
 use async_std::task;
@@ -55,7 +55,7 @@ enum SessionCommand {
 
 pub struct Session {
     handle: std::thread::JoinHandle<()>,
-    actor: Sender<SessionCommand>,
+    actor: SyncSender<SessionCommand>,
 }
 
 impl Session {

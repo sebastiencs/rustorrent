@@ -172,11 +172,11 @@ impl PeerDetail {
 
 /// Peer extern ID
 /// Correspond to peer_id in the protocol and is 20 bytes long
-pub struct PeerExternId(Box<[u8; 20]>);
+pub struct PeerExternId([u8; 20]);
 
 impl PeerExternId {
     fn new(bytes: &[u8]) -> PeerExternId {
-        PeerExternId(Box::new(bytes.try_into().expect("PeerExternId must be 20 bytes")))
+        PeerExternId(bytes.try_into().expect("PeerExternId must be 20 bytes"))
     }
 
     pub fn generate() -> PeerExternId {
@@ -194,8 +194,7 @@ impl PeerExternId {
 
         let s = format!("-RR{:04}-{}", VERSION, random);
 
-        let id = s.into_boxed_str()
-                  .into_boxed_bytes()
+        let id = s.as_bytes()
                   .try_into()
                   .expect("PeerExternId are 20 bytes long");
 
@@ -209,19 +208,19 @@ impl Deref for PeerExternId {
     type Target = [u8; 20];
 
     fn deref(&self) -> &Self::Target {
-        &*self.0
+        &self.0
     }
 }
 
 impl std::fmt::Debug for PeerExternId {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{:?}", String::from_utf8_lossy(&*self.0))
+        write!(f, "{:?}", String::from_utf8_lossy(&self.0))
     }
 }
 
 impl PartialEq for PeerExternId {
     fn eq(&self, other: &PeerExternId) -> bool {
-        super::sha1::compare_20_bytes(&*self.0, &*other.0)
+        super::sha1::compare_20_bytes(&self.0, &other.0)
     }
 }
 
@@ -680,7 +679,7 @@ impl Peer {
         Ok(())
     }
 
-    async fn do_handshake(&mut self) -> Result<PeerExternId> {
+    async fn do_handshake(&mut self) -> Result<Arc<PeerExternId>> {
         let mut handshake: [u8; 68] = [0; 68];
 
         let mut cursor = Cursor::new(&mut handshake[..]);
@@ -705,6 +704,8 @@ impl Peer {
 
         println!("[{}] HANDSHAKE DONE", self.id);
 
-        Ok(PeerExternId::new(&self.buffer[len + 28..len + 48]))
+        let peer_id = PeerExternId::new(&self.buffer[len + 28..len + 48]);
+
+        Ok(Arc::new(peer_id))
     }
 }

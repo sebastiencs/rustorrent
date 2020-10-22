@@ -21,7 +21,7 @@ struct PeerState {
     bitfield: BitField,
     queue_tasks: PeerTask,
     addr: Sender<PeerCommand>,
-    extern_id: PeerExternId
+    extern_id: Arc<PeerExternId>
 }
 
 /// Message sent to TorrentSupervisor
@@ -33,7 +33,7 @@ pub enum TorrentNotification {
         queue: PeerTask,
         addr: Sender<PeerCommand>,
         socket: SocketAddr,
-        extern_id: PeerExternId
+        extern_id: Arc<PeerExternId>
     },
     /// Message sent when a peer is destroyed (deconnected, ..)
     /// The peer is then removed to the list of peers
@@ -303,6 +303,6 @@ impl TorrentSupervisor {
     fn is_duplicate_peer(&self, id: &PeerExternId) -> bool {
         self.peers
             .values()
-            .any(|p| &p.extern_id == id)
+            .any(|p| &*p.extern_id == id)
     }
 }
