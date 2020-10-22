@@ -180,7 +180,7 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }} # not required for public repos
           file: ./coverage.info
-          fail_ci_if_error: true
+          # fail_ci_if_error: true
 
   # benchmark:
   #   name: Benchmark
