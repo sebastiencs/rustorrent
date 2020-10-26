@@ -5,6 +5,7 @@ use serde::forward_to_deserialize_any;
 
 use serde::Deserialize;
 
+use std::cell::Cell;
 use std::fmt;
 use std::sync::Arc;
 
@@ -14,6 +15,10 @@ pub enum DeserializeError {
     WrongCharacter(u8),
     End,
     InfoHashMissing,
+    TooDeep,
+    NoFile,
+    EmptyFile,
+    UnalignedPieces,
     Message(String)
 }
 
@@ -68,9 +73,27 @@ where
 }
 
 use crate::metadata::Torrent;
+use crate::metadata::{InfoFile, MetaTorrent};
 
 pub fn read_meta(s: &[u8]) -> Result<Torrent> {
-    let (meta, info_hash) = from_bytes_with_hash(s)?;
+    let (meta, info_hash): (MetaTorrent, Vec<u8>) = from_bytes_with_hash(s)?;
+
+    if meta.info.pieces.len() % 20 != 0 {
+        return Err(DeserializeError::UnalignedPieces);
+    }
+
+    match &meta.info.files {
+        InfoFile::Multiple { files, .. } => {
+            if files.is_empty() {
+                return Err(DeserializeError::NoFile)
+            }
+        },
+        InfoFile::Single { length, .. } => {
+            if *length == 0 {
+                return Err(DeserializeError::EmptyFile)
+            }
+        }
+    }
 
     Ok(Torrent {
         meta,
@@ -86,7 +109,9 @@ pub struct Deserializer<'de> {
     input: &'de [u8],
     start_info: *const u8,
     end_info: *const u8,
-    info_depth: i64
+    info_depth: i64,
+    // Fix v2_deep_recursion.torrent
+    depth: Cell<u16>,
 }
 
 #[doc(hidbn)]
@@ -96,7 +121,8 @@ impl<'de> Deserializer<'de> {
             input,
             start_info: std::ptr::null(),
             end_info: std::ptr::null(),
-            info_depth: 0
+            info_depth: 0,
+            depth: Cell::new(0),
         }
     }
 
@@ -184,19 +210,24 @@ impl<'a, 'de> serde::de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        //println!("NEXT: {:?}", self.peek());
+        // println!("NEXT: {:?}", self.peek());
         match self.peek().ok_or(DeserializeError::UnexpectedEOF)? {
             b'i' => {
-                //println!("FOUND NUMBER", );
+                // println!("FOUND NUMBER", );
                 visitor.visit_i64(self.read_number()?)
             }
             b'l' => {
                 self.consume()?;
-                //println!("FOUND LIST {:?}", &self.input[..10]);
+                // println!("FOUND LIST {:?}", &self.input[..10]);
                 visitor.visit_seq(BencAccess::new(self))
             },
             b'd' => {
-                //println!("FOUND DICT", );
+                let depth = self.depth.get();
+                if depth > 100 {
+                    return Err(DeserializeError::TooDeep);
+                }
+                self.depth.set(depth + 1);
+                // println!("FOUND DICT {}", self.depth.get());
                 self.consume()?;
                 visitor.visit_map(BencAccess::new(self))
             },
@@ -329,12 +360,13 @@ mod tests {
 
         let res: Result<Dict> = from_bytes(b"d1:ai1e1:be");
 
+        println!("{:?}", res);
         assert_eq!(res, Err(DeserializeError::WrongCharacter(101)));
     }
 
     #[test]
     fn test_key_not_string() {
-        #[derive(Deserialize, PartialEq, Debug)]
+        #[derive(Deserialize, Debug)]
         struct Dict<'b> {
             a: i64,
             b: &'b str,
@@ -342,6 +374,7 @@ mod tests {
 
         let res: Result<Dict> = from_bytes(b"di5e1:ae");
 
+        println!("{:?}", res);
         assert!(res.is_err());
     }
 

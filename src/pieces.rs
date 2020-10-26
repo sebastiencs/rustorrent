@@ -12,7 +12,7 @@ pub struct Pieces {
     /// Number of pieces
     pub num_pieces: usize,
     /// SHA1 of each piece
-    pub sha1_pieces: Arc<Vec<Arc<Vec<u8>>>>,
+    pub sha1_pieces: Arc<Vec<Arc<[u8; 20]>>>,
     /// Pieces other peers have
     /// peers_pieces[0] is the number of peers having the piece 0
 //    peers_pieces: Vec<u8>,

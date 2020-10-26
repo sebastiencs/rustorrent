@@ -15,7 +15,7 @@ pub enum Sha1Task {
         /// Piece downloaded from a peer
         piece_buffer: Arc<PieceBuffer>,
         /// Sum in the metadata file
-        sum_metadata: Arc<Vec<u8>>,
+        sum_metadata: Arc<[u8; 20]>,
         id: usize,
         addr: Sender<TorrentNotification>,
     }
@@ -70,7 +70,7 @@ impl Sha1Worker {
 
                 let valid = compare_20_bytes(
                     &sha1[..],
-                    sum_metadata.as_slice()
+                    &sum_metadata[..]
                 );
 
                 self.send_result(id, valid, addr);

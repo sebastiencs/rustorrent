@@ -60,7 +60,7 @@ pub struct TrackerSupervisor {
     /// [`TorrentSupervisor`]
     supervisor: Sender<TorrentNotification>,
     /// List of urls, by tier
-    urls: Vec<Vec<Arc<TrackerUrl>>>,
+    urls: Vec<Arc<TrackerUrl>>,
     recv: Receiver<(UrlHash, Instant, TrackerStatus)>,
     /// Keep a sender to not close the channel
     _sender: Sender<(UrlHash, Instant, TrackerStatus)>,
@@ -103,24 +103,22 @@ impl TrackerSupervisor {
     async fn loop_until_connected(&mut self) {
         let mut pending_status = Vec::with_capacity(10);
 
-        'outer: for tier in self.urls.as_slice() {
-            for url in tier.as_slice() {
-                self.spawn_tracker(url).await;
+        for url in self.urls.as_slice() {
+            self.spawn_tracker(url).await;
 
-                // We wait 15 secs, if we aren't connected to this tracker
-                // we spawn another actor
-                let duration = Duration::from_secs(15);
-                match future::timeout(duration, self.recv.recv()).await {
-                    Ok(Ok((url, instant, TrackerStatus::FoundPeers(n)))) => {
-                        pending_status.push((url, instant, TrackerStatus::FoundPeers(n)));
-                        // 1 is connected, stop the loop
-                        break 'outer;
-                    },
-                    Ok(Ok((url, instant, msg))) => {
-                        pending_status.push((url, instant, msg));
-                    }
-                    _ => {} // We loop on urls until connected to one
+            // We wait 15 secs, if we aren't connected to this tracker
+            // we spawn another actor
+            let duration = Duration::from_secs(15);
+            match future::timeout(duration, self.recv.recv()).await {
+                Ok(Ok((url, instant, TrackerStatus::FoundPeers(n)))) => {
+                    pending_status.push((url, instant, TrackerStatus::FoundPeers(n)));
+                    // 1 is connected, stop the loop
+                    break;
+                },
+                Ok(Ok((url, instant, msg))) => {
+                    pending_status.push((url, instant, msg));
                 }
+                _ => {} // We loop on urls until connected to one
             }
         }
 
@@ -162,12 +160,10 @@ impl TrackerSupervisor {
             self.tracker_states.keys().copied().collect::<Vec<_>>()
         };
 
-        for tier in self.urls.as_slice() {
-            for url in tier.iter() {
-                if !spawned.contains(&url.hash()) {
-                    self.spawn_tracker(url).await;
-                    return;
-                }
+        for url in self.urls.as_slice() {
+            if !spawned.contains(&url.hash()) {
+                self.spawn_tracker(url).await;
+                return;
             }
         }
     }
