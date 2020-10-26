@@ -174,7 +174,7 @@ impl Torrent {
         }).unwrap_or_else(Vec::new);
 
         if let Some(url) = self.meta.announce.as_ref().and_then(|a| a.parse().map(|u| TrackerUrl::new(u, 10)).ok()) {
-            if !vec.iter().any(|u| &**u == &url) {
+            if !vec.iter().any(|u| **u == url) {
                 vec.push(Arc::new(url));
             }
         }
@@ -272,7 +272,9 @@ mod tests {
 
     #[test]
     fn read_torrent_file() {
-        let buffer = std::fs::read("file.torrent").unwrap();
+        let file = env!("CARGO_MANIFEST_DIR").to_owned()
+                + "/scripts/Fedora-Workstation-Live-x86_64-33_Beta.torrent";
+        let buffer = std::fs::read(file).unwrap();
 
         let torrent = de::read_meta(&buffer).unwrap();
 
@@ -284,7 +286,7 @@ mod tests {
 
         let iter = torrent.iter_urls();
 
-        assert_eq!(iter.size_hint(), (2, None));
+        assert_eq!(iter.size_hint(), (1, None));
 
         for url in iter {
             println!("url {:?}", url);
@@ -353,7 +355,9 @@ mod tests {
 	        { "v2_zero_root_small.torrent", Message("missing field `pieces`".into()) }
         ] {
             println!("Processing {:?}", torrent_error);
-            let filename = "scripts/test_torrents/".to_owned() + torrent_error.filename;
+            let filename = env!("CARGO_MANIFEST_DIR").to_owned()
+                + "/scripts/test_torrents/"
+                + torrent_error.filename;
             let content = std::fs::read(filename).unwrap();
             let result = de::read_meta(&content);
 
@@ -538,7 +542,9 @@ mod tests {
 		    // }
 	        // }
         ] {
-            let filename = "scripts/test_torrents/".to_owned() + torrent_success.filename;
+            let filename = env!("CARGO_MANIFEST_DIR").to_owned()
+                + "/scripts/test_torrents/"
+                + torrent_success.filename;
             let content = std::fs::read(filename).unwrap();
             let result = de::read_meta(&content);
 
@@ -555,8 +561,9 @@ mod tests {
 
     #[test]
     fn parse_torrent_file() {
+        let dir = env!("CARGO_MANIFEST_DIR").to_owned() + "/scripts/test_torrents/";
 
-        for item in std::fs::read_dir("scripts/test_torrents/").unwrap() {
+        for item in std::fs::read_dir(dir).unwrap() {
             let path = item.unwrap().path();
             let buffer = std::fs::read(path.as_path()).unwrap();
             let torrent = de::read_meta(&buffer);
