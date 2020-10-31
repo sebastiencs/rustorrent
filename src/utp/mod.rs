@@ -6,11 +6,12 @@ use std::mem::MaybeUninit;
 
 pub mod stream;
 pub mod tick;
-
-use stream::UtpEvent;
+pub mod writer;
+pub mod listener;
+pub mod manager;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
-pub enum State {
+pub enum UtpState {
     /// not yet connected
 	None,
 	/// sent a syn packet, not received any acks
@@ -43,27 +44,27 @@ pub enum State {
 	// Delete
 }
 
-impl From<u8> for State {
-    fn from(n: u8) -> State {
+impl From<u8> for UtpState {
+    fn from(n: u8) -> UtpState {
         match n {
-            0 => State::None,
-            1 => State::SynSent,
-            2 => State::Connected,
-            3 => State::FinSent,
-            4 => State::MustConnect,
+            0 => UtpState::None,
+            1 => UtpState::SynSent,
+            2 => UtpState::Connected,
+            3 => UtpState::FinSent,
+            4 => UtpState::MustConnect,
             _ => unreachable!()
         }
     }
 }
 
-impl From<State> for u8 {
-    fn from(s: State) -> u8 {
+impl From<UtpState> for u8 {
+    fn from(s: UtpState) -> u8 {
         match s {
-            State::None => 0,
-            State::SynSent => 1,
-            State::Connected => 2,
-            State::FinSent => 3,
-            State::MustConnect => 4,
+            UtpState::None => 0,
+            UtpState::SynSent => 1,
+            UtpState::Connected => 2,
+            UtpState::FinSent => 3,
+            UtpState::MustConnect => 4,
         }
     }
 }
