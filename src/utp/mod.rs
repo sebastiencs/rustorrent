@@ -877,6 +877,10 @@ impl Packet {
         &slice[..std::mem::size_of::<Header>() + self.payload.len]
     }
 
+    pub fn get_data(&self) -> &[u8] {
+        &self.payload.data[..self.payload.len()]
+    }
+
     // pub fn iter_extensions(&self) -> ExtensionIterator {
     //     ExtensionIterator::new(self)
     // }
@@ -926,9 +930,6 @@ impl Iterator for SelectiveAck<'_> {
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.first {
-            // for byte in self.bitfield {
-            //     println!("BITFIELD {:08b}", byte);
-            // }
             self.first = false;
             return Some(SelectiveAckBit::Missing(self.ack_number + 1));
         }
@@ -1037,3 +1038,24 @@ pub const UDP_IPV6_MTU: usize =
      - PPPOE_HEADER_SIZE - MPPE_HEADER_SIZE - FUDGE_HEADER_SIZE;
 
 pub const UDP_TEREDO_MTU: usize = TEREDO_MTU - IPV6_HEADER_SIZE - UDP_HEADER_SIZE;
+
+#[cfg(test)]
+mod tests {
+    use super::listener::UtpListener;
+    use async_std::net::SocketAddr;
+    use std::net::{IpAddr, Ipv4Addr};
+    use std::io::Read;
+
+    #[test]
+    fn send_data() {
+        let file = "/home/sebastien/Downloads/Fedora-Cinnamon-Live-x86_64-32-1.6.iso";
+        let buffer = std::fs::read(file).unwrap();
+
+        async_std::task::block_on(async {
+            let listener = UtpListener::new(10001).await.unwrap();
+            let stream = listener.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
+            stream.write(&buffer).await;
+            stream.wait_for_termination().await;
+        });
+    }
+}

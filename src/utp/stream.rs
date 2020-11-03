@@ -1,4 +1,5 @@
 
+use async_std::sync::Receiver;
 use async_std::sync::{Sender, RwLock};
 
 use crate::utils::Map;
@@ -151,10 +152,15 @@ impl Default for State {
     }
 }
 
+pub(super) enum ReceivedData {
+    Packet { },
+    Done
+}
+
 #[derive(Debug)]
 pub struct UtpStream {
     // reader_command: Sender<ReaderCommand>,
-    // reader_result: Receiver<ReaderResult>,
+    pub(super) receive: Receiver<ReceivedData>,
     pub(super) writer_user_command: Sender<WriterUserCommand>,
 }
 
@@ -170,5 +176,11 @@ impl UtpStream {
     pub async fn write(&self, data: &[u8]) {
         let data = Vec::from_slice(data);
         self.writer_user_command.send(WriterUserCommand { data }).await;
+    }
+
+    pub async fn wait_for_termination(&self) {
+        if let Ok(ReceivedData::Done) = self.receive.recv().await {
+            println!("Done received");
+        }
     }
 }

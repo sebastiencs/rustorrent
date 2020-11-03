@@ -6,6 +6,7 @@ use async_std::net::{SocketAddr, UdpSocket};
 use fixed::types::I48F16;
 
 use shared_arena::{ArenaBox, SharedArena};
+use super::stream::ReceivedData;
 use super::writer::{UtpWriter, WriterCommand, WriterUserCommand};
 use super::stream::{State, UtpStream};
 
@@ -31,8 +32,10 @@ pub(super) struct UtpManager {
     /// The await could block and lead to a deadlock state
     state: Arc<State>,
     addr: SocketAddr,
-    writer_user: Sender<WriterUserCommand>,
+    writer_user: Option<Sender<WriterUserCommand>>,
     writer: Sender<WriterCommand>,
+    on_receive: Sender<ReceivedData>,
+    on_receive_recv: Option<Receiver<ReceivedData>>,
 
     packet_arena: Arc<SharedArena<Packet>>,
 
@@ -94,6 +97,7 @@ impl UtpManager {
     ) -> UtpManager {
         let (writer, writer_rcv) = channel(10);
         let (writer_user, writer_user_rcv) = channel(10);
+        let (on_receive_sender, on_receive) = channel(1);
 
         let writer_actor = UtpWriter::new(
             socket.clone(), addr, writer_user_rcv,
@@ -109,7 +113,9 @@ impl UtpManager {
             recv,
             writer,
             state,
-            writer_user,
+            writer_user: Some(writer_user),
+            on_receive: on_receive_sender,
+            on_receive_recv: Some(on_receive),
             packet_arena,
             timeout: Instant::now() + Duration::from_secs(3),
             ntimeout: 0,
@@ -127,12 +133,11 @@ impl UtpManager {
         }
     }
 
-    pub fn get_stream(&self) -> UtpStream {
-        UtpStream {
-            // reader_command: self.reader.clone(),
-            // reader_result: self._reader_result_rcv.clone(),
-            writer_user_command: self.writer_user.clone()
-        }
+    pub fn get_stream(&mut self) -> Option<UtpStream> {
+        Some(UtpStream {
+            receive: self.on_receive_recv.take()?,
+            writer_user_command: self.writer_user.take()?,
+        })
     }
 
     pub(super) async fn start(mut self) -> Result<()> {
@@ -140,6 +145,7 @@ impl UtpManager {
         while let Ok(incoming) = self.recv.recv().await {
             self.process_incoming(incoming).await.unwrap();
         }
+        println!("manager finished");
         Ok(())
     }
 
@@ -160,6 +166,7 @@ impl UtpManager {
             UtpEvent::IncomingPacket { packet } => {
                 match self.dispatch(packet).await {
                     Err(UtpError::PacketLost) => {
+                        println!("Packet LOST !");
                         self.writer.send(WriterCommand::ResendPacket {
                             only_lost: true
                         }).await;
@@ -206,6 +213,7 @@ impl UtpManager {
             self.ntimeout += 1;
         } else {
             println!("NLOST {:?}", self.nlost);
+            self.notify_finish().await;
             // println!("RTO {:?} RTT {:?} RTT_VAR {:?}", self.rto, self.rtt, self.rtt_var);
         }
 
@@ -214,8 +222,14 @@ impl UtpManager {
         Ok(())
     }
 
+    async fn notify_finish(&self) {
+        self.on_receive.try_send(ReceivedData::Done).ok();
+    }
+
     async fn dispatch(&mut self, packet: ArenaBox<Packet>) -> Result<()> {
-        // println!("DISPATCH HEADER: {:?}", packet.header());
+        // println!("DISPATCH HEADER: {:?}", (*packet));
+
+        let packet_type = packet.get_type()?;
 
         let _delay = packet.received_at().delay(packet.get_timestamp());
         // self.delay = Delay::since(packet.get_timestamp());
@@ -225,7 +239,7 @@ impl UtpManager {
         self.ntimeout = 0;
         self.timeout = Instant::now() + Duration::from_millis(self.rto as u64);
 
-        match (packet.get_type()?, utp_state) {
+        match (packet_type, utp_state) {
             (PacketType::Syn, UtpState::None) => {
                 //println!("RECEIVED SYN {:?}", self.addr);
                 let connection_id = packet.get_connection_id();
@@ -242,6 +256,7 @@ impl UtpManager {
                 }).await;
             }
             (PacketType::Syn, _) => {
+                // Ignore syn packets when we are already connected
             }
             (PacketType::State, UtpState::SynSent) => {
                 // Related:
@@ -254,7 +269,7 @@ impl UtpManager {
                 self.state.set_remote_window(packet.get_window_size());
 
                 if let Some(notify) = self.on_connected.take() {
-                    notify.send(Some(self.get_stream())).await;
+                    notify.send(self.get_stream()).await;
                 };
 
                 self.state.remove_packets(packet.get_ack_number()).await;
@@ -272,6 +287,13 @@ impl UtpManager {
                 // Wrong Packet
             }
             (PacketType::Data, _) => {
+                // println!("Received {:?} '{:?}'", packet.get_seq_number(), String::from_utf8_lossy(packet.get_data()));
+                // println!("Received '{:?}'", String::from_utf8_lossy(packet.get_data()));
+                self.state.set_ack_number(packet.get_seq_number());
+
+                self.writer.send(WriterCommand::SendPacket {
+                    packet_type: PacketType::State
+                }).await;
             }
             (PacketType::Fin, _) => {
             }

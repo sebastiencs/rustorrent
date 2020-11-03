@@ -6,6 +6,7 @@ use shared_arena::{SharedArena, ArenaBox};
 use futures::{pin_mut, FutureExt, future};
 use futures::task::{Context, Poll};
 
+use super::SequenceNumber;
 use super::{Packet, PacketType, UtpError, Result, UDP_IPV4_MTU, HEADER_SIZE, UDP_IPV6_MTU};
 use super::stream::State;
 
@@ -37,6 +38,9 @@ pub(super) enum WriterCommand {
         only_lost: bool
     },
     Acks,
+    // Acks {
+    //     number: SequenceNumber
+    // },
 }
 
 pub(super) struct WriterUserCommand {
@@ -106,6 +110,7 @@ impl UtpWriter {
             ResendPacket { only_lost } => {
                 self.resend_packets(only_lost).await.unwrap();
             }
+            // Acks { number }  => {
             Acks => {
                 return Ok(());
             }
@@ -128,6 +133,7 @@ impl UtpWriter {
             ResendPacket { only_lost } => {
                 self.resend_packets(only_lost).await.unwrap();
             }
+            // Acks { number } => {
             Acks => {
                 return Ok(());
             }
@@ -222,13 +228,15 @@ impl UtpWriter {
         packet.set_connection_id(send_id);
         packet.set_window_size(1_048_576);
 
-        //println!("SENDING NEW PACKET ! {:?}", packet);
+        // println!("SENDING NEW PACKET ! {:?}", packet);
 
         packet.update_timestamp();
 
         self.socket.send_to(packet.as_bytes(), self.addr).await?;
 
-        self.state.add_packet_inflight(seq_number, packet).await;
+        if packet.get_type()? != PacketType::State {
+            self.state.add_packet_inflight(seq_number, packet).await;
+        }
 
         Ok(())
     }
