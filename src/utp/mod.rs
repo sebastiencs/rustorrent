@@ -386,7 +386,7 @@ pub enum UtpError {
     PacketLost,
     MustClose,
     IO(std::io::Error),
-    RecvError(async_std::sync::RecvError),
+    RecvError(async_channel::RecvError),
 }
 
 impl UtpError {
@@ -1042,20 +1042,18 @@ pub const UDP_TEREDO_MTU: usize = TEREDO_MTU - IPV6_HEADER_SIZE - UDP_HEADER_SIZ
 #[cfg(test)]
 mod tests {
     use super::listener::UtpListener;
-    use async_std::net::SocketAddr;
+    use std::net::SocketAddr;
     use std::net::{IpAddr, Ipv4Addr};
     use std::io::Read;
 
-    #[test]
-    fn send_data() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn send_data() {
         let file = "/home/sebastien/Downloads/Fedora-Cinnamon-Live-x86_64-32-1.6.iso";
         let buffer = std::fs::read(file).unwrap();
 
-        async_std::task::block_on(async {
-            let listener = UtpListener::new(10001).await.unwrap();
-            let stream = listener.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
-            stream.write(&buffer).await;
-            stream.wait_for_termination().await;
-        });
+        let listener = UtpListener::new(10001).await.unwrap();
+        let stream = listener.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
+        stream.write(&buffer).await;
+        stream.wait_for_termination().await;
     }
 }

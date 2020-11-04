@@ -1,7 +1,7 @@
 
-use async_std::task;
-use async_std::sync::{Sender, RwLock};
-use async_std::net::SocketAddr;
+use async_channel::Sender;
+use tokio::sync::RwLock;
+use std::net::SocketAddr;
 use hashbrown::HashMap;
 
 use std::sync::Arc;
@@ -20,22 +20,17 @@ impl Tick {
     }
 
     pub fn start(self) {
-        let builder = thread::Builder::new()
-            .name("utp ticker".into());
-
-        builder.spawn(move || {
-            self.main_loop();
-        }).unwrap();
+        tokio::spawn(async {
+            self.main_loop().await;
+        });
     }
 
-    fn main_loop(self) {
+    async fn main_loop(self) {
         loop {
-            thread::sleep(Duration::from_millis(500));
+            tokio::time::sleep(Duration::from_millis(500)).await;
 
             let streams = Arc::clone(&self.streams);
-            task::spawn(async move {
-                Self::send_tick(streams).await;
-            });
+            Self::send_tick(streams).await;
         }
     }
 

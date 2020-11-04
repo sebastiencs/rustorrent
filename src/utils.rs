@@ -1,8 +1,7 @@
 
-use async_std::net::SocketAddr;
-use async_std::net::TcpStream;
+use std::net::SocketAddr;
+use tokio::net::TcpStream;
 use async_trait::async_trait;
-use async_std::io;
 use byteorder::{BigEndian, ReadBytesExt};
 
 use std::time::Duration;
@@ -16,10 +15,12 @@ pub trait FromSlice<T> {
 
 impl<T: Copy> FromSlice<T> for Vec<T> {
     fn from_slice(slice: &[T]) -> Vec<T> {
-        let len = slice.len();
-        let mut vec = Vec::with_capacity(len);
-        unsafe { vec.set_len(len); }
-        vec.as_mut_slice().copy_from_slice(slice);
+        let mut vec = Vec::new();
+        vec.extend(slice);
+        // let len = slice.len();
+        // let mut vec = Vec::with_capacity(len);
+        // unsafe { vec.set_len(len); }
+        // vec.as_mut_slice().copy_from_slice(slice);
         vec
     }
 }
@@ -78,12 +79,12 @@ pub fn ipv6_from_slice(slice: &[u8], output: &mut Vec<SocketAddr>) {
 
 #[async_trait]
 pub trait ConnectTimeout {
-    async fn connect_timeout(addr: &SocketAddr, timeout: Duration) -> io::Result<TcpStream>;
+    async fn connect_timeout(addr: &SocketAddr, timeout: Duration) -> tokio::io::Result<TcpStream>;
 }
 
 #[async_trait]
 impl ConnectTimeout for TcpStream {
-    async fn connect_timeout(addr: &SocketAddr, timeout: Duration) -> io::Result<TcpStream> {
-        io::timeout(timeout, async move { TcpStream::connect(addr).await }).await
+    async fn connect_timeout(addr: &SocketAddr, timeout: Duration) -> tokio::io::Result<TcpStream> {
+        tokio::time::timeout(timeout, async move { TcpStream::connect(addr).await }).await?
     }
 }

@@ -1,9 +1,9 @@
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+use futures::Future;
 use futures::future::{Fuse, FutureExt};
-use async_std::net::TcpStream;
-use async_std::io::BufReader;
-use async_std::prelude::*;
-use async_std::sync::{channel, Sender};
+use tokio::net::TcpStream;
+use tokio::io::BufReader;
+use async_channel::{bounded, Sender};
 use coarsetime::Instant;
 
 use std::pin::Pin;
@@ -142,7 +142,7 @@ enum Choke {
 
 use std::collections::VecDeque;
 
-pub type PeerTask = Arc<async_std::sync::RwLock<VecDeque<PieceToDownload>>>;
+pub type PeerTask = Arc<tokio::sync::RwLock<VecDeque<PieceToDownload>>>;
 
 #[derive(Debug)]
 pub enum PeerCommand {
@@ -285,6 +285,8 @@ impl Peer {
     async fn send_message(&mut self, msg: MessagePeer<'_>) -> Result<()> {
         self.write_message_in_buffer(msg);
 
+        use tokio::io::AsyncWriteExt;
+
         let writer = self.reader.get_mut();
         writer.write_all(self.buffer.as_slice()).await?;
         writer.flush().await?;
@@ -375,7 +377,7 @@ impl Peer {
 
     async fn wait_event(
         &mut self,
-        mut cmds: Pin<&mut Fuse<impl Future<Output = std::result::Result<PeerCommand, async_std::sync::RecvError>>>>
+        mut cmds: Pin<&mut Fuse<impl Future<Output = std::result::Result<PeerCommand, async_channel::RecvError>>>>
     ) -> PeerWaitEvent {
         // use futures::async_await::*;
         use futures::task::{Context, Poll};
@@ -405,7 +407,7 @@ impl Peer {
 
     pub async fn start(&mut self) -> Result<()> {
 
-        let (addr, cmds) = channel(1000);
+        let (addr, cmds) = bounded(1000);
 
         let extern_id = self.do_handshake().await?;
 
@@ -659,12 +661,14 @@ impl Peer {
     }
 
     async fn read_exactly(&mut self, n: usize) -> Result<()> {
-        let reader = self.reader.by_ref();
+        use tokio::io::AsyncReadExt;
+
+        let reader = &mut self.reader;
         self.buffer.clear();
 
         if reader.take(n as u64).read_to_end(&mut self.buffer).await? != n {
-            return Err(async_std::io::Error::new(
-                async_std::io::ErrorKind::UnexpectedEof,
+            return Err(tokio::io::Error::new(
+                tokio::io::ErrorKind::UnexpectedEof,
                 "Size doesn't match"
             ).into());
         }
@@ -674,6 +678,8 @@ impl Peer {
 
     async fn write(&mut self, data: &[u8]) -> Result<()> {
         let writer = self.writer();
+        use tokio::prelude::*;
+
         writer.write_all(data).await?;
         writer.flush().await?;
         Ok(())

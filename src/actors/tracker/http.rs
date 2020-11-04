@@ -1,7 +1,10 @@
 
-use async_std::net::{SocketAddr, ToSocketAddrs, TcpStream};
+use std::net::SocketAddr;
+use tokio::io::AsyncBufReadExt;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpStream;
 use async_trait::async_trait;
-use async_std::prelude::*;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -16,7 +19,7 @@ use super::{TrackerConnection, TrackerData};
 
 async fn peers_from_dict(peers: &[Peer], addrs: &mut Vec<SocketAddr>) {
     for peer in peers {
-        if let Ok(s_addrs) = (peer.ip.as_str(), peer.port).to_socket_addrs().await {
+        if let Ok(s_addrs) = tokio::net::lookup_host((peer.ip.as_str(), peer.port)).await {
             for addr in s_addrs {
                 addrs.push(addr);
             }
@@ -130,7 +133,7 @@ pub enum HttpError {
     Deserialize(DeserializeError),
     HostResolution,
     IO(std::io::Error),
-    IOAsync(async_std::io::Error)
+    IOAsync(tokio::io::Error)
 }
 
 impl From<std::io::Error> for HttpError {
@@ -245,7 +248,7 @@ async fn send<T: DeserializeOwned, Q: ToQuery>(url: &Url, query: &Q, addr: &Sock
 }
 
 use memchr::memchr;
-use async_std::io::BufReader;
+use tokio::io::BufReader;
 
 async fn read_response(stream: TcpStream) -> Result<Vec<u8>> {
     let mut reader = BufReader::with_capacity(4 * 1024, stream);
@@ -287,8 +290,7 @@ async fn read_response(stream: TcpStream) -> Result<Vec<u8>> {
 
     let mut buffer = Vec::with_capacity(content_length as usize);
 
-    reader.take(content_length)
-          .read_to_end(&mut buffer)
+    reader.take(content_length).read_to_end(&mut buffer)
           .await?;
 
     Ok(buffer)

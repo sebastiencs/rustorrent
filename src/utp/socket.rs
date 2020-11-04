@@ -1,9 +1,9 @@
 
-use async_std::net::{UdpSocket, SocketAddr};
-use async_std::io::{ErrorKind, Error};
+use tokio::io::{ErrorKind, Error};
 use rand::Rng;
 use fixed::types::I48F16;
 
+use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 use std::{iter::Iterator, collections::VecDeque};
 use std::iter;

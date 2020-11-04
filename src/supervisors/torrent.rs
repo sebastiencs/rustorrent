@@ -1,7 +1,6 @@
 
 use std::sync::Arc;
-use async_std::task;
-use async_std::sync::{channel, Receiver, Sender};
+use async_channel::{bounded, Receiver, Sender};
 use crossbeam_channel::Sender as SyncSender;
 use slab::Slab;
 
@@ -124,7 +123,7 @@ pub type Result<T> = std::result::Result<T, TorrentError>;
 
 impl TorrentSupervisor {
     pub fn new(torrent: Torrent, sha1_workers: SyncSender<Sha1Task>) -> TorrentSupervisor {
-        let (my_addr, receiver) = channel(100);
+        let (my_addr, receiver) = bounded(100);
         let pieces_detail = Pieces::from(&torrent);
 
         let num_pieces = pieces_detail.num_pieces;
@@ -151,7 +150,7 @@ impl TorrentSupervisor {
         let my_addr = self.my_addr.clone();
         let extern_id = self.extern_id.clone();
 
-        task::spawn(async {
+        tokio::spawn(async {
             TrackerSupervisor::new(my_addr, metadata, extern_id).start().await;
         });
 
@@ -166,7 +165,7 @@ impl TorrentSupervisor {
         let pieces_detail = self.pieces_detail.clone();
         let extern_id = self.extern_id.clone();
 
-        task::spawn(async move {
+        tokio::spawn(async move {
             let mut peer = match Peer::new(addr, pieces_detail, my_addr, extern_id).await {
                 Ok(peer) => peer,
                 Err(e) => {
@@ -206,7 +205,7 @@ impl TorrentSupervisor {
                         // We are already connected to this peer, disconnect.
                         // This happens when we are connected to its ipv4 and ipv6 addresses
 
-                        addr.send(PeerCommand::Die).await
+                        addr.send(PeerCommand::Die).await;
                     } else {
                         self.peers.insert(id, PeerState {
                             bitfield: BitField::new(self.pieces_detail.num_pieces),

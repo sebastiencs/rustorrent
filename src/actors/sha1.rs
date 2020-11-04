@@ -1,8 +1,7 @@
 
 use crossbeam_channel::{unbounded, Receiver as SyncReceiver, Sender as SyncSender};
-use async_std::sync::Sender;
-use async_std::task;
-
+use async_channel::Sender;
+use tokio::runtime::Runtime;
 
 use std::ptr::read_unaligned;
 use std::sync::Arc;
@@ -46,13 +45,18 @@ pub fn compare_20_bytes(sum1: &[u8], sum2: &[u8]) -> bool {
 }
 
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 struct Sha1Worker {
+    runtime: Arc<Runtime>
     // valids: usize,
     // invalids: usize
 }
 
 impl Sha1Worker {
+    fn new(runtime: Arc<Runtime>) -> Sha1Worker {
+        Sha1Worker { runtime }
+    }
+
     fn start(mut self, recv: SyncReceiver<Sha1Task>, task: impl Into<Option<Sha1Task>>) {
         if let Some(task) = task.into() {
             self.process(task);
@@ -89,7 +93,7 @@ impl Sha1Worker {
 
         // println!("{:?}", self);
 
-        task::spawn(async move {
+        self.runtime.spawn(async move {
             addr.send(ResultChecksum { id, valid }).await;
         });
     }
@@ -99,17 +103,17 @@ impl Sha1Worker {
 pub struct Sha1Workers;
 
 impl Sha1Workers {
-    pub fn new_pool() -> SyncSender<Sha1Task> {
+    pub fn new_pool(runtime: Arc<Runtime>) -> SyncSender<Sha1Task> {
         let (sender, receiver) = unbounded();
 
-        thread::spawn(move || Self::start(receiver));
+        thread::spawn(move || Self::start(receiver, runtime));
 
         sender
     }
 
-    fn start(recv: SyncReceiver<Sha1Task>) {
+    fn start(recv: SyncReceiver<Sha1Task>, runtime: Arc<Runtime>) {
         if let Ok(first_task) = recv.recv() {
-            let handles = Self::init_pool(first_task, recv);
+            let handles = Self::init_pool(first_task, recv, runtime);
 
             for handle in handles {
                 let _ = handle.join();
@@ -117,16 +121,22 @@ impl Sha1Workers {
         }
     }
 
-    fn init_pool(task: Sha1Task, receiver: SyncReceiver<Sha1Task>) -> Vec<thread::JoinHandle<()>> {
+    fn init_pool(
+        task: Sha1Task,
+        receiver: SyncReceiver<Sha1Task>,
+        runtime: Arc<Runtime>,
+    ) -> Vec<thread::JoinHandle<()>> {
         let num_cpus = num_cpus::get().max(1);
         let mut handles = Vec::with_capacity(num_cpus);
 
         let recv = receiver.clone();
-        handles.push(thread::spawn(move || Sha1Worker::default().start(recv, task)));
+        let runtime_clone = runtime.clone();
+        handles.push(thread::spawn(move || Sha1Worker::new(runtime_clone).start(recv, task)));
 
         for _ in 0..(num_cpus - 1) {
             let recv = receiver.clone();
-            handles.push(thread::spawn(move || Sha1Worker::default().start(recv, None)));
+            let runtime_clone = runtime.clone();
+            handles.push(thread::spawn(move || Sha1Worker::new(runtime_clone).start(recv, None)));
         }
 
         handles

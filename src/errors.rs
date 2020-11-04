@@ -11,7 +11,7 @@ pub enum TorrentError {
     Http(HttpError),
     Unresponsive,
     IO(std::io::Error),
-    IOAsync(async_std::io::Error)
+    IOAsync(tokio::io::Error)
 }
 
 impl From<HttpError> for TorrentError {
@@ -24,8 +24,8 @@ impl From<HttpError> for TorrentError {
     }
 }
 
-impl From<async_std::io::Error> for TorrentError {
-    fn from(e: async_std::io::Error) -> TorrentError {
+impl From<tokio::io::Error> for TorrentError {
+    fn from(e: tokio::io::Error) -> TorrentError {
         TorrentError::IOAsync(e)
     }
 }

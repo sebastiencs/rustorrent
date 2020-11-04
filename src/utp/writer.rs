@@ -1,12 +1,12 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
 
-use async_std::net::UdpSocket;
-use async_std::sync::{Arc, Receiver};
+use tokio::net::UdpSocket;
+use async_channel::Receiver;
 use shared_arena::{SharedArena, ArenaBox};
 use futures::{pin_mut, FutureExt, future};
 use futures::task::{Context, Poll};
 
-use super::SequenceNumber;
 use super::{Packet, PacketType, UtpError, Result, UDP_IPV4_MTU, HEADER_SIZE, UDP_IPV6_MTU};
 use super::stream::State;
 

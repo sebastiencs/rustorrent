@@ -12,7 +12,7 @@ use rustorrent::session::Session;
 use rustorrent::bencode::de;
 use rustorrent::utp;
 
-use async_std::net::{SocketAddr, IpAddr, Ipv4Addr};
+use std::net::{SocketAddr, IpAddr, Ipv4Addr};
 
 // use rustorrent::cache_line::CacheAligned;
 //use rustorrent::memory_pool::page::Block;
@@ -21,7 +21,8 @@ use async_std::net::{SocketAddr, IpAddr, Ipv4Addr};
 
 //fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
 #[allow(unreachable_code)]
-fn main() {
+#[tokio::main]
+async fn main() {
 
     // use std::mem::ManuallyDrop;
     // use rustorrent::memory_pool::SharedArena;
@@ -205,7 +206,7 @@ fn main() {
     // println!("FOO {:?}", foo.fetch_add(1, Ordering::SeqCst));
     // println!("FOO {:?}", foo.load(Ordering::SeqCst));
 
-    async_std::task::block_on(async {
+    // async_std::task::block_on(async {
         // let listener = utp::stream::UtpListener::new(10001).await.unwrap();
         // let listener = Arc::new(listener);
         // let listener2 = Arc::clone(&listener);
@@ -214,31 +215,36 @@ fn main() {
         // let stream = listener.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 0, 131)), 7000)).await.unwrap();
         //let stream = listener.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
 
-        let stdin = io::stdin();
-        let mut buffer = Vec::new();
-        let mut handle = stdin.lock();
+        // let stdin = io::stdin();
+        // let mut buffer = Vec::new();
+        // let mut handle = stdin.lock();
 
-        handle.read_to_end(&mut buffer).unwrap();
+        // handle.read_to_end(&mut buffer).unwrap();
 
-        let listener = utp::stream::UtpListener::new(10001).await.unwrap();
+        // let listener = utp::listener::UtpListener::new(10001).await.unwrap();
+        // listener.start();
+
         // let listener = Arc::new(listener);
         // let listener2 = Arc::clone(&listener);
         // listener.start();
 
-        let listener_clone = listener.clone();
-        let buffer_clone = buffer.clone();
+        // let listener_clone = listener.clone();
+        // let buffer_clone = buffer.clone();
 
-        async_std::task::spawn(async move {
-            let stream = listener_clone.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7001)).await.unwrap();
-            stream.write(&buffer_clone).await;
-        });
+        // async_std::task::spawn(async move {
+        //     let stream = listener_clone.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7001)).await.unwrap();
+        //     stream.write(&buffer_clone).await;
+        // });
 
-        let stream = listener.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
-        stream.write(&buffer).await;
+        // let stream = listener.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
+        // stream.write(&buffer).await;
 
-         // stream.write(b"hello").await;
+        // // stream.write(b"hello").await;
 
-        println!("DOOOOONE", );
+        // println!("ICI");
+
+        // println!("DOOOOONE", );
+        // // return;
 
         // return Ok(true);
 
@@ -248,20 +254,20 @@ fn main() {
         // ).await.unwrap();
         // socket.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
 
-        let stdin = io::stdin();
-        let mut buffer = Vec::new();
-        let mut handle = stdin.lock();
+        // let stdin = io::stdin();
+        // let mut buffer = Vec::new();
+        // let mut handle = stdin.lock();
 
-        handle.read_to_end(&mut buffer).unwrap();
+        // handle.read_to_end(&mut buffer).unwrap();
 
         // socket.send(&buffer).await.unwrap();
 
         // socket.send(b"hello weshaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").await.unwrap();
         // socket.send(b"OKLM").await.unwrap();
         // socket.send(b"OUIOUIOUIOUIOUIOUIOUIOUI").await.unwrap();
-    });
+    // });
 
-    return ;
+    // return ;
 
     let stdin = io::stdin();
     let mut buffer = Vec::new();

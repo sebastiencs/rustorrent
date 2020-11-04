@@ -2,11 +2,10 @@
 mod udp;
 pub mod http;
 
-use async_std::sync::Sender;
-use async_std::task;
-use async_std::net::{SocketAddr, ToSocketAddrs};
+use async_channel::Sender;
 use async_trait::async_trait;
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -40,7 +39,7 @@ impl Tracker {
             self.resolve_and_start().await;
 
             // TODO: Use interval from announce response
-            task::sleep(Duration::from_secs(120)).await;
+            tokio::time::sleep(Duration::from_secs(120)).await;
         }
     }
 
@@ -123,10 +122,10 @@ impl Tracker {
         let host = self.data.url.host_str().unwrap();
         let port = self.data.url.port().unwrap_or(80);
 
-        (host, port).to_socket_addrs()
-                    .await
-                    .map(|a| a.map(Arc::new).collect())
-                    .unwrap_or_else(|_| Vec::new())
+        tokio::net::lookup_host((host, port))
+            .await
+            .map(|a| a.map(Arc::new).collect())
+            .unwrap_or_else(|_| Vec::new())
     }
 }
 

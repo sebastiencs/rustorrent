@@ -1,11 +1,12 @@
 use std::{net::SocketAddr, sync::Arc, net::SocketAddrV4, net::SocketAddrV6, net::Ipv6Addr, net::Ipv4Addr};
 
-use async_std::{net::UdpSocket, sync::RwLock, sync::Sender, sync::channel, task};
-use async_std::io::{ErrorKind, Error};
+use async_channel::{bounded, Sender};
+use tokio::{net::UdpSocket, sync::RwLock, task};
+use tokio::io::{ErrorKind, Error};
 use hashbrown::HashMap;
 use shared_arena::SharedArena;
 use futures::{pin_mut, FutureExt, future};
-use task::{Poll, Context};
+use std::task::{Poll, Context};
 
 use super::manager::{UtpEvent, UtpManager};
 use super::{UtpState, Packet, Result, stream::UtpStream, tick::Tick, HEADER_SIZE, PACKET_MAX_SIZE, Timestamp, PacketType, stream::State};
@@ -28,12 +29,10 @@ enum IncomingEvent {
 
 impl UtpListener {
     pub async fn new(port: u16) -> Result<Arc<UtpListener>> {
-        use async_std::prelude::*;
-
         let v4 = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), port));
         let v6 = UdpSocket::bind(SocketAddrV6::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1), port, 0, 0));
 
-        let (v4, v6) = v4.join(v6).await;
+        let (v4, v6) = futures::future::join(v4, v6).await;
         let (v4, v6) = (v4?, v6?);
 
         let listener = Arc::new(UtpListener {
@@ -57,7 +56,7 @@ impl UtpListener {
     }
 
     pub async fn connect(&self, sockaddr: SocketAddr) -> Result<UtpStream> {
-        let (on_connected, is_connected) = channel(1);
+        let (on_connected, is_connected) = bounded(1);
 
         let state = State::with_utp_state(UtpState::MustConnect);
         self.new_connection(sockaddr, state, on_connected).await;
@@ -78,7 +77,7 @@ impl UtpListener {
     {
         let socket = self.get_matching_socket(&sockaddr);
 
-        let (sender, receiver) = channel(10);
+        let (sender, receiver) = bounded(10);
         let state = Arc::new(state.into().unwrap_or_else(Default::default));
 
         let manager = UtpManager::new_with_state(

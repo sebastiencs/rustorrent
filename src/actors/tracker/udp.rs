@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 
 
-use async_std::net::{SocketAddr};
+use std::net::SocketAddr;
 use async_trait::async_trait;
 
 use crate::supervisors::torrent::Result;
@@ -283,10 +283,10 @@ pub struct UdpConnection {
     all_addrs_tried: bool,
 }
 
-use async_std::net::UdpSocket;
+use tokio::net::UdpSocket;
 
 use crate::udp_ext::WithTimeout;
-use async_std::io::ErrorKind;
+use tokio::io::ErrorKind;
 
 impl UdpConnection {
     #[allow(clippy::new_ret_no_self)]

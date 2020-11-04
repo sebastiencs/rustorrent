@@ -1,9 +1,11 @@
 
-use async_std::sync::{Arc, channel, Sender, Receiver};
-use async_std::task;
-use async_std::io::{ErrorKind, Error};
-use async_std::net::{SocketAddr, UdpSocket};
+use async_channel::{bounded, Sender, Receiver};
+use tokio::task;
+use tokio::io::{ErrorKind, Error};
+use tokio::net::UdpSocket;
 use fixed::types::I48F16;
+use std::net::SocketAddr;
+use std::sync::Arc;
 
 use shared_arena::{ArenaBox, SharedArena};
 use super::stream::ReceivedData;
@@ -95,9 +97,9 @@ impl UtpManager {
         packet_arena: Arc<SharedArena<Packet>>,
         on_connected: Option<Sender<Option<UtpStream>>>,
     ) -> UtpManager {
-        let (writer, writer_rcv) = channel(10);
-        let (writer_user, writer_user_rcv) = channel(10);
-        let (on_receive_sender, on_receive) = channel(1);
+        let (writer, writer_rcv) = bounded(10);
+        let (writer_user, writer_user_rcv) = bounded(10);
+        let (on_receive_sender, on_receive) = bounded(1);
 
         let writer_actor = UtpWriter::new(
             socket.clone(), addr, writer_user_rcv,

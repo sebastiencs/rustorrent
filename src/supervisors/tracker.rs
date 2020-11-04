@@ -1,6 +1,5 @@
 use url::Url;
-use async_std::sync::{Sender, Receiver, channel};
-use async_std::{task, future};
+use async_channel::{Sender, Receiver, bounded};
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -79,7 +78,7 @@ impl TrackerSupervisor {
     ) -> TrackerSupervisor
     {
         let urls = metadata.get_urls_tiers();
-        let (_sender, recv) = channel(10);
+        let (_sender, recv) = bounded(10);
         TrackerSupervisor {
             supervisor,
             metadata,
@@ -109,7 +108,7 @@ impl TrackerSupervisor {
             // We wait 15 secs, if we aren't connected to this tracker
             // we spawn another actor
             let duration = Duration::from_secs(15);
-            match future::timeout(duration, self.recv.recv()).await {
+            match tokio::time::timeout(duration, self.recv.recv()).await {
                 Ok(Ok((url, instant, TrackerStatus::FoundPeers(n)))) => {
                     pending_status.push((url, instant, TrackerStatus::FoundPeers(n)));
                     // 1 is connected, stop the loop
@@ -133,7 +132,7 @@ impl TrackerSupervisor {
         let data = Arc::new(TrackerData::from((self, url)));
         let sender = self._sender.clone();
 
-        task::spawn(async move {
+        tokio::spawn(async move {
             Tracker::new(data, sender).start().await
         });
     }

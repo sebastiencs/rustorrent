@@ -66,7 +66,7 @@ libc = { version = "0.2", default-features = false }
 
 futures =  { version = "0.3", default-features = false }
 #futures = "0.3"
-async-std = { version = "1", features = ["unstable"] }
+# async-std = { version = "1", features = ["unstable"] }
 # async-std = "1"
 # surf = "1.0.3"
 
@@ -76,6 +76,12 @@ fixed = { version = "1", default-features = false }
 
 crossbeam-epoch = { version = "0.9", default-features = false }
 
+tokio = { version = "0.3", features = ["full"] }
+async-channel = "1.5"
+
 # TODO: Make it optional
 # packed_simd = { version = "0.3.3" }
 #packed_simd = { version = "0.3.3", features = ["into_bits"] }
+
+[dev-dependencies]
+tokio-test = "0.3"
