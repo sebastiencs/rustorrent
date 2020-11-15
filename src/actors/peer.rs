@@ -455,7 +455,8 @@ impl Peer {
                 socket: self.addr,
                 extern_id,
             })
-            .await;
+            .await
+            .unwrap();
 
         let cmds = cmds.recv().fuse();
         let mut cmds = Box::pin(cmds);
@@ -582,7 +583,8 @@ impl Peer {
                         id: self.id,
                         update,
                     })
-                    .await;
+                    .await
+                    .unwrap();
 
                 println!("[{:?}] HAVE {}", self.id, piece_index);
             }
@@ -600,7 +602,8 @@ impl Peer {
                         id: self.id,
                         update,
                     })
-                    .await;
+                    .await
+                    .unwrap();
 
                 println!("[{:?}] BITFIELD", self.id);
             }
@@ -674,7 +677,8 @@ impl Peer {
                             .send(TorrentNotification::PeerDiscovered {
                                 addrs: addrs.into(),
                             })
-                            .await;
+                            .await
+                            .unwrap();
                     };
                 }
             }
@@ -707,7 +711,8 @@ impl Peer {
 
         self.supervisor
             .send(TorrentNotification::AddPiece(piece_buffer))
-            .await;
+            .await
+            .unwrap();
         //println!("[{}] PIECE COMPLETED {}", self.id, index);
     }
 

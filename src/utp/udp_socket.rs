@@ -223,8 +223,8 @@ impl MyUdpSocket {
                     ev.clear_ready();
                 }
                 Err(e) => return Poll::Ready(Err(e)),
-                Ok(res) => {
-                    return Poll::Ready(Ok(res));
+                ok => {
+                    return Poll::Ready(ok);
                 }
             }
         }

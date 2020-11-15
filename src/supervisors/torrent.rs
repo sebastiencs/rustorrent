@@ -177,7 +177,7 @@ impl TorrentSupervisor {
                 UpdateBitfield { id, update } => {
                     if self.find_pieces_for_peer(id, &update).await {
                         let peer = self.peers.get(&id).unwrap();
-                        peer.addr.send(PeerCommand::TasksAvailables).await;
+                        peer.addr.send(PeerCommand::TasksAvailables).await.unwrap();
                     }
 
                     if let Some(peer) = self.peers.get_mut(&id) {
@@ -202,7 +202,7 @@ impl TorrentSupervisor {
                         // We are already connected to this peer, disconnect.
                         // This happens when we are connected to its ipv4 and ipv6 addresses
 
-                        addr.send(PeerCommand::Die).await;
+                        addr.send(PeerCommand::Die).await.unwrap();
                     } else {
                         self.peers.insert(
                             id,

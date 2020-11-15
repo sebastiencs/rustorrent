@@ -167,6 +167,7 @@ impl UtpManager {
         })
     }
 
+    #[allow(clippy::needless_lifetimes)]
     async fn receive_timeout<'a>(
         &mut self,
         socket: &'a UdpSocket,
@@ -175,8 +176,7 @@ impl UtpManager {
 
         return tokio::select! {
             recv = self.recv.next() => {
-                recv.map(|v| (v, None))
-                    .ok_or_else(|| UtpError::RecvClosed)
+                recv.map(|v| (v, None)).ok_or(UtpError::RecvClosed)
             }
             guard = socket.writable(), if need_to_send => {
                 guard.map(|g| (UtpEvent::Writable, Some(g)))
@@ -255,7 +255,8 @@ impl UtpManager {
             UtpEvent::Writable => {
                 if self.to_send_detail != 0 {
                     self.resend_packets(
-                        self.to_send_detail | TO_SEND_PACKETS_RESEND_ONLY_LOST != 0,
+                        self.to_send_detail | TO_SEND_PACKETS_RESEND_ONLY_LOST
+                            == TO_SEND_PACKETS_RESEND_ONLY_LOST,
                     )?;
                 }
                 // TODO: Don't push front here
@@ -380,8 +381,7 @@ impl UtpManager {
 
                 if let Some(notify) = self.on_connected.take() {
                     let stream = self.get_stream().unwrap();
-                    let addr = self.addr.clone();
-                    notify.send((stream, addr)).unwrap();
+                    notify.send((stream, self.addr)).unwrap();
                 };
 
                 self.state.remove_packets(packet.get_ack_number());
@@ -426,7 +426,7 @@ impl UtpManager {
         let in_flight = self.state.inflight_size();
         let mut bytes_newly_acked = 0;
 
-        let before = self.state.inflight_size();
+        // let before = self.state.inflight_size();
         bytes_newly_acked += self.ack_packets(ack_number, received_at);
         // bytes_newly_acked += self.state.remove_packets(ack_number).await;
         //println!("PACKETS IN FLIGHT {:?}", self.inflight_packets.len());
@@ -698,7 +698,7 @@ impl UtpManager {
 
         // println!("RESENDING ONLY_LOST={:?} INFLIGHT_LEN={:?} CWND={:?}", only_lost, self.state.inflight_packets.len(), self.state.cwnd());
 
-        let mut resent = 0;
+        // let mut resent = 0;
 
         // We copy the socket to satisfy the borrow checker
         let socket = self.socket.clone();
@@ -725,7 +725,7 @@ impl UtpManager {
 
                 // println!("resent {:?}", packet.get_seq_number());
 
-                resent += 1;
+                // resent += 1;
                 socket.try_send_to(packet.as_bytes(), self.addr)?;
 
                 packet.resent = true;

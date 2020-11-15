@@ -77,7 +77,7 @@ impl Dispatcher {
             sender.clone(),
             state,
             packet_arena,
-            on_connected.into(),
+            on_connected,
         );
 
         task::spawn(async move {
@@ -102,9 +102,9 @@ impl Dispatcher {
             self.poll_event(&mut buffers).await?;
 
             let timestamp = Timestamp::now();
-            let mut buffers = buffers.iter_mmsgs();
+            let buffers = buffers.iter_mmsgs();
 
-            while let Some((addr, buffer)) = buffers.next() {
+            for (addr, buffer) in buffers {
                 if buffer.len() < HEADER_SIZE || buffer.len() > PACKET_MAX_SIZE {
                     continue;
                 }

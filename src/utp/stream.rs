@@ -1,5 +1,4 @@
 use async_channel::{Receiver, Sender};
-use tokio::sync::RwLock;
 
 use crate::utils::Map;
 use shared_arena::ArenaBox;

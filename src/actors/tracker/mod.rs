@@ -113,7 +113,8 @@ impl Tracker {
     async fn send_to_supervisor(&self, msg: TrackerStatus) {
         self.tracker_supervisor
             .send((self.data.url.hash(), Instant::now(), msg))
-            .await;
+            .await
+            .unwrap();
     }
 
     async fn send_addrs(&self, addrs: Vec<SocketAddr>) {
@@ -121,7 +122,11 @@ impl Tracker {
         use TrackerStatus::*;
 
         self.send_to_supervisor(FoundPeers(addrs.len())).await;
-        self.data.supervisor.send(PeerDiscovered { addrs }).await;
+        self.data
+            .supervisor
+            .send(PeerDiscovered { addrs })
+            .await
+            .unwrap();
     }
 
     fn new_connection(

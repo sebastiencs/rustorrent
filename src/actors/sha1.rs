@@ -90,7 +90,7 @@ impl Sha1Worker {
         // println!("{:?}", self);
 
         self.runtime.spawn(async move {
-            addr.send(ResultChecksum { id, valid }).await;
+            addr.send(ResultChecksum { id, valid }).await.unwrap();
         });
     }
 }

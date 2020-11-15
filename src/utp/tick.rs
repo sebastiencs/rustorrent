@@ -1,9 +1,6 @@
 use async_channel::{Receiver, Sender, TrySendError};
-use hashbrown::HashMap;
-use std::net::SocketAddr;
-use tokio::sync::RwLock;
 
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use super::manager::UtpEvent;
 
@@ -33,10 +30,7 @@ impl Tick {
             tokio::time::sleep(Duration::from_millis(500)).await;
 
             self.streams
-                .retain(|s| match s.try_send(UtpEvent::Timeout) {
-                    Err(TrySendError::Closed(_)) => false,
-                    _ => true,
-                });
+                .retain(|s| !matches!(s.try_send(UtpEvent::Timeout), Err(TrySendError::Closed(_))));
         }
     }
 }

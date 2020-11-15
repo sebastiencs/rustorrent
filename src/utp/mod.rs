@@ -789,7 +789,7 @@ impl Packet {
         let slice = unsafe { &mut *(place.as_mut_ptr() as *mut [u8; PACKET_MAX_SIZE]) };
         let data_len = data.len();
 
-        assert!(data_len >= HEADER_SIZE && data_len < PACKET_MAX_SIZE);
+        assert!((HEADER_SIZE..PACKET_MAX_SIZE).contains(&data_len));
 
         slice[..data_len].copy_from_slice(data);
 
