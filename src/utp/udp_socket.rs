@@ -307,6 +307,7 @@ impl MyUdpSocket {
     // }
 
     pub fn try_send_to(&self, buf: &[u8], target: SocketAddr) -> super::Result<()> {
+        // println!("sending {} bytes", buf.len());
         self.inner
             .get_ref()
             .send_to(buf, &SockAddr::from(target))

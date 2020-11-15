@@ -213,8 +213,12 @@ impl UtpManager {
         while let Ok((incoming, mut guard)) = { self.receive_timeout(&socket).await } {
             let result = self.process_incoming(incoming);
 
-            if let (Err(SendWouldBlock), Some(guard)) = (&result, &mut guard) {
-                guard.clear_ready();
+            match (result, &mut guard) {
+                (Err(SendWouldBlock), Some(guard)) => {
+                    guard.clear_ready();
+                }
+                (Err(e), _) => return Err(e),
+                _ => {}
             }
         }
 
@@ -286,10 +290,7 @@ impl UtpManager {
         }
 
         match utp_state {
-            SynSent => {
-                self.send_packet(PacketType::Syn);
-            }
-            Connected => {
+            SynSent | Connected => {
                 if self.state.inflight_size() > 0 {
                     // println!("resend here");
 

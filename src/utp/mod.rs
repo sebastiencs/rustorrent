@@ -1062,10 +1062,7 @@ pub const UDP_TEREDO_MTU: usize = TEREDO_MTU - IPV6_HEADER_SIZE - UDP_HEADER_SIZ
 #[cfg(test)]
 mod tests {
     use super::listener::UtpListener;
-    use std::{
-        io::Read,
-        net::{IpAddr, Ipv4Addr, SocketAddr},
-    };
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn send_data() {
