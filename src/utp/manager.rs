@@ -1,29 +1,29 @@
 use async_channel::{bounded, Receiver, Sender};
 use futures::StreamExt;
 use socket2::Socket;
-use tokio::io::{Error, ErrorKind};
-use tokio::sync::oneshot;
-use tokio::task;
+use tokio::{
+    io::{Error, ErrorKind},
+    sync::oneshot,
+    task,
+};
 // use tokio::net::UdpSocket;
 use fixed::types::I48F16;
-use std::collections::VecDeque;
-use std::net::SocketAddr;
-use std::pin::Pin;
-use std::sync::Arc;
+use std::{collections::VecDeque, net::SocketAddr, pin::Pin, sync::Arc};
 
 // use tokio::sync::mpsc::{Receiver as TokioReceiver, channel, error::TrySendError as TokioTrySendError};
 
-use super::stream::ReceivedData;
-use super::udp_socket::{FdGuard, MyUdpSocket as UdpSocket};
+use super::{
+    stream::ReceivedData,
+    udp_socket::{FdGuard, MyUdpSocket as UdpSocket},
+};
 use shared_arena::{ArenaBox, SharedArena};
 //use super::writer::{UtpWriter, WriterCommand, WriterUserCommand};
 use super::stream::{State, UtpStream};
 
 use super::{
     DelayHistory, Packet, PacketType, Result, SelectiveAckBit, SequenceNumber, Timestamp, UtpError,
-    HEADER_SIZE, UDP_IPV4_MTU, UDP_IPV6_MTU,
+    UtpState, HEADER_SIZE, MIN_CWND, MSS, TARGET, UDP_IPV4_MTU, UDP_IPV6_MTU,
 };
-use super::{UtpState, MIN_CWND, MSS, TARGET};
 
 use std::{
     sync::atomic::Ordering,

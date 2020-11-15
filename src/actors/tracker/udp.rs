@@ -1,16 +1,15 @@
-use std::convert::TryFrom;
-use std::convert::TryInto;
-use std::io::Write;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::{
+    convert::{TryFrom, TryInto},
+    io::Write,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use async_trait::async_trait;
 use std::net::SocketAddr;
 
 use super::{TrackerConnection, TrackerData};
-use crate::actors::peer::PeerExternId;
-use crate::errors::TorrentError;
-use crate::supervisors::torrent::Result;
+use crate::{actors::peer::PeerExternId, errors::TorrentError, supervisors::torrent::Result};
 
 #[derive(Debug)]
 pub enum Action {

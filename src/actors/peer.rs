@@ -1,25 +1,31 @@
 use async_channel::{bounded, Sender};
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use coarsetime::Instant;
-use futures::future::{Fuse, FutureExt};
-use futures::Future;
-use tokio::io::BufReader;
-use tokio::net::TcpStream;
+use futures::{
+    future::{Fuse, FutureExt},
+    Future,
+};
+use tokio::{io::BufReader, net::TcpStream};
 
-use std::convert::TryFrom;
-use std::convert::TryInto;
-use std::io::{Cursor, Write};
-use std::net::SocketAddr;
-use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::{
+    convert::{TryFrom, TryInto},
+    io::{Cursor, Write},
+    net::SocketAddr,
+    pin::Pin,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
-use crate::bitfield::BitFieldUpdate;
-use crate::errors::TorrentError;
-use crate::extensions::{ExtendedHandshake, ExtendedMessage, PEXMessage};
-use crate::pieces::{PieceBuffer, PieceToDownload, Pieces};
-use crate::supervisors::torrent::{Result, TorrentNotification};
-use crate::utils::Map;
+use crate::{
+    bitfield::BitFieldUpdate,
+    errors::TorrentError,
+    extensions::{ExtendedHandshake, ExtendedMessage, PEXMessage},
+    pieces::{PieceBuffer, PieceToDownload, Pieces},
+    supervisors::torrent::{Result, TorrentNotification},
+    utils::Map,
+};
 
 static PEER_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -188,8 +194,7 @@ impl PeerExternId {
     }
 
     pub fn generate() -> PeerExternId {
-        use rand::distributions::Alphanumeric;
-        use rand::Rng;
+        use rand::{distributions::Alphanumeric, Rng};
 
         // TODO: Improve this
 
@@ -409,8 +414,7 @@ impl Peer {
         >,
     ) -> PeerWaitEvent {
         // use futures::async_await::*;
-        use futures::task::Poll;
-        use futures::{future, pin_mut};
+        use futures::{future, pin_mut, task::Poll};
 
         let msgs = self.read_messages();
         pin_mut!(msgs); // Pin on the stack

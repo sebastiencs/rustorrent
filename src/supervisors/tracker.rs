@@ -1,14 +1,17 @@
 use async_channel::{bounded, Receiver, Sender};
 use url::Url;
 
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
-use crate::actors::peer::PeerExternId;
-use crate::actors::tracker::Tracker;
-use crate::errors::TorrentError;
-use crate::metadata::Torrent;
-use crate::supervisors::torrent::TorrentNotification;
+use crate::{
+    actors::{peer::PeerExternId, tracker::Tracker},
+    errors::TorrentError,
+    metadata::Torrent,
+    supervisors::torrent::TorrentNotification,
+};
 
 #[derive(Debug)]
 pub enum TrackerStatus {
@@ -50,8 +53,10 @@ impl From<(Instant, TrackerStatus)> for TrackerState {
     }
 }
 
-use crate::metadata::{TrackerUrl, UrlHash};
-use crate::utils::Map;
+use crate::{
+    metadata::{TrackerUrl, UrlHash},
+    utils::Map,
+};
 
 #[derive(Debug)]
 pub struct TrackerSupervisor {

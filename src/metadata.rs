@@ -3,15 +3,13 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use url::Url;
 
-use std::iter::Iterator;
-use std::ops::Deref;
-use std::path::MAIN_SEPARATOR;
-use std::sync::Arc;
 use std::{
     convert::TryInto,
     hash::{Hash, Hasher},
-    path::Path,
-    path::PathBuf,
+    iter::Iterator,
+    ops::Deref,
+    path::{Path, PathBuf, MAIN_SEPARATOR},
+    sync::Arc,
 };
 
 type StackVec<T> = SmallVec<[T; 16]>;

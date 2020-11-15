@@ -4,14 +4,20 @@ mod udp;
 use async_channel::Sender;
 use async_trait::async_trait;
 
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::{
+    net::SocketAddr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
-use crate::errors::TorrentError;
-use crate::metadata::UrlHash;
-use crate::supervisors::torrent::{Result, TorrentNotification};
-use crate::supervisors::tracker::{TrackerData, TrackerStatus};
+use crate::{
+    errors::TorrentError,
+    metadata::UrlHash,
+    supervisors::{
+        torrent::{Result, TorrentNotification},
+        tracker::{TrackerData, TrackerStatus},
+    },
+};
 
 #[async_trait]
 pub trait TrackerConnection {

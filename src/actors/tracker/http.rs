@@ -1,18 +1,16 @@
 use async_trait::async_trait;
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::net::SocketAddr;
-use tokio::io::AsyncBufReadExt;
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
+use tokio::{
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+};
 use url::Url;
 
 use std::sync::Arc;
 
 use super::{TrackerConnection, TrackerData};
-use crate::errors::TorrentError;
-use crate::supervisors::torrent::Result;
+use crate::{errors::TorrentError, supervisors::torrent::Result};
 
 async fn peers_from_dict(peers: &[Peer], addrs: &mut Vec<SocketAddr>) {
     for peer in peers {

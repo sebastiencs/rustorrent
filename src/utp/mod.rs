@@ -1,7 +1,9 @@
-use std::cmp::{Ord, PartialOrd};
-use std::io::ErrorKind;
-use std::mem::MaybeUninit;
-use std::ops::{Add, AddAssign, Deref, DerefMut, Sub, SubAssign};
+use std::{
+    cmp::{Ord, PartialOrd},
+    io::ErrorKind,
+    mem::MaybeUninit,
+    ops::{Add, AddAssign, Deref, DerefMut, Sub, SubAssign},
+};
 
 pub mod stream;
 pub mod tick;
@@ -1060,9 +1062,10 @@ pub const UDP_TEREDO_MTU: usize = TEREDO_MTU - IPV6_HEADER_SIZE - UDP_HEADER_SIZ
 #[cfg(test)]
 mod tests {
     use super::listener::UtpListener;
-    use std::io::Read;
-    use std::net::SocketAddr;
-    use std::net::{IpAddr, Ipv4Addr};
+    use std::{
+        io::Read,
+        net::{IpAddr, Ipv4Addr, SocketAddr},
+    };
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn send_data() {

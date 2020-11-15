@@ -3,9 +3,11 @@ use byteorder::{BigEndian, ReadBytesExt};
 use std::net::SocketAddr;
 use tokio::net::TcpStream;
 
-use std::io::Cursor;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
-use std::time::Duration;
+use std::{
+    io::Cursor,
+    net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6},
+    time::Duration,
+};
 
 pub trait FromSlice<T> {
     fn from_slice(slice: &[T]) -> Vec<T>;

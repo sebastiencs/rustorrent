@@ -3,8 +3,7 @@ use hashbrown::HashMap;
 use std::net::SocketAddr;
 use tokio::sync::RwLock;
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use super::manager::UtpEvent;
 

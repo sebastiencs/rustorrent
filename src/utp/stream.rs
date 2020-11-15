@@ -5,9 +5,7 @@ use crate::utils::Map;
 use shared_arena::ArenaBox;
 //use super::writer::WriterUserCommand;
 
-use super::manager::UtpEvent;
-use super::{ConnectionId, Packet, SequenceNumber};
-use super::{UtpState, INIT_CWND, MSS};
+use super::{manager::UtpEvent, ConnectionId, Packet, SequenceNumber, UtpState, INIT_CWND, MSS};
 use crate::utils::FromSlice;
 
 use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU8, Ordering};

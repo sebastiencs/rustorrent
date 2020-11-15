@@ -1,6 +1,4 @@
-use crate::errors::TorrentError;
-use crate::supervisors::torrent::Result;
-use crate::utils::FromSlice;
+use crate::{errors::TorrentError, supervisors::torrent::Result, utils::FromSlice};
 
 pub enum BitFieldUpdate {
     BitField(BitField),

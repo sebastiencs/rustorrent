@@ -1,5 +1,4 @@
-use std::net::SocketAddr;
-use std::time::Duration;
+use std::{net::SocketAddr, time::Duration};
 
 use async_trait::async_trait;
 use tokio::net::UdpSocket;

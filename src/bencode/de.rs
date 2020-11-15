@@ -1,12 +1,11 @@
-use serde::de::Visitor;
-use serde::de::{DeserializeSeed, MapAccess, SeqAccess};
-use serde::forward_to_deserialize_any;
+use serde::{
+    de::{DeserializeSeed, MapAccess, SeqAccess, Visitor},
+    forward_to_deserialize_any,
+};
 
 use serde::Deserialize;
 
-use std::cell::Cell;
-use std::fmt;
-use std::sync::Arc;
+use std::{cell::Cell, fmt, sync::Arc};
 
 #[derive(Debug, PartialEq)]
 pub enum DeserializeError {
@@ -71,8 +70,7 @@ where
     Ok((res, info_hash))
 }
 
-use crate::metadata::Torrent;
-use crate::metadata::{InfoFile, MetaTorrent};
+use crate::metadata::{InfoFile, MetaTorrent, Torrent};
 
 pub fn read_meta(s: &[u8]) -> Result<Torrent> {
     let (meta, info_hash): (MetaTorrent, Vec<u8>) = from_bytes_with_hash(s)?;

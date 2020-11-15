@@ -1,5 +1,4 @@
-use crate::actors::tracker::http::HttpError;
-use crate::bencode::de::DeserializeError;
+use crate::{actors::tracker::http::HttpError, bencode::de::DeserializeError};
 
 #[derive(Debug)]
 pub enum TorrentError {

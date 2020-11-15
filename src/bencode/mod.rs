@@ -1,8 +1,7 @@
 pub mod de;
 pub mod ser;
 
-use serde::de::Visitor;
-use serde::{de as serde_de, Deserialize, Deserializer};
+use serde::{de as serde_de, de::Visitor, Deserialize, Deserializer};
 
 #[derive(Debug)]
 pub struct PtrBuf<'a> {

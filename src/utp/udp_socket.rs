@@ -1,13 +1,16 @@
 use futures::ready;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
-use tokio::io::unix::AsyncFd;
-use tokio::io::unix::AsyncFdReadyGuard;
-use tokio::net::{lookup_host, ToSocketAddrs};
+use tokio::{
+    io::unix::{AsyncFd, AsyncFdReadyGuard},
+    net::{lookup_host, ToSocketAddrs},
+};
 
-use std::io::ErrorKind;
-use std::net::SocketAddr;
-use std::os::unix::prelude::AsRawFd;
-use std::task::{Context, Poll};
+use std::{
+    io::ErrorKind,
+    net::SocketAddr,
+    os::unix::prelude::AsRawFd,
+    task::{Context, Poll},
+};
 
 use super::UtpError;
 

@@ -2,11 +2,9 @@ use async_channel::Sender;
 use crossbeam_channel::{unbounded, Receiver as SyncReceiver, Sender as SyncSender};
 use tokio::runtime::Runtime;
 
-use std::ptr::read_unaligned;
-use std::sync::Arc;
+use std::{ptr::read_unaligned, sync::Arc};
 
-use crate::pieces::PieceBuffer;
-use crate::supervisors::torrent::TorrentNotification;
+use crate::{pieces::PieceBuffer, supervisors::torrent::TorrentNotification};
 
 pub enum Sha1Task {
     CheckSum {

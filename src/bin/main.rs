@@ -7,9 +7,7 @@
 
 use std::io::{self, Read};
 
-use rustorrent::bencode::de;
-use rustorrent::session::Session;
-use rustorrent::utp;
+use rustorrent::{bencode::de, session::Session, utp};
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 

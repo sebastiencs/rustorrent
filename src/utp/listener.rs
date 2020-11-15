@@ -1,27 +1,25 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use async_channel::unbounded;
-use async_channel::Receiver;
-use async_channel::TrySendError;
-use async_channel::{bounded, Sender};
-use tokio::net::ToSocketAddrs;
-use tokio::sync::Mutex;
-use tokio::task;
+use async_channel::{bounded, unbounded, Receiver, Sender, TrySendError};
+use tokio::{net::ToSocketAddrs, sync::Mutex, task};
 // use tokio::{net::UdpSocket, sync::RwLock, task};
 use futures::future;
 use hashbrown::HashMap;
 use shared_arena::SharedArena;
-use std::task::{Context, Poll};
-use tokio::io::{Error, ErrorKind};
-use tokio::sync::oneshot;
+use std::task::Context;
+use tokio::{
+    io::{Error, ErrorKind},
+    sync::oneshot,
+};
 
 use super::udp_socket::MyUdpSocket as UdpSocket;
 
-use super::manager::{UtpEvent, UtpManager};
-use super::udp_socket::MmsgBuffer;
 use super::{
-    stream::State, stream::UtpStream, tick::Tick, Packet, PacketType, Result, Timestamp, UtpState,
-    HEADER_SIZE, PACKET_MAX_SIZE,
+    manager::{UtpEvent, UtpManager},
+    stream::{State, UtpStream},
+    tick::Tick,
+    udp_socket::MmsgBuffer,
+    Packet, PacketType, Result, Timestamp, UtpState, HEADER_SIZE, PACKET_MAX_SIZE,
 };
 
 const BUFFER_CAPACITY: usize = 1500;

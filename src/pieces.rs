@@ -1,5 +1,4 @@
-use crate::actors::peer::PeerTask;
-use crate::metadata::Torrent;
+use crate::{actors::peer::PeerTask, metadata::Torrent};
 use smallvec::{smallvec, SmallVec};
 
 use std::sync::Arc;

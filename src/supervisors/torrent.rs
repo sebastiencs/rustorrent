@@ -5,14 +5,18 @@ use std::sync::Arc;
 
 use std::net::SocketAddr;
 
-use crate::actors::peer::{Peer, PeerCommand, PeerExternId, PeerId, PeerTask};
-use crate::actors::sha1::Sha1Task;
-use crate::bitfield::{BitField, BitFieldUpdate};
-use crate::errors::TorrentError;
-use crate::metadata::Torrent;
-use crate::pieces::{PieceBuffer, PieceInfo, PieceToDownload, Pieces};
-use crate::supervisors::tracker::TrackerSupervisor;
-use crate::utils::Map;
+use crate::{
+    actors::{
+        peer::{Peer, PeerCommand, PeerExternId, PeerId, PeerTask},
+        sha1::Sha1Task,
+    },
+    bitfield::{BitField, BitFieldUpdate},
+    errors::TorrentError,
+    metadata::Torrent,
+    pieces::{PieceBuffer, PieceInfo, PieceToDownload, Pieces},
+    supervisors::tracker::TrackerSupervisor,
+    utils::Map,
+};
 
 struct PeerState {
     socket: SocketAddr,
