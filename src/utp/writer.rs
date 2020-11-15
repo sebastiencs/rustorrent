@@ -1,12 +1,13 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use tokio::net::UdpSocket;
+// use tokio::net::UdpSocket;
 use async_channel::Receiver;
 use shared_arena::{SharedArena, ArenaBox};
-use futures::{pin_mut, FutureExt, future};
+use futures::{pin_mut, future, Future};
 use futures::task::{Context, Poll};
 
+use super::udp_socket::MyUdpSocket as UdpSocket;
 use super::{Packet, PacketType, UtpError, Result, UDP_IPV4_MTU, HEADER_SIZE, UDP_IPV6_MTU};
 use super::stream::State;
 
@@ -62,16 +63,16 @@ impl UtpWriter {
     async fn poll(&self) -> Result<WriterCommand> {
         let user_cmd = self.user_command.recv();
         let cmd = self.command.recv();
-        pin_mut!(user_cmd); // Pin on the stack
-        pin_mut!(cmd); // Pin on the stack
+        pin_mut!(user_cmd, cmd); // Pin on the stack
+        // pin_mut!(cmd); // Pin on the stack
 
-        let fun = |cx: &mut Context<'_>| {
-            match FutureExt::poll_unpin(&mut cmd, cx) {
+        let fun = |cx: &mut Context| {
+            match cmd.as_mut().poll(cx) {
                 v @ Poll::Ready(_) => return v,
                 _ => {}
             }
 
-            match FutureExt::poll_unpin(&mut user_cmd, cx).map(|cmd| {
+            match user_cmd.as_mut().poll(cx).map(|cmd| {
                 cmd.map(|c| WriterCommand::WriteData { data: c.data })
             }) {
                 v @ Poll::Ready(_) => v,
@@ -167,7 +168,7 @@ impl UtpWriter {
             }
         }
 
-        println!("RESENT: {:?}", resent);
+        // println!("RESENT: {:?}", resent);
         Ok(())
     }
 

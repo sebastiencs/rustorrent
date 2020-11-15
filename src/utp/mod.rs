@@ -6,9 +6,10 @@ use std::mem::MaybeUninit;
 
 pub mod stream;
 pub mod tick;
-pub mod writer;
+//pub mod writer;
 pub mod listener;
 pub mod manager;
+pub mod udp_socket;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum UtpState {
@@ -189,7 +190,7 @@ impl Timestamp {
 
     pub fn elapsed_millis(self, now: Timestamp) -> u32 {
         //let now = Timestamp::now().0 / 1000;
-        (now.0 / 1000) - (self.0 / 1000)
+        (now.0 / 1000).saturating_sub(self.0 / 1000)
     }
 
     // pub fn elapsed_millis(self) -> u32 {
@@ -385,8 +386,11 @@ pub enum UtpError {
     FamillyMismatch,
     PacketLost,
     MustClose,
+    PacketNotSent,
     IO(std::io::Error),
     RecvError(async_channel::RecvError),
+    RecvClosed,
+    SendWouldBlock,
 }
 
 impl UtpError {
@@ -1046,14 +1050,22 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr};
     use std::io::Read;
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn send_data() {
+        // let file = "/home/sebastien/Downloads/Escape.Plan.2013.1080p.BluRay.x265-RARBG-[rarbg.to].torrent";
         let file = "/home/sebastien/Downloads/Fedora-Cinnamon-Live-x86_64-32-1.6.iso";
         let buffer = std::fs::read(file).unwrap();
 
-        let listener = UtpListener::new(10001).await.unwrap();
-        let stream = listener.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
+        println!("buffer length={}", buffer.len());
+
+        let start = std::time::Instant::now();
+
+        let listener = UtpListener::bind(std::net::SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 10001)).await;
+        let stream = listener.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 0, 144)), 7000)).await.unwrap();
+        // let stream = listener.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
         stream.write(&buffer).await;
         stream.wait_for_termination().await;
+
+        println!("Sent in {:?}", start.elapsed());
     }
 }

@@ -1,56 +1,43 @@
 
-use async_channel::Sender;
+use async_channel::{Sender, Receiver, TrySendError};
 use tokio::sync::RwLock;
 use std::net::SocketAddr;
 use hashbrown::HashMap;
 
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
 use super::manager::UtpEvent;
 
 pub struct Tick {
-    streams: Arc<RwLock<HashMap<SocketAddr, Sender<UtpEvent>>>>,
+    streams: Vec<Sender<UtpEvent>>,
+    recv: Receiver<Sender<UtpEvent>>
+    // streams: Arc<RwLock<HashMap<SocketAddr, Sender<UtpEvent>>>>,
 }
 
 impl Tick {
-    pub fn new(streams: Arc<RwLock<HashMap<SocketAddr, Sender<UtpEvent>>>>) -> Self {
-        Self { streams }
+    pub fn new(recv: Receiver<Sender<UtpEvent>>) -> Self {
+        Self { streams: vec![], recv }
     }
 
-    pub fn start(self) {
-        tokio::spawn(async {
-            self.main_loop().await;
-        });
+    pub async fn start(self) {
+        self.main_loop().await;
     }
 
-    async fn main_loop(self) {
+    async fn main_loop(mut self) {
         loop {
+            while let Ok(sender) = self.recv.try_recv() {
+                self.streams.push(sender);
+            }
+
             tokio::time::sleep(Duration::from_millis(500)).await;
 
-            let streams = Arc::clone(&self.streams);
-            Self::send_tick(streams).await;
+            self.streams.retain(|s| {
+                match s.try_send(UtpEvent::Timeout) {
+                    Err(TrySendError::Closed(_)) => false,
+                    _ => true
+                }
+            });
         }
     }
-
-    async fn send_tick(streams: Arc<RwLock<HashMap<SocketAddr, Sender<UtpEvent>>>>) {
-        let streams = streams.read().await;
-        for addr in streams.values() {
-            // Tick it only when it's not too busy
-            if !addr.is_full() {
-                addr.send(UtpEvent::Tick).await;
-            } else {
-                println!("ADDR FULL !", );
-            }
-        }
-    }
-
-    // async fn send_tick(streams: Arc<RwLock<HashMap<SocketAddr, Sender<UtpEvent>>>>) {
-    //     let streams = streams.read().await;
-    //     for addr in streams.values().filter(|p| !p.is_full()) {
-    //         // Tick it only when it's not too busy
-    //         addr.send(UtpEvent::Tick).await;
-    //     }
-    // }
 }

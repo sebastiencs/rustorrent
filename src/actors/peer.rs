@@ -380,7 +380,7 @@ impl Peer {
         mut cmds: Pin<&mut Fuse<impl Future<Output = std::result::Result<PeerCommand, async_channel::RecvError>>>>
     ) -> PeerWaitEvent {
         // use futures::async_await::*;
-        use futures::task::{Context, Poll};
+        use futures::task::Poll;
         use futures::{future, pin_mut};
 
         let msgs = self.read_messages();
@@ -390,19 +390,17 @@ impl Peer {
         // assert_unpin(&cmds);
         // assert_fused_future();
 
-        let fun = |cx: &mut Context<'_>| {
-            match FutureExt::poll_unpin(&mut msgs, cx).map(PeerWaitEvent::Peer) {
+        future::poll_fn(|cx| {
+            match msgs.as_mut().poll(cx).map(PeerWaitEvent::Peer) {
                 v @ Poll::Ready(_) => return v,
                 _ => {}
             }
 
-            match FutureExt::poll_unpin(&mut cmds, cx).map(|v| v.ok()).map(PeerWaitEvent::Supervisor) {
+            match cmds.as_mut().poll(cx).map(|v| v.ok()).map(PeerWaitEvent::Supervisor) {
                 v @ Poll::Ready(_) => v,
                 _ => Poll::Pending
             }
-        };
-
-        future::poll_fn(fun).await
+        }).await
     }
 
     pub async fn start(&mut self) -> Result<()> {

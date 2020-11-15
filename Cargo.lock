@@ -547,6 +547,7 @@ dependencies = [
  "shared_arena",
  "slab",
  "smallvec",
+ "socket2",
  "static_assertions",
  "tokio",
  "tokio-test",

@@ -62,7 +62,8 @@ async-trait = "0.1"
 rand = "0.7"
 ahash = { version = "0.5", default-features = false }
 
-libc = { version = "0.2", default-features = false }
+libc = { version = "0.2", features = ["extra_traits"] }
+# libc = { version = "0.2", default-features = false }
 
 futures =  { version = "0.3", default-features = false }
 #futures = "0.3"
@@ -77,7 +78,9 @@ fixed = { version = "1", default-features = false }
 crossbeam-epoch = { version = "0.9", default-features = false }
 
 tokio = { version = "0.3", features = ["full"] }
+# async-channel = { path = "/home/sebastien/github/async-channel" }
 async-channel = "1.5"
+socket2 = "0.3"
 
 # TODO: Make it optional
 # packed_simd = { version = "0.3.3" }

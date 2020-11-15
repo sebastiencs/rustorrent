@@ -4,8 +4,9 @@ use tokio::sync::RwLock;
 
 use crate::utils::Map;
 use shared_arena::ArenaBox;
-use super::writer::WriterUserCommand;
+//use super::writer::WriterUserCommand;
 
+use super::manager::UtpEvent;
 use super::{
     SequenceNumber, Packet,
     ConnectionId,
@@ -17,6 +18,17 @@ use super::{
 use crate::utils::FromSlice;
 
 use std::sync::atomic::{AtomicU8, AtomicU16, AtomicU32, Ordering};
+
+// pub struct WriterUserCommand {
+//     pub(super) data: Vec<u8>
+// }
+
+// impl std::fmt::Debug for WriterUserCommand {
+//     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+//         f.debug_struct("WriterUserCommand")
+//          .finish()
+//     }
+// }
 
 #[derive(Debug)]
 pub(super) struct State {
@@ -30,43 +42,48 @@ pub(super) struct State {
     pub(super) in_flight: AtomicU32,
 
     /// Packets sent but we didn't receive an ack for them
-    pub(super) inflight_packets: RwLock<Map<SequenceNumber, ArenaBox<Packet>>>,
+    pub(super) inflight_packets: Map<SequenceNumber, ArenaBox<Packet>>,
 }
 
 impl State {
-    pub(super) async fn add_packet_inflight(&self, seq_num: SequenceNumber, packet: ArenaBox<Packet>) {
+    pub(super) fn add_packet_inflight(&mut self, seq_num: SequenceNumber, packet: ArenaBox<Packet>) {
         let size = packet.size();
 
-        {
-            let mut inflight_packets = self.inflight_packets.write().await;
-            inflight_packets.insert(seq_num, packet);
-        }
+        self.inflight_packets.insert(seq_num, packet);
+        // {
+        //     let mut inflight_packets = self.inflight_packets.write().await;
+        //     inflight_packets.insert(seq_num, packet);
+        // }
 
         self.in_flight.fetch_add(size as u32, Ordering::AcqRel);
     }
 
-    pub(super) async fn remove_packets(&self, ack_number: SequenceNumber) -> usize {
+    pub(super) fn remove_packets(&mut self, ack_number: SequenceNumber) -> usize {
         let mut size = 0;
 
-        {
-            let mut inflight_packets = self.inflight_packets.write().await;
-            inflight_packets
-                .retain(|_, p| {
-                    !p.is_seq_less_equal(ack_number) || (false, size += p.size()).0
-                });
-        }
+        self.inflight_packets
+            .retain(|_, p| {
+                !p.is_seq_less_equal(ack_number) || (false, size += p.size()).0
+            });
+
+        // {
+        //     let mut inflight_packets = self.inflight_packets.write().await;
+        //     inflight_packets
+        //         .retain(|_, p| {
+        //             !p.is_seq_less_equal(ack_number) || (false, size += p.size()).0
+        //         });
+        // }
 
         self.in_flight.fetch_sub(size as u32, Ordering::AcqRel);
         size
     }
 
-    pub(super) async fn remove_packet(&self, ack_number: SequenceNumber) -> usize {
+    pub(super) fn remove_packet(&mut self, ack_number: SequenceNumber) -> usize {
         let size = {
-            let mut inflight_packets = self.inflight_packets.write().await;
-
-            inflight_packets.remove(&ack_number)
-                            .map(|p| p.size())
-                            .unwrap_or(0)
+            self.inflight_packets
+                .remove(&ack_number)
+                .map(|p| p.size())
+                .unwrap_or(0)
         };
 
         self.in_flight.fetch_sub(size as u32, Ordering::AcqRel);
@@ -152,6 +169,7 @@ impl Default for State {
     }
 }
 
+#[derive(Debug)]
 pub(super) enum ReceivedData {
     Packet { },
     Done
@@ -161,7 +179,7 @@ pub(super) enum ReceivedData {
 pub struct UtpStream {
     // reader_command: Sender<ReaderCommand>,
     pub(super) receive: Receiver<ReceivedData>,
-    pub(super) writer_user_command: Sender<WriterUserCommand>,
+    pub(super) writer_user_command: Sender<UtpEvent>,
 }
 
 impl UtpStream {
@@ -174,8 +192,8 @@ impl UtpStream {
     }
 
     pub async fn write(&self, data: &[u8]) {
-        let data = Vec::from_slice(data);
-        self.writer_user_command.send(WriterUserCommand { data }).await;
+        let data = Vec::from_slice(data).into_boxed_slice();
+        self.writer_user_command.send(UtpEvent::UserWrite { data }).await.unwrap();
     }
 
     pub async fn wait_for_termination(&self) {
