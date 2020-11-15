@@ -1,8 +1,7 @@
-
-use std::cmp::{PartialOrd, Ord};
+use std::cmp::{Ord, PartialOrd};
 use std::io::ErrorKind;
-use std::ops::{Deref, DerefMut, Add, Sub, AddAssign, SubAssign};
 use std::mem::MaybeUninit;
+use std::ops::{Add, AddAssign, Deref, DerefMut, Sub, SubAssign};
 
 pub mod stream;
 pub mod tick;
@@ -14,35 +13,34 @@ pub mod udp_socket;
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum UtpState {
     /// not yet connected
-	None,
-	/// sent a syn packet, not received any acks
-	SynSent,
-	/// syn-ack received and in normal operation
-	/// of sending and receiving data
-	Connected,
-	/// fin sent, but all packets up to the fin packet
-	/// have not yet been acked. We might still be waiting
-	/// for a FIN from the other end
-	FinSent,
+    None,
+    /// sent a syn packet, not received any acks
+    SynSent,
+    /// syn-ack received and in normal operation
+    /// of sending and receiving data
+    Connected,
+    /// fin sent, but all packets up to the fin packet
+    /// have not yet been acked. We might still be waiting
+    /// for a FIN from the other end
+    FinSent,
     ///
-    MustConnect
-	// /// ====== states beyond this point =====
-	// /// === are considered closing states ===
-	// /// === and will cause the socket to ====
-	// /// ============ be deleted =============
-	// /// the socket has been gracefully disconnected
-	// /// and is waiting for the client to make a
-	// /// socket call so that we can communicate this
-	// /// fact and actually delete all the state, or
-	// /// there is an error on this socket and we're
-	// /// waiting to communicate this to the client in
-	// /// a callback. The error in either case is stored
-	// /// in m_error. If the socket has gracefully shut
-	// /// down, the error is error::eof.
-	// ErrorWait,
-	// /// there are no more references to this socket
-	// /// and we can delete it
-	// Delete
+    MustConnect, // /// ====== states beyond this point =====
+                 // /// === are considered closing states ===
+                 // /// === and will cause the socket to ====
+                 // /// ============ be deleted =============
+                 // /// the socket has been gracefully disconnected
+                 // /// and is waiting for the client to make a
+                 // /// socket call so that we can communicate this
+                 // /// fact and actually delete all the state, or
+                 // /// there is an error on this socket and we're
+                 // /// waiting to communicate this to the client in
+                 // /// a callback. The error in either case is stored
+                 // /// in m_error. If the socket has gracefully shut
+                 // /// down, the error is error::eof.
+                 // ErrorWait,
+                 // /// there are no more references to this socket
+                 // /// and we can delete it
+                 // Delete
 }
 
 impl From<u8> for UtpState {
@@ -53,7 +51,7 @@ impl From<u8> for UtpState {
             2 => UtpState::Connected,
             3 => UtpState::FinSent,
             4 => UtpState::MustConnect,
-            _ => unreachable!()
+            _ => unreachable!(),
         }
     }
 }
@@ -105,20 +103,20 @@ impl SequenceNumber {
     /// We can't implement PartialOrd because it doesn't satisfy
     /// antisymmetry
     pub fn cmp_less(self, other: SequenceNumber) -> bool {
-	    let dist_down = self - other;
-	    let dist_up = other - self;
+        let dist_down = self - other;
+        let dist_up = other - self;
 
-	    dist_up.0 < dist_down.0
+        dist_up.0 < dist_down.0
     }
 
     /// Compare self with other, with consideration to wrapping.
     /// We can't implement PartialOrd because it doesn't satisfy
     /// antisymmetry
     pub fn cmp_less_equal(self, other: SequenceNumber) -> bool {
-	    let dist_down = self - other;
-	    let dist_up = other - self;
+        let dist_down = self - other;
+        let dist_up = other - self;
 
-	    dist_up.0 <= dist_down.0
+        dist_up.0 <= dist_down.0
     }
 }
 
@@ -252,11 +250,11 @@ impl Delay {
     // /// We can't implement PartialOrd because it doesn't satisfy
     // /// antisymmetry
     // pub fn cmp_less(self, other: Delay) -> bool {
-	//     let dist_down = self - other;
-	//     let dist_up = other - self;
+    //     let dist_down = self - other;
+    //     let dist_up = other - self;
 
     //     println!("DIST_DOWN {:?} DIST_UP {:?}", dist_down, dist_up);
-	//     dist_up.0 < dist_down.0
+    //     dist_up.0 < dist_down.0
     // }
 
     pub fn is_zero(self) -> bool {
@@ -290,7 +288,7 @@ impl Into<u32> for Delay {
     }
 }
 
-use std::time::{Instant, Duration};
+use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 struct DelayHistory {
@@ -341,8 +339,9 @@ impl DelayHistory {
         let value = delay - self.lowest;
         self.save_relative(value);
 
-        if self.ndelays > 120 &&
-            self.next_index_time
+        if self.ndelays > 120
+            && self
+                .next_index_time
                 .checked_duration_since(Instant::now())
                 .is_some()
         {
@@ -396,11 +395,12 @@ pub enum UtpError {
 impl UtpError {
     pub fn should_continue(&self) -> bool {
         match self {
-            UtpError::IO(ref e) if e.kind() == ErrorKind::TimedOut
-                || e.kind() == ErrorKind::WouldBlock => {
+            UtpError::IO(ref e)
+                if e.kind() == ErrorKind::TimedOut || e.kind() == ErrorKind::WouldBlock =>
+            {
                 true
             }
-            _ => false
+            _ => false,
         }
     }
 }
@@ -546,7 +546,7 @@ impl Header {
     fn check_version(&self) -> Result<()> {
         match self.type_version & 0x0F {
             1 => Ok(()),
-            _ => Err(UtpError::WrongVersion)
+            _ => Err(UtpError::WrongVersion),
         }
     }
 
@@ -635,16 +635,16 @@ impl Default for Header {
 impl std::fmt::Debug for Header {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("Header")
-         .field("type", &self.get_type())
-         .field("version", &self.get_version())
-         // .field("extension", &self.get_extension_type())
-         .field("connection_id", &self.get_connection_id())
-         .field("timestamp", &self.get_timestamp())
-         .field("timestamp_difference", &self.get_timestamp_diff())
-         .field("window_size", &self.get_window_size())
-         .field("seq_number", &self.get_seq_number())
-         .field("ack_number", &self.get_ack_number())
-         .finish()
+            .field("type", &self.get_type())
+            .field("version", &self.get_version())
+            // .field("extension", &self.get_extension_type())
+            .field("connection_id", &self.get_connection_id())
+            .field("timestamp", &self.get_timestamp())
+            .field("timestamp_difference", &self.get_timestamp_diff())
+            .field("window_size", &self.get_window_size())
+            .field("seq_number", &self.get_seq_number())
+            .field("ack_number", &self.get_ack_number())
+            .finish()
     }
 }
 
@@ -689,7 +689,7 @@ const PAYLOAD_SIZE: usize = 1500;
 #[repr(C, packed)]
 struct Payload {
     data: [u8; PAYLOAD_SIZE],
-    len: usize
+    len: usize,
 }
 
 impl Payload {
@@ -705,7 +705,7 @@ impl Payload {
         payload[..data_len].copy_from_slice(data);
         Payload {
             data: payload,
-            len: data_len
+            len: data_len,
         }
     }
 
@@ -715,7 +715,7 @@ impl Payload {
 }
 
 pub struct PacketPool {
-    pool: Vec<Packet>
+    pool: Vec<Packet>,
 }
 
 const PACKET_MAX_SIZE: usize = HEADER_SIZE + PAYLOAD_SIZE;
@@ -738,9 +738,9 @@ impl std::fmt::Debug for Packet {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let seq_number = self.seq_number;
         f.debug_struct("Packet")
-         .field("seq_nr", &seq_number)
-         .field("header", &self.header)
-         .finish()
+            .field("seq_nr", &seq_number)
+            .field("header", &self.header)
+            .finish()
     }
 }
 
@@ -765,7 +765,7 @@ impl Packet {
         let place = unsafe { &mut *place.as_mut_ptr() };
 
         place.header = Header::default();
-        Payload::new_in_place(&mut place.payload,  data);
+        Payload::new_in_place(&mut place.payload, data);
         // Fill rest of Packet with non-uninitialized data
         // Ensure that we don't invoke any Drop here
         place.seq_number = SequenceNumber::zero();
@@ -777,8 +777,12 @@ impl Packet {
         place
     }
 
-//    pub fn from_incoming_in_place(place: &mut Packet, data: &[u8], timestamp: Timestamp) {
-    pub fn from_incoming_in_place<'a>(place: &'a mut MaybeUninit<Packet>, data: &[u8], timestamp: Timestamp) -> &'a Packet {
+    //    pub fn from_incoming_in_place(place: &mut Packet, data: &[u8], timestamp: Timestamp) {
+    pub fn from_incoming_in_place<'a>(
+        place: &'a mut MaybeUninit<Packet>,
+        data: &[u8],
+        timestamp: Timestamp,
+    ) -> &'a Packet {
         //let slice = unsafe { &mut *(place as *mut Packet as *mut [u8; PACKET_MAX_SIZE]) };
         let slice = unsafe { &mut *(place.as_mut_ptr() as *mut [u8; PACKET_MAX_SIZE]) };
         let data_len = data.len();
@@ -877,7 +881,8 @@ impl Packet {
     }
 
     pub fn as_bytes(&self) -> &[u8] {
-        let slice = unsafe { &*(self as *const Packet as *const [u8; std::mem::size_of::<Packet>()]) };
+        let slice =
+            unsafe { &*(self as *const Packet as *const [u8; std::mem::size_of::<Packet>()]) };
         &slice[..std::mem::size_of::<Header>() + self.payload.len]
     }
 
@@ -893,7 +898,7 @@ impl Packet {
 pub enum ExtensionType {
     SelectiveAck,
     None,
-    Unknown
+    Unknown,
 }
 
 impl From<u8> for ExtensionType {
@@ -901,7 +906,7 @@ impl From<u8> for ExtensionType {
         match byte {
             0 => ExtensionType::None,
             1 => ExtensionType::SelectiveAck,
-            _ => ExtensionType::Unknown
+            _ => ExtensionType::Unknown,
         }
     }
 }
@@ -926,7 +931,7 @@ impl SelectiveAck<'_> {
 
 pub enum SelectiveAckBit {
     Acked(SequenceNumber),
-    Missing(SequenceNumber)
+    Missing(SequenceNumber),
 }
 
 impl Iterator for SelectiveAck<'_> {
@@ -941,10 +946,7 @@ impl Iterator for SelectiveAck<'_> {
         let byte = *self.bitfield.get(self.byte_index)?;
         let bit = byte & (1 << self.bit_index);
 
-        let ack_number = self.ack_number
-            + self.byte_index as u16 * 8
-            + self.bit_index as u16
-            + 2;
+        let ack_number = self.ack_number + self.byte_index as u16 * 8 + self.bit_index as u16 + 2;
 
         if self.bit_index == 7 {
             self.byte_index += 1;
@@ -976,7 +978,11 @@ impl<'a> ExtensionIterator<'a> {
         // for byte in &packet.packet_ref.payload.data[..packet.len - HEADER_SIZE] {
         //     //println!("BYTE {:x}", byte);
         // }
-        ExtensionIterator { current_type, slice, ack_number }
+        ExtensionIterator {
+            current_type,
+            slice,
+            ack_number,
+        }
     }
 }
 
@@ -1001,7 +1007,7 @@ impl<'a> Iterator for ExtensionIterator<'a> {
                         byte_index: 0,
                         bit_index: 0,
                         ack_number: self.ack_number,
-                        first: true
+                        first: true,
                     });
                 }
                 _ => {
@@ -1033,22 +1039,30 @@ pub const UDP_IPV4_OVERHEAD: usize = IPV4_HEADER_SIZE + UDP_HEADER_SIZE;
 pub const UDP_IPV6_OVERHEAD: usize = IPV6_HEADER_SIZE + UDP_HEADER_SIZE;
 pub const UDP_TEREDO_OVERHEAD: usize = UDP_IPV4_OVERHEAD + UDP_IPV6_OVERHEAD;
 
-pub const UDP_IPV4_MTU: usize =
-    ETHERNET_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE - GRE_HEADER_SIZE
-     - PPPOE_HEADER_SIZE - MPPE_HEADER_SIZE - FUDGE_HEADER_SIZE;
+pub const UDP_IPV4_MTU: usize = ETHERNET_MTU
+    - IPV4_HEADER_SIZE
+    - UDP_HEADER_SIZE
+    - GRE_HEADER_SIZE
+    - PPPOE_HEADER_SIZE
+    - MPPE_HEADER_SIZE
+    - FUDGE_HEADER_SIZE;
 
-pub const UDP_IPV6_MTU: usize =
-    ETHERNET_MTU - IPV6_HEADER_SIZE - UDP_HEADER_SIZE - GRE_HEADER_SIZE
-     - PPPOE_HEADER_SIZE - MPPE_HEADER_SIZE - FUDGE_HEADER_SIZE;
+pub const UDP_IPV6_MTU: usize = ETHERNET_MTU
+    - IPV6_HEADER_SIZE
+    - UDP_HEADER_SIZE
+    - GRE_HEADER_SIZE
+    - PPPOE_HEADER_SIZE
+    - MPPE_HEADER_SIZE
+    - FUDGE_HEADER_SIZE;
 
 pub const UDP_TEREDO_MTU: usize = TEREDO_MTU - IPV6_HEADER_SIZE - UDP_HEADER_SIZE;
 
 #[cfg(test)]
 mod tests {
     use super::listener::UtpListener;
+    use std::io::Read;
     use std::net::SocketAddr;
     use std::net::{IpAddr, Ipv4Addr};
-    use std::io::Read;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn send_data() {
@@ -1060,8 +1074,18 @@ mod tests {
 
         let start = std::time::Instant::now();
 
-        let listener = UtpListener::bind(std::net::SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 10001)).await;
-        let stream = listener.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 0, 144)), 7000)).await.unwrap();
+        let listener = UtpListener::bind(std::net::SocketAddrV4::new(
+            Ipv4Addr::new(0, 0, 0, 0),
+            10001,
+        ))
+        .await;
+        let stream = listener
+            .connect(SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::new(192, 168, 0, 144)),
+                7000,
+            ))
+            .await
+            .unwrap();
         // let stream = listener.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
         stream.write(&buffer).await;
         stream.wait_for_termination().await;

@@ -1,10 +1,10 @@
-use crate::utils::FromSlice;
 use crate::errors::TorrentError;
 use crate::supervisors::torrent::Result;
+use crate::utils::FromSlice;
 
 pub enum BitFieldUpdate {
     BitField(BitField),
-    Piece(usize)
+    Piece(usize),
 }
 
 impl From<u32> for BitFieldUpdate {
@@ -22,7 +22,7 @@ impl From<BitField> for BitFieldUpdate {
 #[derive(Debug)]
 pub struct BitField {
     inner: Vec<u8>,
-    nbits: usize
+    nbits: usize,
 }
 
 impl BitField {
@@ -30,14 +30,14 @@ impl BitField {
     pub fn empty() -> BitField {
         BitField {
             inner: Vec::new(),
-            nbits: 0
+            nbits: 0,
         }
     }
 
     pub fn new(nbits: usize) -> BitField {
         BitField {
             inner: vec![0; nbits],
-            nbits
+            nbits,
         }
     }
 
@@ -45,7 +45,7 @@ impl BitField {
         if nbits < bitfield.len() * 8 {
             Ok(BitField {
                 inner: Vec::from_slice(bitfield),
-                nbits
+                nbits,
             })
         } else {
             Err(TorrentError::InvalidInput)
@@ -68,7 +68,7 @@ impl BitField {
             let slice_index = index / 8;
             let bit_index = index % 8;
 
-            self.inner[slice_index] |= & (1 << (7 - bit_index));
+            self.inner[slice_index] |= &(1 << (7 - bit_index));
         }
     }
 

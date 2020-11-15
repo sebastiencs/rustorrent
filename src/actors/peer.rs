@@ -1,25 +1,25 @@
-use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use futures::Future;
-use futures::future::{Fuse, FutureExt};
-use tokio::net::TcpStream;
-use tokio::io::BufReader;
 use async_channel::{bounded, Sender};
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use coarsetime::Instant;
+use futures::future::{Fuse, FutureExt};
+use futures::Future;
+use tokio::io::BufReader;
+use tokio::net::TcpStream;
 
-use std::pin::Pin;
+use std::convert::TryFrom;
+use std::convert::TryInto;
 use std::io::{Cursor, Write};
+use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::convert::TryFrom;
-use std::net::SocketAddr;
-use std::convert::TryInto;
 
 use crate::bitfield::BitFieldUpdate;
-use crate::utils::Map;
-use crate::pieces::{Pieces, PieceToDownload, PieceBuffer};
-use crate::supervisors::torrent::{TorrentNotification, Result};
 use crate::errors::TorrentError;
-use crate::extensions::{ExtendedMessage, ExtendedHandshake, PEXMessage};
+use crate::extensions::{ExtendedHandshake, ExtendedMessage, PEXMessage};
+use crate::pieces::{PieceBuffer, PieceToDownload, Pieces};
+use crate::supervisors::torrent::{Result, TorrentNotification};
+use crate::utils::Map;
 
 static PEER_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -33,7 +33,7 @@ enum MessagePeer<'a> {
     Interested,
     NotInterested,
     Have {
-        piece_index: u32
+        piece_index: u32,
     },
     BitField(&'a [u8]),
     Request {
@@ -55,8 +55,8 @@ enum MessagePeer<'a> {
     Extension(ExtendedMessage<'a>),
     Unknown {
         id: u8,
-        buffer: &'a [u8]
-    }
+        buffer: &'a [u8],
+    },
 }
 
 impl<'a> TryFrom<&'a [u8]> for MessagePeer<'a> {
@@ -79,16 +79,18 @@ impl<'a> TryFrom<&'a [u8]> for MessagePeer<'a> {
 
                 MessagePeer::Have { piece_index }
             }
-            5 => {
-                MessagePeer::BitField(buffer)
-            }
+            5 => MessagePeer::BitField(buffer),
             6 => {
                 let mut cursor = Cursor::new(buffer);
                 let index = cursor.read_u32::<BigEndian>()?;
                 let begin = cursor.read_u32::<BigEndian>()?;
                 let length = cursor.read_u32::<BigEndian>()?;
 
-                MessagePeer::Request { index, begin, length }
+                MessagePeer::Request {
+                    index,
+                    begin,
+                    length,
+                }
             }
             7 => {
                 let mut cursor = Cursor::new(buffer);
@@ -96,7 +98,11 @@ impl<'a> TryFrom<&'a [u8]> for MessagePeer<'a> {
                 let begin = cursor.read_u32::<BigEndian>()?;
                 let block = &buffer[8..];
 
-                MessagePeer::Piece { index, begin, block }
+                MessagePeer::Piece {
+                    index,
+                    begin,
+                    block,
+                }
             }
             8 => {
                 let mut cursor = Cursor::new(buffer);
@@ -104,7 +110,11 @@ impl<'a> TryFrom<&'a [u8]> for MessagePeer<'a> {
                 let begin = cursor.read_u32::<BigEndian>()?;
                 let length = cursor.read_u32::<BigEndian>()?;
 
-                MessagePeer::Cancel { index, begin, length }
+                MessagePeer::Cancel {
+                    index,
+                    begin,
+                    length,
+                }
             }
             9 => {
                 let mut cursor = Cursor::new(buffer);
@@ -121,15 +131,13 @@ impl<'a> TryFrom<&'a [u8]> for MessagePeer<'a> {
                         let handshake = crate::bencode::de::from_bytes(&buffer[1..])?;
                         MessagePeer::Extension(ExtendedMessage::Handshake(handshake))
                     }
-                    _ => {
-                        MessagePeer::Extension(ExtendedMessage::Message {
-                            id,
-                            buffer: &buffer[1..]
-                        })
-                    }
+                    _ => MessagePeer::Extension(ExtendedMessage::Message {
+                        id,
+                        buffer: &buffer[1..],
+                    }),
                 }
             }
-            id => MessagePeer::Unknown { id, buffer }
+            id => MessagePeer::Unknown { id, buffer },
         })
     }
 }
@@ -137,7 +145,7 @@ impl<'a> TryFrom<&'a [u8]> for MessagePeer<'a> {
 #[derive(Debug, PartialEq, Eq)]
 enum Choke {
     UnChoked,
-    Choked
+    Choked,
 }
 
 use std::collections::VecDeque;
@@ -147,7 +155,7 @@ pub type PeerTask = Arc<tokio::sync::RwLock<VecDeque<PieceToDownload>>>;
 #[derive(Debug)]
 pub enum PeerCommand {
     TasksAvailables,
-    Die
+    Die,
 }
 
 enum PeerWaitEvent {
@@ -180,8 +188,8 @@ impl PeerExternId {
     }
 
     pub fn generate() -> PeerExternId {
-        use rand::Rng;
         use rand::distributions::Alphanumeric;
+        use rand::Rng;
 
         // TODO: Improve this
 
@@ -194,9 +202,10 @@ impl PeerExternId {
 
         let s = format!("-RR{:04}-{}", VERSION, random);
 
-        let id = s.as_bytes()
-                  .try_into()
-                  .expect("PeerExternId are 20 bytes long");
+        let id = s
+            .as_bytes()
+            .try_into()
+            .expect("PeerExternId are 20 bytes long");
 
         PeerExternId(id)
     }
@@ -245,12 +254,12 @@ pub struct Peer {
 
     pieces_detail: Pieces,
 
-    nblocks: usize, // Downloaded
+    nblocks: usize,         // Downloaded
     start: Option<Instant>, // Downloaded,
 
     peer_detail: PeerDetail,
 
-    extern_id: Arc<PeerExternId>
+    extern_id: Arc<PeerExternId>,
 }
 
 impl Peer {
@@ -258,7 +267,7 @@ impl Peer {
         addr: SocketAddr,
         pieces_detail: Pieces,
         supervisor: Sender<TorrentNotification>,
-        extern_id: Arc<PeerExternId>
+        extern_id: Arc<PeerExternId>,
     ) -> Result<Peer> {
         let stream = TcpStream::connect(&addr).await?;
 
@@ -320,33 +329,49 @@ impl Peer {
                 cursor.write_u8(4).unwrap();
                 cursor.write_u32::<BigEndian>(piece_index).unwrap();
             }
-            MessagePeer::BitField (bitfield) => {
-                cursor.write_u32::<BigEndian>(1 + bitfield.len() as u32).unwrap();
+            MessagePeer::BitField(bitfield) => {
+                cursor
+                    .write_u32::<BigEndian>(1 + bitfield.len() as u32)
+                    .unwrap();
                 cursor.write_u8(5).unwrap();
                 cursor.write_all(bitfield).unwrap();
             }
-            MessagePeer::Request { index, begin, length } => {
+            MessagePeer::Request {
+                index,
+                begin,
+                length,
+            } => {
                 cursor.write_u32::<BigEndian>(13).unwrap();
                 cursor.write_u8(6).unwrap();
                 cursor.write_u32::<BigEndian>(index).unwrap();
                 cursor.write_u32::<BigEndian>(begin).unwrap();
                 cursor.write_u32::<BigEndian>(length).unwrap();
             }
-            MessagePeer::Piece { index, begin, block } => {
-                cursor.write_u32::<BigEndian>(9 + block.len() as u32).unwrap();
+            MessagePeer::Piece {
+                index,
+                begin,
+                block,
+            } => {
+                cursor
+                    .write_u32::<BigEndian>(9 + block.len() as u32)
+                    .unwrap();
                 cursor.write_u8(7).unwrap();
                 cursor.write_u32::<BigEndian>(index).unwrap();
                 cursor.write_u32::<BigEndian>(begin).unwrap();
                 cursor.write_all(block).unwrap();
             }
-            MessagePeer::Cancel { index, begin, length } => {
+            MessagePeer::Cancel {
+                index,
+                begin,
+                length,
+            } => {
                 cursor.write_u32::<BigEndian>(13).unwrap();
                 cursor.write_u8(8).unwrap();
                 cursor.write_u32::<BigEndian>(index).unwrap();
                 cursor.write_u32::<BigEndian>(begin).unwrap();
                 cursor.write_u32::<BigEndian>(length).unwrap();
             }
-            MessagePeer::Port (port) => {
+            MessagePeer::Port(port) => {
                 cursor.write_u32::<BigEndian>(3).unwrap();
                 cursor.write_u8(9).unwrap();
                 cursor.write_u16::<BigEndian>(port).unwrap();
@@ -356,14 +381,14 @@ impl Peer {
             }
             MessagePeer::Extension(ExtendedMessage::Handshake(handshake)) => {
                 let bytes = crate::bencode::ser::to_bytes(&handshake).unwrap();
-                cursor.write_u32::<BigEndian>(2 + bytes.len() as u32).unwrap();
+                cursor
+                    .write_u32::<BigEndian>(2 + bytes.len() as u32)
+                    .unwrap();
                 cursor.write_u8(20).unwrap();
                 cursor.write_u8(0).unwrap();
                 cursor.write_all(&bytes).unwrap();
             }
-            MessagePeer::Extension(ExtendedMessage::Message { .. }) => {
-
-            }
+            MessagePeer::Extension(ExtendedMessage::Message { .. }) => {}
             //MessagePeer::Extension { .. } => unreachable!()
             MessagePeer::Unknown { .. } => unreachable!(),
         }
@@ -377,7 +402,11 @@ impl Peer {
 
     async fn wait_event(
         &mut self,
-        mut cmds: Pin<&mut Fuse<impl Future<Output = std::result::Result<PeerCommand, async_channel::RecvError>>>>
+        mut cmds: Pin<
+            &mut Fuse<
+                impl Future<Output = std::result::Result<PeerCommand, async_channel::RecvError>>,
+            >,
+        >,
     ) -> PeerWaitEvent {
         // use futures::async_await::*;
         use futures::task::Poll;
@@ -396,26 +425,33 @@ impl Peer {
                 _ => {}
             }
 
-            match cmds.as_mut().poll(cx).map(|v| v.ok()).map(PeerWaitEvent::Supervisor) {
+            match cmds
+                .as_mut()
+                .poll(cx)
+                .map(|v| v.ok())
+                .map(PeerWaitEvent::Supervisor)
+            {
                 v @ Poll::Ready(_) => v,
-                _ => Poll::Pending
+                _ => Poll::Pending,
             }
-        }).await
+        })
+        .await
     }
 
     pub async fn start(&mut self) -> Result<()> {
-
         let (addr, cmds) = bounded(1000);
 
         let extern_id = self.do_handshake().await?;
 
-        self.supervisor.send(TorrentNotification::AddPeer {
-            id: self.id,
-            queue: self.tasks.clone(),
-            addr,
-            socket: self.addr,
-            extern_id
-        }).await;
+        self.supervisor
+            .send(TorrentNotification::AddPeer {
+                id: self.id,
+                queue: self.tasks.clone(),
+                addr,
+                socket: self.addr,
+                extern_id,
+            })
+            .await;
 
         let cmds = cmds.recv().fuse();
         let mut cmds = Box::pin(cmds);
@@ -460,10 +496,9 @@ impl Peer {
 
     async fn maybe_send_request(&mut self) -> Result<()> {
         if !self.am_choked() {
-
             let task = match self._tasks.as_mut() {
                 Some(tasks) => tasks.pop_front(),
-                _ => self.take_tasks().await
+                _ => self.take_tasks().await,
             };
 
             if let Some(task) = task {
@@ -471,7 +506,12 @@ impl Peer {
                 self.send_request(task).await?;
             } else {
                 //self.pieces_actor.get_pieces_to_downloads().await;
-                println!("[{:?}] No More Task ! {} downloaded in {:?}s", self.id, self.nblocks, self.start.map(|s| s.elapsed().as_secs()));
+                println!(
+                    "[{:?}] No More Task ! {} downloaded in {:?}s",
+                    self.id,
+                    self.nblocks,
+                    self.start.map(|s| s.elapsed().as_secs())
+                );
                 // Steal others tasks
             }
         } else {
@@ -486,7 +526,8 @@ impl Peer {
             index: task.piece,
             begin: task.start,
             length: task.size,
-        }).await
+        })
+        .await
     }
 
     fn set_choked(&mut self, choked: bool) {
@@ -510,7 +551,7 @@ impl Peer {
             Choke => {
                 self.set_choked(true);
                 println!("[{}] CHOKE", self.id);
-            },
+            }
             UnChoke => {
                 // If the peer has piece we're interested in
                 // Send a Request
@@ -518,46 +559,61 @@ impl Peer {
                 println!("[{}] UNCHOKE", self.id);
 
                 self.maybe_send_request().await?;
-            },
+            }
             Interested => {
                 // Unshoke this peer
-                println!("INTERESTED", );
-            },
+                println!("INTERESTED",);
+            }
             NotInterested => {
                 // Shoke this peer
-                println!("NOT INTERESTED", );
-            },
+                println!("NOT INTERESTED",);
+            }
             Have { piece_index } => {
                 use TorrentNotification::UpdateBitfield;
 
                 let update = BitFieldUpdate::from(piece_index);
 
-                self.supervisor.send(UpdateBitfield { id: self.id, update }).await;
+                self.supervisor
+                    .send(UpdateBitfield {
+                        id: self.id,
+                        update,
+                    })
+                    .await;
 
                 println!("[{:?}] HAVE {}", self.id, piece_index);
-            },
-            BitField (bitfield) => {
+            }
+            BitField(bitfield) => {
                 // Send an Interested ?
                 use crate::bitfield::BitField;
                 use TorrentNotification::UpdateBitfield;
 
-                let bitfield = BitField::from(
-                    bitfield,
-                    self.pieces_detail.num_pieces
-                )?;
+                let bitfield = BitField::from(bitfield, self.pieces_detail.num_pieces)?;
 
                 let update = BitFieldUpdate::from(bitfield);
 
-                self.supervisor.send(UpdateBitfield { id: self.id, update }).await;
+                self.supervisor
+                    .send(UpdateBitfield {
+                        id: self.id,
+                        update,
+                    })
+                    .await;
 
                 println!("[{:?}] BITFIELD", self.id);
-            },
-            Request { index, begin, length } => {
+            }
+            Request {
+                index,
+                begin,
+                length,
+            } => {
                 // Mark this peer as interested
                 // Make sure this peer is not choked or resend a choke
                 println!("REQUEST {} {} {}", index, begin, length);
-            },
-            Piece { index, begin, block } => {
+            }
+            Piece {
+                index,
+                begin,
+                block,
+            } => {
                 // If we already have it, send another Request
                 // Check the sum and write to disk
                 // Send Request
@@ -569,8 +625,7 @@ impl Peer {
 
                 self.nblocks += block.len();
 
-                let piece_size = self.pieces_detail
-                                     .piece_size(index as usize);
+                let piece_size = self.pieces_detail.piece_size(index as usize);
                 let mut is_completed = false;
 
                 self.pieces_buffer
@@ -588,14 +643,18 @@ impl Peer {
                 }
 
                 self.maybe_send_request().await?;
-            },
-            Cancel { index, begin, length } => {
+            }
+            Cancel {
+                index,
+                begin,
+                length,
+            } => {
                 // Cancel a Request
                 println!("PIECE {} {} {}", index, begin, length);
-            },
-            Port (port) => {
+            }
+            Port(port) => {
                 println!("PORT {}", port);
-            },
+            }
             KeepAlive => {
                 println!("KEEP ALICE");
             }
@@ -607,9 +666,11 @@ impl Peer {
             Extension(ExtendedMessage::Message { id, buffer }) => {
                 if id == 1 {
                     if let Ok(addrs) = crate::bencode::de::from_bytes::<PEXMessage>(buffer) {
-                        self.supervisor.send(TorrentNotification::PeerDiscovered {
-                            addrs: addrs.into()
-                        }).await;
+                        self.supervisor
+                            .send(TorrentNotification::PeerDiscovered {
+                                addrs: addrs.into(),
+                            })
+                            .await;
                     };
                 }
             }
@@ -631,13 +692,18 @@ impl Peer {
             p: Some(6801),
             ..Default::default()
         };
-        self.send_message(MessagePeer::Extension(ExtendedMessage::Handshake(handshake))).await
+        self.send_message(MessagePeer::Extension(ExtendedMessage::Handshake(
+            handshake,
+        )))
+        .await
     }
 
     async fn send_completed(&mut self, index: u32) {
         let piece_buffer = self.pieces_buffer.remove(&(index as usize)).unwrap();
 
-        self.supervisor.send(TorrentNotification::AddPiece(piece_buffer)).await;
+        self.supervisor
+            .send(TorrentNotification::AddPiece(piece_buffer))
+            .await;
         //println!("[{}] PIECE COMPLETED {}", self.id, index);
     }
 
@@ -667,8 +733,9 @@ impl Peer {
         if reader.take(n as u64).read_to_end(&mut self.buffer).await? != n {
             return Err(tokio::io::Error::new(
                 tokio::io::ErrorKind::UnexpectedEof,
-                "Size doesn't match"
-            ).into());
+                "Size doesn't match",
+            )
+            .into());
         }
 
         Ok(())
@@ -688,7 +755,7 @@ impl Peer {
 
         let mut cursor = Cursor::new(&mut handshake[..]);
 
-        let mut reserved: [u8; 8] = [0,0,0,0,0,0,0,0];
+        let mut reserved: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0];
 
         reserved[5] |= 0x10; // Support Extension Protocol
 

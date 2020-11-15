@@ -1,5 +1,3 @@
-
-
 use serde::{self, Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 
@@ -49,9 +47,9 @@ pub struct ExtendedHandshake {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lt_donthave: Option<i64>,
     /// the time when this peer last saw a complete copy
-	/// of this torrent
+    /// of this torrent
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub complete_ago: Option<i64>
+    pub complete_ago: Option<i64>,
 }
 
 use crate::bencode::PtrBuf;
@@ -88,7 +86,11 @@ use crate::utils;
 impl<'a> Into<Vec<SocketAddr>> for PEXMessage<'a> {
     fn into(self) -> Vec<SocketAddr> {
         let mut length = self.added.as_ref().map(|a| a.slice.len() / 6).unwrap_or(0);
-        length += self.added6.as_ref().map(|a| a.slice.len() / 18).unwrap_or(0);
+        length += self
+            .added6
+            .as_ref()
+            .map(|a| a.slice.len() / 18)
+            .unwrap_or(0);
 
         // 1 alloc
         let mut addrs = Vec::with_capacity(length);
@@ -108,10 +110,7 @@ impl<'a> Into<Vec<SocketAddr>> for PEXMessage<'a> {
 #[derive(Debug)]
 pub enum ExtendedMessage<'a> {
     Handshake(ExtendedHandshake),
-    Message {
-        id: u8,
-        buffer: &'a [u8]
-    }
+    Message { id: u8, buffer: &'a [u8] },
 }
 
 // // peer plugins are associated with a specific peer. A peer could be

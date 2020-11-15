@@ -1,21 +1,18 @@
-
+use async_trait::async_trait;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use async_trait::async_trait;
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
 use url::Url;
 
 use std::sync::Arc;
 
-
-use crate::supervisors::torrent::Result;
-use crate::errors::TorrentError;
 use super::{TrackerConnection, TrackerData};
-
+use crate::errors::TorrentError;
+use crate::supervisors::torrent::Result;
 
 async fn peers_from_dict(peers: &[Peer], addrs: &mut Vec<SocketAddr>) {
     for peer in peers {
@@ -67,7 +64,7 @@ pub struct AnnounceQuery<'a> {
     pub downloaded: i64,
     //left: i64,
     pub event: String,
-    pub compact: i64
+    pub compact: i64,
 }
 
 impl<'a> From<&'a TrackerData> for AnnounceQuery<'a> {
@@ -88,7 +85,7 @@ impl<'a> From<&'a TrackerData> for AnnounceQuery<'a> {
 #[derive(Deserialize, Debug)]
 pub struct Peer {
     pub ip: String,
-    pub port: u16
+    pub port: u16,
 }
 
 #[derive(Deserialize, Debug)]
@@ -96,7 +93,7 @@ pub struct Peer {
 pub enum Peers {
     Dict(Vec<Peer>),
     #[serde(with = "serde_bytes")]
-    Binary(Vec<u8>)
+    Binary(Vec<u8>),
 }
 
 #[derive(Deserialize, Debug)]
@@ -104,17 +101,17 @@ pub enum Peers {
 pub enum Peers6 {
     Dict(Vec<Peer>),
     #[serde(with = "serde_bytes")]
-    Binary(Vec<u8>)
+    Binary(Vec<u8>),
 }
 
 #[derive(Deserialize, Debug)]
 pub struct AnnounceResponse {
-    #[serde(rename="warning message")]
+    #[serde(rename = "warning message")]
     pub warning_message: Option<String>,
     pub interval: i64,
-    #[serde(rename="min interval")]
+    #[serde(rename = "min interval")]
     pub min_interval: Option<i64>,
-    #[serde(rename="tracker id")]
+    #[serde(rename = "tracker id")]
     pub tracker_id: Option<String>,
     pub complete: i64,
     pub incomplete: i64,
@@ -123,7 +120,7 @@ pub struct AnnounceResponse {
     pub peers6: Option<Peers6>,
 }
 
-use crate::bencode::de::{DeserializeError, from_bytes};
+use crate::bencode::de::{from_bytes, DeserializeError};
 
 #[derive(Debug)]
 pub enum HttpError {
@@ -133,7 +130,7 @@ pub enum HttpError {
     Deserialize(DeserializeError),
     HostResolution,
     IO(std::io::Error),
-    IOAsync(tokio::io::Error)
+    IOAsync(tokio::io::Error),
 }
 
 impl From<std::io::Error> for HttpError {
@@ -154,7 +151,7 @@ pub trait Escaped {
 
 impl<T> Escaped for T
 where
-    T: AsRef<[u8]>
+    T: AsRef<[u8]>,
 {
     fn escape(&self) -> String {
         escape_str(self)
@@ -167,14 +164,15 @@ pub trait ToQuery {
 
 impl<'a> ToQuery for AnnounceQuery<'a> {
     fn to_query(&self) -> String {
-        format!("info_hash={}&peer_id={}&port={}&uploaded={}&downloaded={}&event={}&compact={}",
-                self.info_hash.escape(),
-                self.peer_id.escape(),
-                self.port,
-                self.uploaded,
-                self.downloaded,
-                self.event,
-                self.compact,
+        format!(
+            "info_hash={}&peer_id={}&port={}&uploaded={}&downloaded={}&event={}&compact={}",
+            self.info_hash.escape(),
+            self.peer_id.escape(),
+            self.port,
+            self.uploaded,
+            self.downloaded,
+            self.event,
+            self.compact,
         )
     }
 }
@@ -203,7 +201,8 @@ pub fn escape_str<T: AsRef<[u8]>>(s: T) -> String {
     String::from_utf8(result).unwrap()
 }
 
-const DEFAULT_HEADERS: &str = "User-Agent: rustorrent/0.1\r\nAccept-Encoding: gzip\r\nConnection: close";
+const DEFAULT_HEADERS: &str =
+    "User-Agent: rustorrent/0.1\r\nAccept-Encoding: gzip\r\nConnection: close";
 
 fn format_host(url: &Url) -> String {
     if let Some(port) = url.port() {
@@ -227,8 +226,11 @@ use std::time::Duration;
 //use std::convert::TryInto;
 use crate::utils::ConnectTimeout;
 
-async fn send<T: DeserializeOwned, Q: ToQuery>(url: &Url, query: &Q, addr: &SocketAddr) -> Result<T> {
-
+async fn send<T: DeserializeOwned, Q: ToQuery>(
+    url: &Url,
+    query: &Q,
+    addr: &SocketAddr,
+) -> Result<T> {
     let mut stream = TcpStream::connect_timeout(addr, Duration::from_secs(5)).await?;
 
     let req = format_request(url, query);
@@ -272,7 +274,7 @@ async fn read_response(stream: TcpStream) -> Result<Vec<u8>> {
 
         let index = match memchr(b':', string.as_bytes()) {
             Some(index) => index,
-            _ => return Err(HttpError::Malformed.into())
+            _ => return Err(HttpError::Malformed.into()),
         };
 
         let name = &string[..index].trim().to_lowercase();
@@ -285,13 +287,12 @@ async fn read_response(stream: TcpStream) -> Result<Vec<u8>> {
 
     let content_length = match content_length {
         Some(content_length) => content_length,
-        _ => return Err(HttpError::MissingContentLength.into())
+        _ => return Err(HttpError::MissingContentLength.into()),
     };
 
     let mut buffer = Vec::with_capacity(content_length as usize);
 
-    reader.take(content_length).read_to_end(&mut buffer)
-          .await?;
+    reader.take(content_length).read_to_end(&mut buffer).await?;
 
     Ok(buffer)
 }
@@ -299,9 +300,15 @@ async fn read_response(stream: TcpStream) -> Result<Vec<u8>> {
 pub async fn http_get<R, Q>(url: &Url, query: &Q, addr: &SocketAddr) -> Result<R>
 where
     Q: ToQuery,
-    R: DeserializeOwned
+    R: DeserializeOwned,
 {
-    println!("URL: {:?} {:?} {:?} {:?}", url, url.host(), url.port(), url.scheme());
+    println!(
+        "URL: {:?} {:?} {:?} {:?}",
+        url,
+        url.host(),
+        url.port(),
+        url.scheme()
+    );
 
     send(url, query, addr).await
 }
@@ -330,7 +337,7 @@ impl TrackerConnection for HttpConnection {
         }
         match last_err {
             Some(e) => Err(e),
-            _ => Err(TorrentError::Unresponsive)
+            _ => Err(TorrentError::Unresponsive),
         }
     }
 
@@ -344,8 +351,7 @@ impl HttpConnection {
     pub fn new(
         data: Arc<TrackerData>,
         addr: Vec<Arc<SocketAddr>>,
-    ) -> Box<dyn TrackerConnection + Send + Sync>
-    {
+    ) -> Box<dyn TrackerConnection + Send + Sync> {
         Box::new(Self { data, addr })
     }
 }

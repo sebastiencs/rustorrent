@@ -1,4 +1,3 @@
-
 use async_channel::{Receiver, Sender};
 use tokio::sync::RwLock;
 
@@ -7,17 +6,11 @@ use shared_arena::ArenaBox;
 //use super::writer::WriterUserCommand;
 
 use super::manager::UtpEvent;
-use super::{
-    SequenceNumber, Packet,
-    ConnectionId,
-};
-use super::{
-    INIT_CWND, MSS,
-    UtpState,
-};
+use super::{ConnectionId, Packet, SequenceNumber};
+use super::{UtpState, INIT_CWND, MSS};
 use crate::utils::FromSlice;
 
-use std::sync::atomic::{AtomicU8, AtomicU16, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU8, Ordering};
 
 // pub struct WriterUserCommand {
 //     pub(super) data: Vec<u8>
@@ -46,7 +39,11 @@ pub(super) struct State {
 }
 
 impl State {
-    pub(super) fn add_packet_inflight(&mut self, seq_num: SequenceNumber, packet: ArenaBox<Packet>) {
+    pub(super) fn add_packet_inflight(
+        &mut self,
+        seq_num: SequenceNumber,
+        packet: ArenaBox<Packet>,
+    ) {
         let size = packet.size();
 
         self.inflight_packets.insert(seq_num, packet);
@@ -62,9 +59,7 @@ impl State {
         let mut size = 0;
 
         self.inflight_packets
-            .retain(|_, p| {
-                !p.is_seq_less_equal(ack_number) || (false, size += p.size()).0
-            });
+            .retain(|_, p| !p.is_seq_less_equal(ack_number) || (false, size += p.size()).0);
 
         // {
         //     let mut inflight_packets = self.inflight_packets.write().await;
@@ -171,8 +166,8 @@ impl Default for State {
 
 #[derive(Debug)]
 pub(super) enum ReceivedData {
-    Packet { },
-    Done
+    Packet {},
+    Done,
 }
 
 #[derive(Debug)]
@@ -193,7 +188,10 @@ impl UtpStream {
 
     pub async fn write(&self, data: &[u8]) {
         let data = Vec::from_slice(data).into_boxed_slice();
-        self.writer_user_command.send(UtpEvent::UserWrite { data }).await.unwrap();
+        self.writer_user_command
+            .send(UtpEvent::UserWrite { data })
+            .await
+            .unwrap();
     }
 
     pub async fn wait_for_termination(&self) {

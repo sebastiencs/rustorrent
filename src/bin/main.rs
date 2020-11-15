@@ -1,4 +1,3 @@
-
 #![allow(
     dead_code,
     clippy::new_without_default,
@@ -8,11 +7,11 @@
 
 use std::io::{self, Read};
 
-use rustorrent::session::Session;
 use rustorrent::bencode::de;
+use rustorrent::session::Session;
 use rustorrent::utp;
 
-use std::net::{SocketAddr, IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 // use rustorrent::cache_line::CacheAligned;
 //use rustorrent::memory_pool::page::Block;
@@ -23,7 +22,6 @@ use std::net::{SocketAddr, IpAddr, Ipv4Addr};
 #[allow(unreachable_code)]
 #[tokio::main]
 async fn main() {
-
     // use std::mem::ManuallyDrop;
     // use rustorrent::memory_pool::SharedArena;
 
@@ -141,50 +139,48 @@ async fn main() {
 
     // println!("STEP_3: {:?}", end);
 
+    //     use rustorrent::memory_pool::SharedArena;
 
-//     use rustorrent::memory_pool::SharedArena;
+    //     #[derive(Copy, Clone)]
+    //     struct MyStruct {
+    //         a: Option<usize>,
+    //         b: &'static str,
+    //         c: usize
+    //     }
 
-//     #[derive(Copy, Clone)]
-//     struct MyStruct {
-//         a: Option<usize>,
-//         b: &'static str,
-//         c: usize
-//     }
+    //     impl Default for MyStruct {
+    //         fn default() -> MyStruct {
+    //             MyStruct {
+    //                 a: None,
+    //                 b: "hello",
+    //                 c: 90909
+    //             }
+    //         }
+    //     }
 
-//     impl Default for MyStruct {
-//         fn default() -> MyStruct {
-//             MyStruct {
-//                 a: None,
-//                 b: "hello",
-//                 c: 90909
-//             }
-//         }
-//     }
+    //     let now;
+    //     {
+    //         let mut arena = SharedArena::<MyStruct>::with_capacity(100000000);
+    //         let obj = MyStruct::default();
 
+    //         // println!("ICIII", );
 
-//     let now;
-//     {
-//         let mut arena = SharedArena::<MyStruct>::with_capacity(100000000);
-//         let obj = MyStruct::default();
+    //         now = std::time::Instant::now();
 
-//         // println!("ICIII", );
+    //         for _ in 0..100000000 {
+    //             let res = arena.alloc(MyStruct::default());
+    //             std::mem::forget(res);
+    //         }
+    //     }
 
-//         now = std::time::Instant::now();
+    //     let end = std::time::Instant::now() - now;
 
-//         for _ in 0..100000000 {
-//             let res = arena.alloc(MyStruct::default());
-//             std::mem::forget(res);
-//         }
-//     }
+    //     // println!("LAAA", );
 
-//     let end = std::time::Instant::now() - now;
+    //     println!("STAT: {:?}", end / 100000000);
+    // //    println!("STAT: {:?} {:?}", arena.stats(), end / 100000000);
 
-//     // println!("LAAA", );
-
-//     println!("STAT: {:?}", end / 100000000);
-// //    println!("STAT: {:?} {:?}", arena.stats(), end / 100000000);
-
-//     return;
+    //     return;
 
     // Acquire: load
     // Release: store
@@ -207,64 +203,63 @@ async fn main() {
     // println!("FOO {:?}", foo.load(Ordering::SeqCst));
 
     // async_std::task::block_on(async {
-        // let listener = utp::stream::UtpListener::new(10001).await.unwrap();
-        // let listener = Arc::new(listener);
-        // let listener2 = Arc::clone(&listener);
-        // listener.start();
+    // let listener = utp::stream::UtpListener::new(10001).await.unwrap();
+    // let listener = Arc::new(listener);
+    // let listener2 = Arc::clone(&listener);
+    // listener.start();
 
-        // let stream = listener.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 0, 131)), 7000)).await.unwrap();
-        //let stream = listener.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
+    // let stream = listener.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 0, 131)), 7000)).await.unwrap();
+    //let stream = listener.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
 
-        // let stdin = io::stdin();
-        // let mut buffer = Vec::new();
-        // let mut handle = stdin.lock();
+    // let stdin = io::stdin();
+    // let mut buffer = Vec::new();
+    // let mut handle = stdin.lock();
 
-        // handle.read_to_end(&mut buffer).unwrap();
+    // handle.read_to_end(&mut buffer).unwrap();
 
-        // let listener = utp::listener::UtpListener::new(10001).await.unwrap();
-        // listener.start();
+    // let listener = utp::listener::UtpListener::new(10001).await.unwrap();
+    // listener.start();
 
-        // let listener = Arc::new(listener);
-        // let listener2 = Arc::clone(&listener);
-        // listener.start();
+    // let listener = Arc::new(listener);
+    // let listener2 = Arc::clone(&listener);
+    // listener.start();
 
-        // let listener_clone = listener.clone();
-        // let buffer_clone = buffer.clone();
+    // let listener_clone = listener.clone();
+    // let buffer_clone = buffer.clone();
 
-        // async_std::task::spawn(async move {
-        //     let stream = listener_clone.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7001)).await.unwrap();
-        //     stream.write(&buffer_clone).await;
-        // });
+    // async_std::task::spawn(async move {
+    //     let stream = listener_clone.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7001)).await.unwrap();
+    //     stream.write(&buffer_clone).await;
+    // });
 
-        // let stream = listener.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
-        // stream.write(&buffer).await;
+    // let stream = listener.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
+    // stream.write(&buffer).await;
 
-        // // stream.write(b"hello").await;
+    // // stream.write(b"hello").await;
 
-        // println!("ICI");
+    // println!("ICI");
 
-        // println!("DOOOOONE", );
-        // // return;
+    // println!("DOOOOONE", );
+    // // return;
 
-        // return Ok(true);
+    // return Ok(true);
 
+    // let mut socket = utp::socket::UtpSocket::bind(
+    //     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080)
+    // ).await.unwrap();
+    // socket.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
 
-        // let mut socket = utp::socket::UtpSocket::bind(
-        //     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080)
-        // ).await.unwrap();
-        // socket.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
+    // let stdin = io::stdin();
+    // let mut buffer = Vec::new();
+    // let mut handle = stdin.lock();
 
-        // let stdin = io::stdin();
-        // let mut buffer = Vec::new();
-        // let mut handle = stdin.lock();
+    // handle.read_to_end(&mut buffer).unwrap();
 
-        // handle.read_to_end(&mut buffer).unwrap();
+    // socket.send(&buffer).await.unwrap();
 
-        // socket.send(&buffer).await.unwrap();
-
-        // socket.send(b"hello weshaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").await.unwrap();
-        // socket.send(b"OKLM").await.unwrap();
-        // socket.send(b"OUIOUIOUIOUIOUIOUIOUIOUI").await.unwrap();
+    // socket.send(b"hello weshaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").await.unwrap();
+    // socket.send(b"OKLM").await.unwrap();
+    // socket.send(b"OUIOUIOUIOUIOUIOUIOUIOUI").await.unwrap();
     // });
 
     // return ;
@@ -289,15 +284,15 @@ async fn main() {
     let mut handle = stdin.lock();
 
     handle.read_to_string(&mut buffer).unwrap();
-//     task::block_on(async move {
-//         let mut res = surf::get("http://localhost:6969/announce")
-// //        let mut res = surf::get(&meta.announce)
-//             .set_query(&query)?
-//             .recv_string()
-//             .await?;
+    //     task::block_on(async move {
+    //         let mut res = surf::get("http://localhost:6969/announce")
+    // //        let mut res = surf::get(&meta.announce)
+    //             .set_query(&query)?
+    //             .recv_string()
+    //             .await?;
 
-//         println!("{:#?}", res);
+    //         println!("{:#?}", res);
 
-//         Ok(())
-//     })
+    //         Ok(())
+    //     })
 }

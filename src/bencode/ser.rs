@@ -9,7 +9,7 @@ pub enum SerializeError {
     InvalidInput(String),
     End,
     InfoHashMissing,
-    Message(String)
+    Message(String),
 }
 
 type Error = SerializeError;
@@ -37,7 +37,7 @@ impl std::error::Error for SerializeError {
 }
 
 pub struct Serializer {
-    output: Vec<u8>
+    output: Vec<u8>,
 }
 
 impl Serializer {
@@ -141,7 +141,9 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 
     fn serialize_f64(self, _v: f64) -> Result<()> {
-        Err(SerializeError::InvalidInput("float not supported".to_owned()))
+        Err(SerializeError::InvalidInput(
+            "float not supported".to_owned(),
+        ))
     }
 
     // Serialize a char as a single-character string. Other formats may
@@ -217,11 +219,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
 
     // As is done here, serializers are encouraged to treat newtype structs as
     // insignificant wrappers around the data they contain.
-    fn serialize_newtype_struct<T>(
-        self,
-        _name: &'static str,
-        value: &T,
-    ) -> Result<()>
+    fn serialize_newtype_struct<T>(self, _name: &'static str, value: &T) -> Result<()>
     where
         T: ?Sized + Serialize,
     {
@@ -308,11 +306,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     // omit the field names when serializing structs because the corresponding
     // Deserialize implementation is required to know what the keys are without
     // looking at the serialized data.
-    fn serialize_struct(
-        self,
-        _name: &'static str,
-        len: usize,
-    ) -> Result<Self::SerializeStruct> {
+    fn serialize_struct(self, _name: &'static str, len: usize) -> Result<Self::SerializeStruct> {
         self.serialize_map(Some(len))
     }
 

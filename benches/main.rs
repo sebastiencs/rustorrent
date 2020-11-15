@@ -25,9 +25,7 @@ fn simd_compare_equal(b: &mut Bencher) {
     let vec1 = vec![5; 20];
     let vec2 = vec1.clone();
 
-    b.iter(|| {
-        assert!(compare_20_bytes(&vec1, &vec2))
-    });
+    b.iter(|| assert!(compare_20_bytes(&vec1, &vec2)));
     b.bytes = vec1.len() as u64;
 }
 

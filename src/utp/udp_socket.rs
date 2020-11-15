@@ -1,14 +1,13 @@
-
 use futures::ready;
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+use tokio::io::unix::AsyncFd;
 use tokio::io::unix::AsyncFdReadyGuard;
 use tokio::net::{lookup_host, ToSocketAddrs};
-use tokio::io::unix::AsyncFd;
-use socket2::{Socket, Domain, Type, SockAddr, Protocol};
 
 use std::io::ErrorKind;
+use std::net::SocketAddr;
 use std::os::unix::prelude::AsRawFd;
 use std::task::{Context, Poll};
-use std::net::SocketAddr;
 
 use super::UtpError;
 
@@ -23,24 +22,25 @@ unsafe impl Send for MyUdpSocket {}
 unsafe impl Sync for MyUdpSocket {}
 
 const N_VECTORED_BUFFER: usize = 32;
-const SOCKADDR_STORAGE_LENGTH: libc::socklen_t = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+const SOCKADDR_STORAGE_LENGTH: libc::socklen_t =
+    std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
 
 pub struct MmsgBuffer {
     addr_storage: [libc::sockaddr_storage; N_VECTORED_BUFFER],
     iov: [libc::iovec; N_VECTORED_BUFFER],
     mmsghdr: [libc::mmsghdr; N_VECTORED_BUFFER],
     buffers: [[u8; 1500]; N_VECTORED_BUFFER],
-    nrecv: u32
+    nrecv: u32,
 }
 
 impl std::fmt::Debug for MmsgBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("MmsgBuffer")
-         .field("addr_storage", &self.addr_storage)
-         .field("iov", &self.iov)
-         .field("mmsghdr", &self.mmsghdr)
-         // .field("buffers", &self.buffers)
-         .finish()
+            .field("addr_storage", &self.addr_storage)
+            .field("iov", &self.iov)
+            .field("mmsghdr", &self.mmsghdr)
+            // .field("buffers", &self.buffers)
+            .finish()
     }
 }
 
@@ -48,18 +48,15 @@ unsafe impl Send for MmsgBuffer {}
 
 impl MmsgBuffer {
     pub fn new() -> Box<MmsgBuffer> {
-
         // TODO: Use Box::new_uninit when stable
-        let mut ptr: Box<MmsgBuffer> = Box::new(unsafe {
-            std::mem::zeroed()
-        });
+        let mut ptr: Box<MmsgBuffer> = Box::new(unsafe { std::mem::zeroed() });
 
         let buffers = ptr.buffers.as_mut_ptr();
 
         ptr.iov.iter_mut().enumerate().for_each(|(index, iov)| {
             let buffer = unsafe { &mut *buffers.add(index) };
             *iov = libc::iovec {
-                iov_base: buffer.as_mut_ptr() as * mut libc::c_void,
+                iov_base: buffer.as_mut_ptr() as *mut libc::c_void,
                 iov_len: buffer.len(),
             }
         });
@@ -70,7 +67,7 @@ impl MmsgBuffer {
         ptr.mmsghdr.iter_mut().enumerate().for_each(|(index, h)| {
             *h = libc::mmsghdr {
                 msg_hdr: libc::msghdr {
-                    msg_name: unsafe { addrs.add(index) as * mut libc::c_void },
+                    msg_name: unsafe { addrs.add(index) as *mut libc::c_void },
                     msg_namelen: SOCKADDR_STORAGE_LENGTH,
                     msg_iov: unsafe { iov.add(index) },
                     msg_iovlen: 1,
@@ -132,8 +129,8 @@ impl<'a> Iterator for IterRecvMmsg<'a> {
         let storage = &self.mmsg.addr_storage[current];
         let addr = unsafe {
             SockAddr::from_raw_parts(
-                storage as * const libc::sockaddr_storage  as * const _,
-                msg.msg_hdr.msg_namelen
+                storage as *const libc::sockaddr_storage as *const _,
+                msg.msg_hdr.msg_namelen,
             )
         };
 
@@ -230,7 +227,6 @@ impl MyUdpSocket {
         }
     }
 
-
     pub fn recv_from(&self, buffers: &mut MmsgBuffer) -> tokio::io::Result<()> {
         let fd = self.inner.get_ref().as_raw_fd();
 
@@ -251,7 +247,7 @@ impl MyUdpSocket {
         };
 
         if result == -1 {
-            return Err(std::io::Error::last_os_error())
+            return Err(std::io::Error::last_os_error());
         }
 
         buffers.mmsghdr[0].msg_len = result as u32;
@@ -277,7 +273,7 @@ impl MyUdpSocket {
 
         if result == -1 {
             // println!("Error recvmmsg {:?}", std::io::Error::last_os_error());
-            return Err(std::io::Error::last_os_error())
+            return Err(std::io::Error::last_os_error());
         }
 
         buffers.nrecv = result as u32;
@@ -307,20 +303,14 @@ impl MyUdpSocket {
     //     }
     // }
 
-    pub fn try_send_to(
-        &self,
-        buf: &[u8],
-        target: SocketAddr
-    ) -> super::Result<()> {
+    pub fn try_send_to(&self, buf: &[u8], target: SocketAddr) -> super::Result<()> {
         self.inner
             .get_ref()
             .send_to(buf, &SockAddr::from(target))
             .map(|_| ())
-            .map_err(|e| {
-                match e {
-                    e if e.kind() == ErrorKind::WouldBlock => UtpError::SendWouldBlock,
-                    e => UtpError::IO(e)
-                }
+            .map_err(|e| match e {
+                e if e.kind() == ErrorKind::WouldBlock => UtpError::SendWouldBlock,
+                e => UtpError::IO(e),
             })
     }
 }

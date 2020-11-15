@@ -1,4 +1,3 @@
-
 use crate::actors::peer::PeerTask;
 use crate::metadata::Torrent;
 use smallvec::{smallvec, SmallVec};
@@ -15,7 +14,7 @@ pub struct Pieces {
     pub sha1_pieces: Arc<Vec<Arc<[u8; 20]>>>,
     /// Pieces other peers have
     /// peers_pieces[0] is the number of peers having the piece 0
-//    peers_pieces: Vec<u8>,
+    //    peers_pieces: Vec<u8>,
     /// Size of a block
     pub block_size: usize,
     /// Number of block in 1 piece
@@ -38,7 +37,11 @@ impl From<&Torrent> for Pieces {
         let piece_length = torrent.meta.info.piece_length as usize;
 
         let last_piece_length = files_size % piece_length;
-        let last_piece_length = if last_piece_length == 0 { piece_length } else { last_piece_length };
+        let last_piece_length = if last_piece_length == 0 {
+            piece_length
+        } else {
+            last_piece_length
+        };
 
         if piece_length == 0 {
             panic!("Invalid piece length");
@@ -107,26 +110,30 @@ impl Pieces {
 pub struct PieceToDownload {
     pub piece: u32,
     pub start: u32,
-    pub size: u32
+    pub size: u32,
 }
 
 impl PieceToDownload {
     pub fn new(piece: usize, start: usize, size: usize) -> PieceToDownload {
-        PieceToDownload { piece: piece as u32, start: start as u32, size: size as u32 }
+        PieceToDownload {
+            piece: piece as u32,
+            start: start as u32,
+            size: size as u32,
+        }
     }
 }
 
 #[derive(Debug)]
 pub struct PieceInfo {
     pub bytes_downloaded: usize,
-    pub workers: SmallVec<[PeerTask; 4]>
+    pub workers: SmallVec<[PeerTask; 4]>,
 }
 
 impl PieceInfo {
     pub fn new(queue: PeerTask) -> PieceInfo {
         PieceInfo {
             bytes_downloaded: 0,
-            workers: smallvec![queue]
+            workers: smallvec![queue],
         }
     }
 
@@ -152,14 +159,18 @@ impl PieceBuffer {
 
         // println!("ADDING PIECE_BUFFER {} SIZE={}", piece_index, piece_size);
 
-        PieceBuffer { buf, piece_index, bytes_added: 0 }
+        PieceBuffer {
+            buf,
+            piece_index,
+            bytes_added: 0,
+        }
     }
 
     pub fn new_with_block(
         piece_index: u32,
         piece_size: usize,
         begin: u32,
-        block: &[u8]
+        block: &[u8],
     ) -> PieceBuffer {
         let mut piece_buffer = PieceBuffer::new(piece_index as usize, piece_size);
         piece_buffer.add_block(begin, block);
@@ -176,7 +187,10 @@ impl PieceBuffer {
             buffer.copy_from_slice(block);
             self.bytes_added += block_len;
         } else {
-            panic!("ERROR on addblock BEGIN={} BLOCK_LEN={} BUF_LEN={}", begin, block_len, buffer_len);
+            panic!(
+                "ERROR on addblock BEGIN={} BLOCK_LEN={} BUF_LEN={}",
+                begin, block_len, buffer_len
+            );
         }
     }
 

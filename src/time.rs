@@ -1,4 +1,3 @@
-
 // TODO: Looks like IOS 10 has clock_gettime():
 // https://chromium.googlesource.com/chromium/src/base/+/master/time/time_mac.cc
 // macOS Sierra 10.12 too:
@@ -31,10 +30,7 @@ pub fn get_time() -> (u64, u64) {
 
     // This is extracted from rust libstd
     fn info() -> mach_timebase_info {
-        static mut INFO: mach_timebase_info = mach_timebase_info {
-            numer: 0,
-            denom: 0,
-        };
+        static mut INFO: mach_timebase_info = mach_timebase_info { numer: 0, denom: 0 };
         static STATE: AtomicUsize = AtomicUsize::new(0);
 
         unsafe {
@@ -66,9 +62,7 @@ pub fn get_time() -> (u64, u64) {
 
     let time: u64 = get_absolute_time();
 
-    unsafe {
-        (0 ,((time - START) * info.numer as u64) / info.denom as u64)
-    }
+    unsafe { (0, ((time - START) * info.numer as u64) / info.denom as u64) }
 }
 
 #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
@@ -78,9 +72,7 @@ pub fn get_time() -> (u64, u64) {
         tv_nsec: 0,
     };
 
-    let val = unsafe {
-        libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut t)
-    };
+    let val = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut t) };
 
     // This might return -1 with old kernels
     if val >= 0 {

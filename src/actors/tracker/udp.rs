@@ -1,39 +1,35 @@
-
 use std::convert::TryFrom;
-use std::io::Write;
 use std::convert::TryInto;
+use std::io::Write;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-
-
-
-use std::net::SocketAddr;
 use async_trait::async_trait;
+use std::net::SocketAddr;
 
-use crate::supervisors::torrent::Result;
-use crate::errors::TorrentError;
-use super::{TrackerData, TrackerConnection};
+use super::{TrackerConnection, TrackerData};
 use crate::actors::peer::PeerExternId;
+use crate::errors::TorrentError;
+use crate::supervisors::torrent::Result;
 
 #[derive(Debug)]
 pub enum Action {
     Connect,
     Announce,
     Scrape,
-    Error
+    Error,
 }
 
 impl TryFrom<u32> for Action {
     type Error = TorrentError;
 
-    fn try_from(n :u32) -> Result<Action> {
+    fn try_from(n: u32) -> Result<Action> {
         match n {
             0 => Ok(Action::Connect),
             1 => Ok(Action::Announce),
             2 => Ok(Action::Scrape),
             3 => Ok(Action::Error),
-            _ => Err(TorrentError::InvalidInput)
+            _ => Err(TorrentError::InvalidInput),
         }
     }
 }
@@ -53,7 +49,7 @@ impl Into<u32> for &Action {
 pub struct ConnectRequest {
     pub protocol_id: u64,
     pub action: Action,
-    pub transaction_id: u32
+    pub transaction_id: u32,
 }
 
 impl ConnectRequest {
@@ -78,19 +74,19 @@ pub enum Event {
     None,
     Completed,
     Started,
-    Stopped
+    Stopped,
 }
 
 impl TryFrom<u32> for Event {
     type Error = TorrentError;
 
-    fn try_from(n :u32) -> Result<Event> {
+    fn try_from(n: u32) -> Result<Event> {
         match n {
             0 => Ok(Event::None),
             1 => Ok(Event::Completed),
             2 => Ok(Event::Started),
             3 => Ok(Event::Stopped),
-            _ => Err(TorrentError::InvalidInput)
+            _ => Err(TorrentError::InvalidInput),
         }
     }
 }
@@ -112,9 +108,9 @@ pub struct AnnounceRequest {
     pub action: Action,
     pub transaction_id: u32,
     pub info_hash: Arc<Vec<u8>>,
-//    pub info_hash: [u8; 20],
+    //    pub info_hash: [u8; 20],
     pub peer_id: Arc<PeerExternId>,
-//    pub peer_id: [u8; 20],
+    //    pub peer_id: [u8; 20],
     pub downloaded: u64,
     pub left: u64,
     pub uploaded: u64,
@@ -203,7 +199,7 @@ impl TryFrom<TrackerMessage> for ConnectResponse {
     fn try_from(msg: TrackerMessage) -> Result<ConnectResponse> {
         match msg {
             TrackerMessage::ConnectResp(res) => Ok(res),
-            _ => Err(TorrentError::InvalidInput)
+            _ => Err(TorrentError::InvalidInput),
         }
     }
 }
@@ -213,7 +209,7 @@ impl TryFrom<TrackerMessage> for ScrapeResponse {
     fn try_from(msg: TrackerMessage) -> Result<ScrapeResponse> {
         match msg {
             TrackerMessage::ScrapeResp(res) => Ok(res),
-            _ => Err(TorrentError::InvalidInput)
+            _ => Err(TorrentError::InvalidInput),
         }
     }
 }
@@ -223,7 +219,7 @@ impl TryFrom<TrackerMessage> for AnnounceResponse {
     fn try_from(msg: TrackerMessage) -> Result<AnnounceResponse> {
         match msg {
             TrackerMessage::AnnounceResp(res) => Ok(res),
-            _ => Err(TorrentError::InvalidInput)
+            _ => Err(TorrentError::InvalidInput),
         }
     }
 }
@@ -263,10 +259,10 @@ pub struct UdpState {
     pub transaction_id: u32,
     pub connection_id: u64,
     connection_id_time: Instant,
-    socket: UdpSocket
+    socket: UdpSocket,
 }
 
-use smallvec::{SmallVec, smallvec};
+use smallvec::{smallvec, SmallVec};
 
 pub struct UdpConnection {
     pub data: Arc<TrackerData>,
@@ -292,16 +288,15 @@ impl UdpConnection {
     #[allow(clippy::new_ret_no_self)]
     pub fn new(
         data: Arc<TrackerData>,
-        addrs: Vec<Arc<SocketAddr>>
-    ) -> Box<dyn TrackerConnection + Send + Sync>
-    {
+        addrs: Vec<Arc<SocketAddr>>,
+    ) -> Box<dyn TrackerConnection + Send + Sync> {
         Box::new(Self {
             data,
             addrs,
             state: None,
             buffer: smallvec![0; 16],
             current_addr: 0,
-            all_addrs_tried: false
+            all_addrs_tried: false,
         })
     }
 
@@ -321,7 +316,7 @@ impl UdpConnection {
 
     async fn get_response<T>(&mut self, send_size: usize) -> Result<T>
     where
-        T: TryFrom<TrackerMessage, Error = TorrentError>
+        T: TryFrom<TrackerMessage, Error = TorrentError>,
     {
         let mut attempts = 0;
 
@@ -346,12 +341,10 @@ impl UdpConnection {
                     attempts += 1;
                     continue;
                 }
-                Err(e) => return Err(e.into())
+                Err(e) => return Err(e.into()),
             };
 
-            let buffer = self.buffer
-                             .get(..n)
-                             .ok_or(TorrentError::InvalidInput)?;
+            let buffer = self.buffer.get(..n).ok_or(TorrentError::InvalidInput)?;
 
             return T::try_from(self.read_response(buffer)?);
         }
@@ -384,12 +377,10 @@ impl UdpConnection {
                     attempts += 1;
                     continue;
                 }
-                Err(e) => return Err(e.into())
+                Err(e) => return Err(e.into()),
             };
 
-            let buffer = self.buffer
-                             .get(0..n)
-                             .ok_or(TorrentError::InvalidInput)?;
+            let buffer = self.buffer.get(0..n).ok_or(TorrentError::InvalidInput)?;
 
             let resp: ConnectResponse = self.read_response(buffer)?.try_into()?;
 
@@ -397,10 +388,10 @@ impl UdpConnection {
                 transaction_id,
                 socket,
                 connection_id: resp.connection_id,
-                connection_id_time: Instant::now()
+                connection_id_time: Instant::now(),
             });
 
-            return Ok(resp)
+            return Ok(resp);
         }
     }
 
@@ -412,35 +403,67 @@ impl UdpConnection {
         // Cursor doesn't work with SmallVec
         match msg {
             TrackerMessage::ConnectReq(req) => {
-                (&mut buffer[0..]).write_u64::<BigEndian>(req.protocol_id).unwrap();
-                (&mut buffer[8..]).write_u32::<BigEndian>((&req.action).into()).unwrap();
-                (&mut buffer[12..]).write_u32::<BigEndian>(req.transaction_id).unwrap();
+                (&mut buffer[0..])
+                    .write_u64::<BigEndian>(req.protocol_id)
+                    .unwrap();
+                (&mut buffer[8..])
+                    .write_u32::<BigEndian>((&req.action).into())
+                    .unwrap();
+                (&mut buffer[12..])
+                    .write_u32::<BigEndian>(req.transaction_id)
+                    .unwrap();
                 16
             }
             TrackerMessage::AnnounceReq(req) => {
-                (&mut buffer[0..]).write_u64::<BigEndian>(req.connection_id).unwrap();
-                (&mut buffer[8..]).write_u32::<BigEndian>((&req.action).into()).unwrap();
-                (&mut buffer[12..]).write_u32::<BigEndian>(req.transaction_id).unwrap();
+                (&mut buffer[0..])
+                    .write_u64::<BigEndian>(req.connection_id)
+                    .unwrap();
+                (&mut buffer[8..])
+                    .write_u32::<BigEndian>((&req.action).into())
+                    .unwrap();
+                (&mut buffer[12..])
+                    .write_u32::<BigEndian>(req.transaction_id)
+                    .unwrap();
                 (&mut buffer[16..]).write_all(&req.info_hash[..]).unwrap();
                 (&mut buffer[36..]).write_all(&**req.peer_id).unwrap();
-                (&mut buffer[56..]).write_u64::<BigEndian>(req.downloaded).unwrap();
-                (&mut buffer[64..]).write_u64::<BigEndian>(req.left).unwrap();
-                (&mut buffer[72..]).write_u64::<BigEndian>(req.uploaded).unwrap();
-                (&mut buffer[80..]).write_u32::<BigEndian>((&req.event).into()).unwrap();
-                (&mut buffer[84..]).write_u32::<BigEndian>(req.ip_address).unwrap();
+                (&mut buffer[56..])
+                    .write_u64::<BigEndian>(req.downloaded)
+                    .unwrap();
+                (&mut buffer[64..])
+                    .write_u64::<BigEndian>(req.left)
+                    .unwrap();
+                (&mut buffer[72..])
+                    .write_u64::<BigEndian>(req.uploaded)
+                    .unwrap();
+                (&mut buffer[80..])
+                    .write_u32::<BigEndian>((&req.event).into())
+                    .unwrap();
+                (&mut buffer[84..])
+                    .write_u32::<BigEndian>(req.ip_address)
+                    .unwrap();
                 (&mut buffer[88..]).write_u32::<BigEndian>(req.key).unwrap();
-                (&mut buffer[92..]).write_u32::<BigEndian>(req.num_want).unwrap();
-                (&mut buffer[96..]).write_u16::<BigEndian>(req.port).unwrap();
+                (&mut buffer[92..])
+                    .write_u32::<BigEndian>(req.num_want)
+                    .unwrap();
+                (&mut buffer[96..])
+                    .write_u16::<BigEndian>(req.port)
+                    .unwrap();
                 98
             }
             TrackerMessage::ScrapeReq(req) => {
-                (&mut buffer[0..]).write_u64::<BigEndian>(req.connection_id).unwrap();
-                (&mut buffer[8..]).write_u32::<BigEndian>((&req.action).into()).unwrap();
-                (&mut buffer[12..]).write_u32::<BigEndian>(req.transaction_id).unwrap();
+                (&mut buffer[0..])
+                    .write_u64::<BigEndian>(req.connection_id)
+                    .unwrap();
+                (&mut buffer[8..])
+                    .write_u32::<BigEndian>((&req.action).into())
+                    .unwrap();
+                (&mut buffer[12..])
+                    .write_u32::<BigEndian>(req.transaction_id)
+                    .unwrap();
                 (&mut buffer[16..]).write_all(&req.info_hash[..]).unwrap();
                 36
             }
-            _ => unreachable!()
+            _ => unreachable!(),
         }
     }
 
@@ -455,7 +478,9 @@ impl UdpConnection {
             Action::Connect => {
                 let connection_id = cursor.read_u64::<BigEndian>()?;
                 Ok(TrackerMessage::ConnectResp(ConnectResponse {
-                    action, transaction_id, connection_id
+                    action,
+                    transaction_id,
+                    connection_id,
                 }))
             }
             Action::Announce => {
@@ -475,7 +500,12 @@ impl UdpConnection {
                     addrs
                 };
                 Ok(TrackerMessage::AnnounceResp(AnnounceResponse {
-                    action, transaction_id, interval, leechers, seeders, addrs
+                    action,
+                    transaction_id,
+                    interval,
+                    leechers,
+                    seeders,
+                    addrs,
                 }))
             }
             Action::Scrape => {
@@ -484,7 +514,11 @@ impl UdpConnection {
                 let incomplete = cursor.read_u32::<BigEndian>()?;
 
                 Ok(TrackerMessage::ScrapeResp(ScrapeResponse {
-                    action, transaction_id, complete, downloaded, incomplete
+                    action,
+                    transaction_id,
+                    complete,
+                    downloaded,
+                    incomplete,
                 }))
             }
             Action::Error => {
@@ -496,7 +530,7 @@ impl UdpConnection {
     pub fn id_expired(&self) -> bool {
         match self.state.as_ref() {
             Some(state) => Instant::now() - state.connection_id_time >= Duration::from_secs(60),
-            _ => true
+            _ => true,
         }
     }
 }

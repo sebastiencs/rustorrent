@@ -1,8 +1,7 @@
-
-use async_channel::{Sender, Receiver, TrySendError};
-use tokio::sync::RwLock;
-use std::net::SocketAddr;
+use async_channel::{Receiver, Sender, TrySendError};
 use hashbrown::HashMap;
+use std::net::SocketAddr;
+use tokio::sync::RwLock;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,13 +10,15 @@ use super::manager::UtpEvent;
 
 pub struct Tick {
     streams: Vec<Sender<UtpEvent>>,
-    recv: Receiver<Sender<UtpEvent>>
-    // streams: Arc<RwLock<HashMap<SocketAddr, Sender<UtpEvent>>>>,
+    recv: Receiver<Sender<UtpEvent>>, // streams: Arc<RwLock<HashMap<SocketAddr, Sender<UtpEvent>>>>,
 }
 
 impl Tick {
     pub fn new(recv: Receiver<Sender<UtpEvent>>) -> Self {
-        Self { streams: vec![], recv }
+        Self {
+            streams: vec![],
+            recv,
+        }
     }
 
     pub async fn start(self) {
@@ -32,12 +33,11 @@ impl Tick {
 
             tokio::time::sleep(Duration::from_millis(500)).await;
 
-            self.streams.retain(|s| {
-                match s.try_send(UtpEvent::Timeout) {
+            self.streams
+                .retain(|s| match s.try_send(UtpEvent::Timeout) {
                     Err(TrySendError::Closed(_)) => false,
-                    _ => true
-                }
-            });
+                    _ => true,
+                });
         }
     }
 }

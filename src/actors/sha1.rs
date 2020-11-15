@@ -1,6 +1,5 @@
-
-use crossbeam_channel::{unbounded, Receiver as SyncReceiver, Sender as SyncSender};
 use async_channel::Sender;
+use crossbeam_channel::{unbounded, Receiver as SyncReceiver, Sender as SyncSender};
 use tokio::runtime::Runtime;
 
 use std::ptr::read_unaligned;
@@ -17,7 +16,7 @@ pub enum Sha1Task {
         sum_metadata: Arc<[u8; 20]>,
         id: usize,
         addr: Sender<TorrentNotification>,
-    }
+    },
 }
 
 use std::thread;
@@ -38,18 +37,15 @@ pub fn compare_20_bytes(sum1: &[u8], sum2: &[u8]) -> bool {
 
             first1 == first2 && second1 == second2 && third1 == third2
         }
-    }
-    else {
+    } else {
         panic!("Sums have 20 bytes")
     }
 }
 
-
 #[derive(Debug)]
 struct Sha1Worker {
-    runtime: Arc<Runtime>
-    // valids: usize,
-    // invalids: usize
+    runtime: Arc<Runtime>, // valids: usize,
+                           // invalids: usize
 }
 
 impl Sha1Worker {
@@ -69,13 +65,15 @@ impl Sha1Worker {
 
     fn process(&mut self, task: Sha1Task) {
         match task {
-            Sha1Task::CheckSum { piece_buffer, sum_metadata, id, addr } => {
+            Sha1Task::CheckSum {
+                piece_buffer,
+                sum_metadata,
+                id,
+                addr,
+            } => {
                 let sha1 = crate::sha1::sha1(piece_buffer.buf.as_slice());
 
-                let valid = compare_20_bytes(
-                    &sha1[..],
-                    &sum_metadata[..]
-                );
+                let valid = compare_20_bytes(&sha1[..], &sum_metadata[..]);
 
                 self.send_result(id, valid, addr);
             }
@@ -131,12 +129,16 @@ impl Sha1Workers {
 
         let recv = receiver.clone();
         let runtime_clone = runtime.clone();
-        handles.push(thread::spawn(move || Sha1Worker::new(runtime_clone).start(recv, task)));
+        handles.push(thread::spawn(move || {
+            Sha1Worker::new(runtime_clone).start(recv, task)
+        }));
 
         for _ in 0..(num_cpus - 1) {
             let recv = receiver.clone();
             let runtime_clone = runtime.clone();
-            handles.push(thread::spawn(move || Sha1Worker::new(runtime_clone).start(recv, None)));
+            handles.push(thread::spawn(move || {
+                Sha1Worker::new(runtime_clone).start(recv, None)
+            }));
         }
 
         handles
@@ -156,28 +158,28 @@ mod tests {
 
     #[test]
     fn compare_sum_simd_slice() {
-        let full = [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1];
+        let full = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
         assert_eq!(compare_20_bytes(&full, &full), full == full);
 
-        let slice = [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0];
+        let slice = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0];
         assert_eq!(compare_20_bytes(&slice, &full), slice == full);
 
-        let slice = [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1];
+        let slice = [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
         assert_eq!(compare_20_bytes(&slice, &full), slice == full);
 
-        let slice = [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0];
+        let slice = [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0];
         assert_eq!(compare_20_bytes(&slice, &full), slice == full);
 
-        let slice = [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0];
+        let slice = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0];
         assert_eq!(compare_20_bytes(&full, &slice), full == slice);
 
         // test with the 17th byte
-        let slice = [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,1,1,1];
+        let slice = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1];
         assert_eq!(compare_20_bytes(&slice, &full), slice == full);
         assert_eq!(compare_20_bytes(&slice, &slice), slice == slice);
 
         // test with the 16th byte
-        let slice = [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,1,1,1,1];
+        let slice = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1];
         assert_eq!(compare_20_bytes(&slice, &full), slice == full);
         assert_eq!(compare_20_bytes(&slice, &slice), slice == slice);
     }

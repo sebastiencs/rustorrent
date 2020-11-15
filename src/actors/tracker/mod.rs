@@ -1,6 +1,5 @@
-
-mod udp;
 pub mod http;
+mod udp;
 
 use async_channel::Sender;
 use async_trait::async_trait;
@@ -9,10 +8,10 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::supervisors::torrent::{Result, TorrentNotification};
 use crate::errors::TorrentError;
-use crate::supervisors::tracker::{TrackerData, TrackerStatus};
 use crate::metadata::UrlHash;
+use crate::supervisors::torrent::{Result, TorrentNotification};
+use crate::supervisors::tracker::{TrackerData, TrackerStatus};
 
 #[async_trait]
 pub trait TrackerConnection {
@@ -30,8 +29,15 @@ pub struct Tracker {
 }
 
 impl Tracker {
-    pub fn new(data: Arc<TrackerData>, tracker_supervisor: Sender<(UrlHash, Instant, TrackerStatus)>) -> Tracker {
-        Tracker { data, addrs: Vec::new(), tracker_supervisor }
+    pub fn new(
+        data: Arc<TrackerData>,
+        tracker_supervisor: Sender<(UrlHash, Instant, TrackerStatus)>,
+    ) -> Tracker {
+        Tracker {
+            data,
+            addrs: Vec::new(),
+            tracker_supervisor,
+        }
     }
 
     pub async fn start(&mut self) {
@@ -63,7 +69,11 @@ impl Tracker {
 
         match self.connect_and_request().await {
             Ok(peer_addrs) => {
-                println!("PEERS FOUND ! {:?}\nLENGTH = {:?}", peer_addrs, peer_addrs.len());
+                println!(
+                    "PEERS FOUND ! {:?}\nLENGTH = {:?}",
+                    peer_addrs,
+                    peer_addrs.len()
+                );
                 self.send_addrs(peer_addrs).await;
             }
             Err(TorrentError::Unresponsive) => {
@@ -85,7 +95,7 @@ impl Tracker {
             Ok(addrs) if !addrs.is_empty() => {
                 self.set_connected_addr(connected_index);
                 Ok(addrs)
-            },
+            }
             Ok(empty) => Ok(empty),
             Err(e) => {
                 println!("ANNOUNCE FAILED {:?}", e);
@@ -95,7 +105,9 @@ impl Tracker {
     }
 
     async fn send_to_supervisor(&self, msg: TrackerStatus) {
-        self.tracker_supervisor.send((self.data.url.hash(), Instant::now(), msg)).await;
+        self.tracker_supervisor
+            .send((self.data.url.hash(), Instant::now(), msg))
+            .await;
     }
 
     async fn send_addrs(&self, addrs: Vec<SocketAddr>) {
@@ -109,12 +121,11 @@ impl Tracker {
     fn new_connection(
         data: Arc<TrackerData>,
         addr: Vec<Arc<SocketAddr>>,
-    ) -> Box<dyn TrackerConnection + Send + Sync>
-    {
+    ) -> Box<dyn TrackerConnection + Send + Sync> {
         match data.url.scheme() {
             "http" => http::HttpConnection::new(data, addr),
             "udp" => udp::UdpConnection::new(data, addr),
-            _ => unreachable!()
+            _ => unreachable!(),
         }
     }
 
@@ -131,6 +142,6 @@ impl Tracker {
 
 impl Drop for Tracker {
     fn drop(&mut self) {
-        println!("ATRACKER DROPPED !", );
+        println!("ATRACKER DROPPED !",);
     }
 }

@@ -1,13 +1,12 @@
-
-pub mod ser;
 pub mod de;
+pub mod ser;
 
 use serde::de::Visitor;
-use serde::{de as serde_de, Deserializer, Deserialize};
+use serde::{de as serde_de, Deserialize, Deserializer};
 
 #[derive(Debug)]
 pub struct PtrBuf<'a> {
-    pub slice: &'a [u8]
+    pub slice: &'a [u8],
 }
 
 impl<'a, 'de: 'a> Deserialize<'de> for PtrBuf<'a> {

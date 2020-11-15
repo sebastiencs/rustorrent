@@ -1,25 +1,28 @@
 use std::{net::SocketAddr, sync::Arc};
 
+use async_channel::unbounded;
 use async_channel::Receiver;
 use async_channel::TrySendError;
-use async_channel::unbounded;
 use async_channel::{bounded, Sender};
 use tokio::net::ToSocketAddrs;
 use tokio::sync::Mutex;
 use tokio::task;
 // use tokio::{net::UdpSocket, sync::RwLock, task};
-use tokio::io::{ErrorKind, Error};
+use futures::future;
 use hashbrown::HashMap;
 use shared_arena::SharedArena;
-use futures::future;
-use std::task::{Poll, Context};
+use std::task::{Context, Poll};
+use tokio::io::{Error, ErrorKind};
 use tokio::sync::oneshot;
 
 use super::udp_socket::MyUdpSocket as UdpSocket;
 
 use super::manager::{UtpEvent, UtpManager};
-use super::{UtpState, Packet, Result, stream::UtpStream, tick::Tick, HEADER_SIZE, PACKET_MAX_SIZE, Timestamp, PacketType, stream::State};
 use super::udp_socket::MmsgBuffer;
+use super::{
+    stream::State, stream::UtpStream, tick::Tick, Packet, PacketType, Result, Timestamp, UtpState,
+    HEADER_SIZE, PACKET_MAX_SIZE,
+};
 
 const BUFFER_CAPACITY: usize = 1500;
 
@@ -62,8 +65,7 @@ impl Dispatcher {
         packet_arena: Arc<SharedArena<Packet>>,
         state: impl Into<Option<State>>,
         on_connected: Option<oneshot::Sender<(UtpStream, SocketAddr)>>,
-    ) -> Sender<UtpEvent>
-    {
+    ) -> Sender<UtpEvent> {
         // let socket = self.socket.clone();
         // let socket = self.get_matching_socket(&sockaddr);
 
@@ -90,9 +92,7 @@ impl Dispatcher {
     }
 
     async fn poll_event(&self, buffers: &mut MmsgBuffer) -> Result<()> {
-        let fun = |cx: &mut Context<'_>| {
-            self.socket.poll_recvmmsg(cx, buffers)
-        };
+        let fun = |cx: &mut Context<'_>| self.socket.poll_recvmmsg(cx, buffers);
 
         future::poll_fn(fun).await.map_err(Into::into)
     }
@@ -107,7 +107,6 @@ impl Dispatcher {
             let mut buffers = buffers.iter_mmsgs();
 
             while let Some((addr, buffer)) = buffers.next() {
-
                 if buffer.len() < HEADER_SIZE || buffer.len() > PACKET_MAX_SIZE {
                     continue;
                 }
@@ -145,7 +144,7 @@ impl Dispatcher {
                         self.ticker.try_send(manager.clone()).unwrap();
                         self.streams.insert(addr, manager.clone());
                         manager.send(incoming).await.unwrap();
-                    },
+                    }
                     Ok(PacketType::State) => {
                         if let Some(manager) = {
                             let mut pending = self.pending_connect.lock().await;
@@ -155,13 +154,12 @@ impl Dispatcher {
                             self.streams.insert(addr, manager.clone());
                             manager.send(incoming).await.unwrap();
                         }
-                    },
+                    }
                     _ => {}
                 }
             }
         }
     }
-
 }
 
 pub struct UtpListener {
@@ -180,9 +178,7 @@ impl UtpListener {
         let (sender, recv) = bounded(8);
         let (ticker, tick_recv) = unbounded();
 
-        task::spawn(async move {
-            Tick::new(tick_recv).start().await
-        });
+        task::spawn(async move { Tick::new(tick_recv).start().await });
 
         let ticker_clone = ticker.clone();
         let socket_clone = socket.clone();
@@ -195,10 +191,18 @@ impl UtpListener {
                 arena_clone,
                 pending_clone,
                 ticker_clone,
-            ).start().await;
+            )
+            .start()
+            .await;
         });
 
-        UtpListener { recv, packet_arena, pending_connect, socket, ticker }
+        UtpListener {
+            recv,
+            packet_arena,
+            pending_connect,
+            socket,
+            ticker,
+        }
     }
 
     pub async fn accept(&self) -> (UtpStream, SocketAddr) {
@@ -214,7 +218,7 @@ impl UtpListener {
             sockaddr,
             self.packet_arena.clone(),
             state,
-            on_connected.into()
+            on_connected.into(),
         );
         self.ticker.try_send(manager.clone()).unwrap();
 

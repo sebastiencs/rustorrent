@@ -15,7 +15,7 @@ use tokio::runtime::Runtime;
 // type PeerAddr = Sender<MessageActor>;
 use crate::supervisors::torrent::TorrentSupervisor;
 
-use crate::actors::sha1::{Sha1Workers, Sha1Task};
+use crate::actors::sha1::{Sha1Task, Sha1Workers};
 
 struct SessionInner {
     cmds: SyncReceiver<SessionCommand>,
@@ -27,9 +27,7 @@ struct SessionInner {
 impl SessionInner {
     fn start(&self) {
         // self.runtime.enter();
-        self.runtime.block_on(async {
-            self.start_session()
-        })
+        self.runtime.block_on(async { self.start_session() })
     }
 
     fn start_session(&self) {
@@ -53,7 +51,7 @@ impl SessionInner {
 }
 
 enum SessionCommand {
-    AddTorrent(Torrent)
+    AddTorrent(Torrent),
 }
 
 pub struct Session {
@@ -79,7 +77,11 @@ impl Session {
             session.start();
         });
 
-        Session { handle, actor: sender, runtime }
+        Session {
+            handle,
+            actor: sender,
+            runtime,
+        }
     }
 
     pub fn add_torrent(&mut self, torrent: Torrent) {

@@ -1,4 +1,3 @@
-
 #[cfg(target_arch = "x86_64")]
 mod x86_sha;
 
@@ -10,7 +9,7 @@ pub fn sha1(data: &[u8]) -> [u8; 20] {
             && is_x86_feature_detected!("ssse3")
             && is_x86_feature_detected!("sse4.1")
         {
-            return unsafe { x86_sha::compute_sha1(data) }
+            return unsafe { x86_sha::compute_sha1(data) };
         }
     }
 

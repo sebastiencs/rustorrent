@@ -200,7 +200,6 @@
 //     //     b.iter_with_large_drop(|| new_arena.alloc(black_box(MyStruct::default())))
 //     // });
 
-
 //     // return;
 
 //     // group.bench_function("arena_arc", |b| {
@@ -249,7 +248,6 @@
 //                 duration
 //             });
 //         });
-
 
 //         use std::time::{Instant, Duration};
 
@@ -467,7 +465,6 @@
 // //         var % mask
 // //     });
 // // }
-
 
 // // #[bench]
 // // fn mem_access(b: &mut Bencher) {

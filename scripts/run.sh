@@ -17,7 +17,8 @@ case "$1" in
         export RUSTFLAGS="-Zsanitizer=address"
         export RUSTDOCFLAGS="-Zsanitizer=address"
 
-        CMD="cargo test -Z build-std --target $TARGET $RELEASE_FLAG"
+        CMD="cargo test -Z build-std --target $TARGET $RELEASE_FLAG send_data"
+        # CMD="cargo test -Z build-std --target $TARGET $RELEASE_FLAG"
         ;;
     leak)
         export RUSTFLAGS="-Zsanitizer=leak"
@@ -54,6 +55,25 @@ case "$1" in
         # cargo test --all-features --no-fail-fast
 
         grcov ./target-cov/debug/ -s . -t html --llvm --branch --ignore-not-existing --ignore "*rust/library*" --ignore "*registry*" --excl-line "grcov_ignore|assert"
+        ;;
+    source-coverage)
+        export CARGO_INCREMENTAL="0"
+        export RUSTFLAGS="-Zinstrument-coverage"
+        # export RUSTFLAGS="-Zprofile -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Zpanic_abort_tests -Cpanic=abort"
+        # export RUSTDOCFLAGS="-Cpanic=abort"
+        export CARGO_TARGET_DIR="target-srccov"
+
+        # rm -rf target-cov/debug/deps/*.gcda
+
+        cargo build --tests
+        cargo test --no-fail-fast
+        # cargo test --all-features --no-fail-fast
+
+        ~/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-profdata merge -sparse default.profraw -o default.profdata
+
+        ~/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-cov show -Xdemangler=rustfilt target-srccov/debug/deps/rustorrent-940aa3d188f0a1a2 -instr-profile=default.profdata -show-line-counts-or-regions -show-instantiations -name=add_quoted_string
+
+        # grcov ./target-cov/debug/ -s . -t html --llvm --branch --ignore-not-existing --ignore "*rust/library*" --ignore "*registry*" --excl-line "grcov_ignore|assert"
 
         # grcov ./target/debug/ -s . -t html --llvm --branch --ignore-not-existing -o ./coverage.info --ignore "*rust/library*" --ignore "*registry*" --excl-line "grcov_ignore|assert"
 

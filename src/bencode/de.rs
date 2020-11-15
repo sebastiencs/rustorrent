@@ -1,4 +1,3 @@
-
 use serde::de::Visitor;
 use serde::de::{DeserializeSeed, MapAccess, SeqAccess};
 use serde::forward_to_deserialize_any;
@@ -19,7 +18,7 @@ pub enum DeserializeError {
     NoFile,
     EmptyFile,
     UnalignedPieces,
-    Message(String)
+    Message(String),
 }
 
 type Result<T> = std::result::Result<T, DeserializeError>;
@@ -46,7 +45,7 @@ impl std::error::Error for DeserializeError {
 
 pub fn from_bytes<'de, T>(s: &'de [u8]) -> Result<T>
 where
-    T: Deserialize<'de>
+    T: Deserialize<'de>,
 {
     let mut de: Deserializer = Deserializer::new(s);
     T::deserialize(&mut de)
@@ -54,7 +53,7 @@ where
 
 pub fn from_bytes_with_hash<'de, T>(s: &'de [u8]) -> Result<(T, Vec<u8>)>
 where
-    T: Deserialize<'de>
+    T: Deserialize<'de>,
 {
     let mut de: Deserializer = Deserializer::new(s);
     let res = T::deserialize(&mut de)?;
@@ -85,12 +84,12 @@ pub fn read_meta(s: &[u8]) -> Result<Torrent> {
     match &meta.info.files {
         InfoFile::Multiple { files, .. } => {
             if files.is_empty() {
-                return Err(DeserializeError::NoFile)
+                return Err(DeserializeError::NoFile);
             }
-        },
+        }
         InfoFile::Single { length, .. } => {
             if *length == 0 {
-                return Err(DeserializeError::EmptyFile)
+                return Err(DeserializeError::EmptyFile);
             }
         }
     }
@@ -139,16 +138,15 @@ impl<'de> Deserializer<'de> {
     }
 
     fn consume(&mut self) -> Result<()> {
-        self.input = &self.input
-                          .get(1..)
-                          .ok_or(DeserializeError::UnexpectedEOF)?;
+        self.input = &self.input.get(1..).ok_or(DeserializeError::UnexpectedEOF)?;
         Ok(())
     }
 
     fn skip(&mut self, n: i64) -> Result<()> {
-        self.input = &self.input
-                          .get(n as usize..)
-                          .ok_or(DeserializeError::UnexpectedEOF)?;
+        self.input = &self
+            .input
+            .get(n as usize..)
+            .ok_or(DeserializeError::UnexpectedEOF)?;
         Ok(())
     }
 
@@ -159,7 +157,7 @@ impl<'de> Deserializer<'de> {
             match self.next()? {
                 c @ b'0'..=b'9' => n = (n * 10) + (c - b'0') as i64,
                 c if c == stop => break,
-                c => return Err(DeserializeError::WrongCharacter(c))
+                c => return Err(DeserializeError::WrongCharacter(c)),
             }
         }
 
@@ -173,8 +171,8 @@ impl<'de> Deserializer<'de> {
             Some(b'-') => {
                 self.consume()?;
                 true
-            },
-            _ => false
+            }
+            _ => false,
         };
 
         let n = self.read_integer(b'e')?;
@@ -185,8 +183,10 @@ impl<'de> Deserializer<'de> {
     fn read_string(&mut self) -> Result<&'de [u8]> {
         let len = self.read_integer(b':')?;
 
-        let s = self.input.get(..len as usize)
-                          .ok_or(DeserializeError::UnexpectedEOF)?;
+        let s = self
+            .input
+            .get(..len as usize)
+            .ok_or(DeserializeError::UnexpectedEOF)?;
 
         self.skip(len)?;
 
@@ -220,7 +220,7 @@ impl<'a, 'de> serde::de::Deserializer<'de> for &'a mut Deserializer<'de> {
                 self.consume()?;
                 // println!("FOUND LIST {:?}", &self.input[..10]);
                 visitor.visit_seq(BencAccess::new(self))
-            },
+            }
             b'd' => {
                 let depth = self.depth.get();
                 if depth > 100 {
@@ -230,12 +230,12 @@ impl<'a, 'de> serde::de::Deserializer<'de> for &'a mut Deserializer<'de> {
                 // println!("FOUND DICT {}", self.depth.get());
                 self.consume()?;
                 visitor.visit_map(BencAccess::new(self))
-            },
+            }
             _n @ b'0'..=b'9' => {
                 // println!("FOUND STRING", );
                 visitor.visit_borrowed_bytes(self.read_string()?)
             }
-            c => Err(DeserializeError::WrongCharacter(c))
+            c => Err(DeserializeError::WrongCharacter(c)),
         }
     }
 
@@ -254,7 +254,7 @@ impl<'a, 'de> serde::de::Deserializer<'de> for &'a mut Deserializer<'de> {
 }
 
 struct BencAccess<'a, 'de> {
-    de: &'a mut Deserializer<'de>
+    de: &'a mut Deserializer<'de>,
 }
 
 impl<'a, 'de> BencAccess<'a, 'de> {
@@ -284,7 +284,7 @@ impl<'a, 'de> MapAccess<'de> for BencAccess<'a, 'de> {
             }
             let _s = self.de.input;
             //println!("DEPTH[END_DICT]={:?} {:?}", self.de.info_depth, String::from_utf8((&s[0..std::cmp::min(50, s.len())]).to_vec()));
-            return Ok(None)
+            return Ok(None);
         }
 
         seed.deserialize(&mut *self.de).map(Some)
@@ -322,12 +322,11 @@ impl<'a, 'de> SeqAccess<'de> for BencAccess<'a, 'de> {
     }
 }
 
-
 #[allow(non_snake_case)]
 #[cfg(test)]
 mod tests {
 
-    use super::{DeserializeError, from_bytes, Result};
+    use super::{from_bytes, DeserializeError, Result};
     use serde::Deserialize;
 
     #[test]
@@ -342,12 +341,15 @@ mod tests {
 
         let bc: Dict = from_bytes(b"d1:ai12453e1:b3:aaa1:c3:bbb1:X10:0123456789e").unwrap();
 
-        assert_eq!(bc, Dict {
-            a: 12453,
-            b: "aaa",
-            c: "bbb",
-            X: "0123456789",
-        });
+        assert_eq!(
+            bc,
+            Dict {
+                a: 12453,
+                b: "aaa",
+                c: "bbb",
+                X: "0123456789",
+            }
+        );
     }
 
     #[test]

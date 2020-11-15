@@ -1,8 +1,5 @@
-
-
-
-use crate::bencode::de::DeserializeError;
 use crate::actors::tracker::http::HttpError;
+use crate::bencode::de::DeserializeError;
 
 #[derive(Debug)]
 pub enum TorrentError {
@@ -11,7 +8,7 @@ pub enum TorrentError {
     Http(HttpError),
     Unresponsive,
     IO(std::io::Error),
-    IOAsync(tokio::io::Error)
+    IOAsync(tokio::io::Error),
 }
 
 impl From<HttpError> for TorrentError {
@@ -19,7 +16,7 @@ impl From<HttpError> for TorrentError {
         match e {
             HttpError::IO(e) => TorrentError::IO(e),
             HttpError::IOAsync(e) => TorrentError::IOAsync(e),
-            e => TorrentError::Http(e)
+            e => TorrentError::Http(e),
         }
     }
 }

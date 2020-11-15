@@ -1,20 +1,7 @@
-
 use core::arch::x86_64::{
-    __m128i,
-    _mm_add_epi32,
-    _mm_extract_epi32,
-    _mm_load_si128,
-    _mm_loadu_si128,
-    _mm_set_epi64x,
-    _mm_set_epi32,
-    _mm_sha1msg1_epu32,
-    _mm_sha1msg2_epu32,
-    _mm_sha1nexte_epu32,
-    _mm_sha1rnds4_epu32,
-    _mm_shuffle_epi32,
-    _mm_shuffle_epi8,
-    _mm_store_si128,
-    _mm_xor_si128,
+    __m128i, _mm_add_epi32, _mm_extract_epi32, _mm_load_si128, _mm_loadu_si128, _mm_set_epi32,
+    _mm_set_epi64x, _mm_sha1msg1_epu32, _mm_sha1msg2_epu32, _mm_sha1nexte_epu32,
+    _mm_sha1rnds4_epu32, _mm_shuffle_epi32, _mm_shuffle_epi8, _mm_store_si128, _mm_xor_si128,
 };
 
 #[allow(clippy::cast_ptr_alignment, non_snake_case)]
@@ -23,12 +10,18 @@ use core::arch::x86_64::{
 unsafe fn process_blocks<'b>(
     state: &mut State,
     blocks: impl Iterator<Item = &'b [u8]>,
-    load: unsafe fn (*const __m128i) -> __m128i,
-)
-{
+    load: unsafe fn(*const __m128i) -> __m128i,
+) {
     let (
-        mut ABCD, mut ABCD_SAVE, mut E0, mut E0_SAVE,
-        mut E1, mut MSG0, mut MSG1, mut MSG2, mut MSG3
+        mut ABCD,
+        mut ABCD_SAVE,
+        mut E0,
+        mut E0_SAVE,
+        mut E1,
+        mut MSG0,
+        mut MSG1,
+        mut MSG2,
+        mut MSG3,
     );
 
     let MASK = _mm_set_epi64x(0x0001_0203_0405_0607, 0x0809_0a0b_0c0d_0e0f);
@@ -39,7 +32,6 @@ unsafe fn process_blocks<'b>(
     ABCD = _mm_shuffle_epi32(ABCD, 0x1B);
 
     for block in blocks {
-
         ABCD_SAVE = ABCD;
         E0_SAVE = E0;
 
@@ -226,7 +218,7 @@ impl Default for State {
             s1: 0xEFCD_AB89,
             s2: 0x98BA_DCFE,
             s3: 0x1032_5476,
-            s4: 0xC3D2_E1F0
+            s4: 0xC3D2_E1F0,
         }
     }
 }
@@ -244,7 +236,7 @@ impl State {
 #[repr(C, align(16))]
 struct Padding {
     padding: [u8; 128],
-    end: usize
+    end: usize,
 }
 
 impl Padding {
@@ -282,7 +274,6 @@ impl Deref for Padding {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sha,sse2,ssse3,sse4.1")]
 pub(super) unsafe fn compute_sha1(data: &[u8]) -> [u8; 20] {
-
     // Initial state
     let mut state = State::default();
 
@@ -314,23 +305,23 @@ pub(super) unsafe fn compute_sha1(data: &[u8]) -> [u8; 20] {
     [
         (state.s0 >> 24) as u8,
         (state.s0 >> 16) as u8,
-        (state.s0 >>  8) as u8,
-        (state.s0 >>  0) as u8,
+        (state.s0 >> 8) as u8,
+        (state.s0 >> 0) as u8,
         (state.s1 >> 24) as u8,
         (state.s1 >> 16) as u8,
-        (state.s1 >>  8) as u8,
-        (state.s1 >>  0) as u8,
+        (state.s1 >> 8) as u8,
+        (state.s1 >> 0) as u8,
         (state.s2 >> 24) as u8,
         (state.s2 >> 16) as u8,
-        (state.s2 >>  8) as u8,
-        (state.s2 >>  0) as u8,
+        (state.s2 >> 8) as u8,
+        (state.s2 >> 0) as u8,
         (state.s3 >> 24) as u8,
         (state.s3 >> 16) as u8,
-        (state.s3 >>  8) as u8,
-        (state.s3 >>  0) as u8,
+        (state.s3 >> 8) as u8,
+        (state.s3 >> 0) as u8,
         (state.s4 >> 24) as u8,
         (state.s4 >> 16) as u8,
-        (state.s4 >>  8) as u8,
-        (state.s4 >>  0) as u8,
+        (state.s4 >> 8) as u8,
+        (state.s4 >> 0) as u8,
     ]
 }

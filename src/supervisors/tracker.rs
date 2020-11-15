@@ -1,27 +1,27 @@
+use async_channel::{bounded, Receiver, Sender};
 use url::Url;
-use async_channel::{Sender, Receiver, bounded};
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::actors::peer::PeerExternId;
+use crate::actors::tracker::Tracker;
+use crate::errors::TorrentError;
 use crate::metadata::Torrent;
 use crate::supervisors::torrent::TorrentNotification;
-use crate::errors::TorrentError;
-use crate::actors::tracker::Tracker;
-use crate::actors::peer::PeerExternId;
 
 #[derive(Debug)]
 pub enum TrackerStatus {
     FoundPeers(usize),
     HostUnresolved,
-    ErrorOccured(TorrentError)
+    ErrorOccured(TorrentError),
 }
 
 pub struct TrackerData {
     pub metadata: Arc<Torrent>,
     pub supervisor: Sender<TorrentNotification>,
     pub url: Arc<TrackerUrl>,
-    pub extern_id: Arc<PeerExternId>
+    pub extern_id: Arc<PeerExternId>,
 }
 
 impl From<(&TrackerSupervisor, &Arc<TrackerUrl>)> for TrackerData {
@@ -30,7 +30,7 @@ impl From<(&TrackerSupervisor, &Arc<TrackerUrl>)> for TrackerData {
             metadata: Arc::clone(&tracker.metadata),
             supervisor: tracker.supervisor.clone(),
             url: Arc::clone(url),
-            extern_id: tracker.extern_id.clone()
+            extern_id: tracker.extern_id.clone(),
         }
     }
 }
@@ -38,14 +38,14 @@ impl From<(&TrackerSupervisor, &Arc<TrackerUrl>)> for TrackerData {
 #[derive(Debug)]
 pub struct TrackerState {
     last_status: TrackerStatus,
-    last_status_time: Instant
+    last_status_time: Instant,
 }
 
 impl From<(Instant, TrackerStatus)> for TrackerState {
     fn from((instant, msg): (Instant, TrackerStatus)) -> TrackerState {
         TrackerState {
             last_status: msg,
-            last_status_time: instant
+            last_status_time: instant,
         }
     }
 }
@@ -67,7 +67,7 @@ pub struct TrackerSupervisor {
     /// Otherwise we would have to clone an Arc<Url> in every messages etc.
     tracker_states: Map<UrlHash, TrackerState>,
     /// Our peer_id we send to trackers
-    extern_id: Arc<PeerExternId>
+    extern_id: Arc<PeerExternId>,
 }
 
 impl TrackerSupervisor {
@@ -75,8 +75,7 @@ impl TrackerSupervisor {
         supervisor: Sender<TorrentNotification>,
         metadata: Arc<Torrent>,
         extern_id: Arc<PeerExternId>,
-    ) -> TrackerSupervisor
-    {
+    ) -> TrackerSupervisor {
         let urls = metadata.get_urls_tiers();
         let (_sender, recv) = bounded(10);
         TrackerSupervisor {
@@ -86,7 +85,7 @@ impl TrackerSupervisor {
             recv,
             _sender,
             extern_id,
-            tracker_states: Default::default()
+            tracker_states: Default::default(),
         }
     }
 
@@ -113,7 +112,7 @@ impl TrackerSupervisor {
                     pending_status.push((url, instant, TrackerStatus::FoundPeers(n)));
                     // 1 is connected, stop the loop
                     break;
-                },
+                }
                 Ok(Ok((url, instant, msg))) => {
                     pending_status.push((url, instant, msg));
                 }
@@ -132,16 +131,13 @@ impl TrackerSupervisor {
         let data = Arc::new(TrackerData::from((self, url)));
         let sender = self._sender.clone();
 
-        tokio::spawn(async move {
-            Tracker::new(data, sender).start().await
-        });
+        tokio::spawn(async move { Tracker::new(data, sender).start().await });
     }
 
     fn update_state(&mut self, url: UrlHash, instant: Instant, msg: TrackerStatus) {
         let msg = (instant, msg).into();
 
-        self.tracker_states
-            .insert(url, msg);
+        self.tracker_states.insert(url, msg);
     }
 
     async fn wait_on_tracker_msg(&mut self) {
@@ -155,9 +151,7 @@ impl TrackerSupervisor {
     }
 
     async fn try_another_tracker(&self) {
-        let spawned = {
-            self.tracker_states.keys().copied().collect::<Vec<_>>()
-        };
+        let spawned = { self.tracker_states.keys().copied().collect::<Vec<_>>() };
 
         for url in self.urls.as_slice() {
             if !spawned.contains(&url.hash()) {
@@ -183,6 +177,6 @@ impl TrackerSupervisor {
 
 impl Drop for TrackerSupervisor {
     fn drop(&mut self) {
-        println!("TRACKER DROPPED !", );
+        println!("TRACKER DROPPED !",);
     }
 }

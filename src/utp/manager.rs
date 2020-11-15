@@ -1,38 +1,34 @@
-
-use async_channel::{bounded, Sender, Receiver};
+use async_channel::{bounded, Receiver, Sender};
 use futures::StreamExt;
 use socket2::Socket;
+use tokio::io::{Error, ErrorKind};
 use tokio::sync::oneshot;
 use tokio::task;
-use tokio::io::{ErrorKind, Error};
 // use tokio::net::UdpSocket;
 use fixed::types::I48F16;
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::collections::VecDeque;
 
 // use tokio::sync::mpsc::{Receiver as TokioReceiver, channel, error::TrySendError as TokioTrySendError};
 
-use super::udp_socket::{MyUdpSocket as UdpSocket, FdGuard};
-use shared_arena::{ArenaBox, SharedArena};
 use super::stream::ReceivedData;
+use super::udp_socket::{FdGuard, MyUdpSocket as UdpSocket};
+use shared_arena::{ArenaBox, SharedArena};
 //use super::writer::{UtpWriter, WriterCommand, WriterUserCommand};
 use super::stream::{State, UtpStream};
 
 use super::{
-    UtpError, Result, SequenceNumber, Packet,
-    Timestamp, PacketType, HEADER_SIZE,
-    SelectiveAckBit, DelayHistory,
-    UDP_IPV4_MTU, UDP_IPV6_MTU,
+    DelayHistory, Packet, PacketType, Result, SelectiveAckBit, SequenceNumber, Timestamp, UtpError,
+    HEADER_SIZE, UDP_IPV4_MTU, UDP_IPV6_MTU,
 };
-use super::{
-    MSS,
-    UtpState,
-    TARGET, MIN_CWND
-};
+use super::{UtpState, MIN_CWND, MSS, TARGET};
 
-use std::{time::{Instant, Duration}, sync::atomic::Ordering};
+use std::{
+    sync::atomic::Ordering,
+    time::{Duration, Instant},
+};
 
 const TO_SEND_PACKETS_RESEND: usize = 1;
 const TO_SEND_PACKETS_RESEND_ONLY_LOST: usize = 1 << 1;
@@ -81,19 +77,15 @@ pub(super) struct UtpManager {
 
     rtt: usize,
     rtt_var: usize,
-    rto: usize
+    rto: usize,
 }
 
 // #[derive(Debug)]
 pub enum UtpEvent {
-    IncomingPacket {
-        packet: ArenaBox<Packet>
-    },
+    IncomingPacket { packet: ArenaBox<Packet> },
     Timeout,
     Writable,
-    UserWrite {
-        data: Box<[u8]>
-    }
+    UserWrite { data: Box<[u8]> },
     // IncomingBytes {
     //     buffer: Vec<u8>,
     //     timestamp: Timestamp
@@ -115,12 +107,12 @@ impl std::fmt::Debug for UtpEvent {
 #[derive(Debug)]
 enum SendPush {
     Front,
-    Back
+    Back,
 }
 
 impl Drop for UtpManager {
     fn drop(&mut self) {
-        println!("DROP UTP MANAGER", );
+        println!("DROP UTP MANAGER",);
         // if let Some(on_connected) = self.on_connected.take() {
         //     task::spawn(async move {
         //         on_connected.send(None).await
@@ -164,7 +156,7 @@ impl UtpManager {
             next_cwnd_decrease: Instant::now(),
             rtt: 0,
             rtt_var: 0,
-            rto: 0
+            rto: 0,
         }
     }
 
@@ -179,7 +171,6 @@ impl UtpManager {
         &mut self,
         socket: &'a UdpSocket,
     ) -> Result<(UtpEvent, Option<FdGuard<'a, Socket>>)> {
-
         let need_to_send = self.to_send_detail != 0 || !self.to_send.is_empty();
 
         return tokio::select! {
@@ -219,9 +210,7 @@ impl UtpManager {
         self.ensure_connected();
         let socket = self.socket.clone();
 
-        while let Ok((incoming, mut guard)) = {
-            self.receive_timeout(&socket).await
-        } {
+        while let Ok((incoming, mut guard)) = { self.receive_timeout(&socket).await } {
             let result = self.process_incoming(incoming);
 
             if let (Err(SendWouldBlock), Some(guard)) = (&result, &mut guard) {
@@ -253,19 +242,21 @@ impl UtpManager {
                     Err(UtpError::PacketLost) => {
                         self.resend_packets(true)?;
                     }
-                    Ok(_) => {},
-                    Err(e) => return Err(e)
+                    Ok(_) => {}
+                    Err(e) => return Err(e),
                 }
-            },
+            }
             UtpEvent::Timeout => {
                 // println!("== timeout {:?}", self.ntimeout);
                 if Instant::now() > self.timeout {
                     self.on_timeout()?;
                 }
-            },
+            }
             UtpEvent::Writable => {
                 if self.to_send_detail != 0 {
-                    self.resend_packets(self.to_send_detail | TO_SEND_PACKETS_RESEND_ONLY_LOST != 0)?;
+                    self.resend_packets(
+                        self.to_send_detail | TO_SEND_PACKETS_RESEND_ONLY_LOST != 0,
+                    )?;
                 }
                 // TODO: Don't push front here
                 while let Some(packet) = self.to_send.pop_front() {
@@ -276,7 +267,7 @@ impl UtpManager {
                     // println!("write {:?}", packet.get_seq_number());
                     self.send_packet_inner(packet, SendPush::Front)?;
                 }
-            },
+            }
             UtpEvent::UserWrite { data } => {
                 self.send(&data)?;
             }
@@ -289,9 +280,7 @@ impl UtpManager {
 
         let utp_state = self.state.utp_state();
 
-        if (utp_state == SynSent && self.ntimeout >= 3)
-            || self.ntimeout >= 7
-        {
+        if (utp_state == SynSent && self.ntimeout >= 3) || self.ntimeout >= 7 {
             return Err(Error::new(ErrorKind::TimedOut, "utp timed out").into());
         }
 
@@ -315,7 +304,12 @@ impl UtpManager {
         if self.state.inflight_size() > 0 {
             self.ntimeout += 1;
         } else if self.to_send.is_empty() && self.state.inflight_size() == 0 {
-            println!("NLOST {:?} in_flight={} to_send={}", self.nlost, self.state.inflight_size(), self.to_send.len());
+            println!(
+                "NLOST {:?} in_flight={} to_send={}",
+                self.nlost,
+                self.state.inflight_size(),
+                self.to_send.len()
+            );
             self.notify_finish();
             // println!("RTO {:?} RTT {:?} RTT_VAR {:?}", self.rto, self.rtt, self.rtt_var);
         }
@@ -326,7 +320,11 @@ impl UtpManager {
     }
 
     fn notify_finish(&self) {
-        println!("FINISH flight={} to_send={}", self.state.inflight_size(), self.to_send.len());
+        println!(
+            "FINISH flight={} to_send={}",
+            self.state.inflight_size(),
+            self.to_send.len()
+        );
         let on_receive = self.on_receive.clone();
         task::spawn(async move {
             on_receive.send(ReceivedData::Done).await.unwrap();
@@ -411,10 +409,8 @@ impl UtpManager {
                 //     packet_type: PacketType::State
                 // }).await.unwrap();
             }
-            (PacketType::Fin, _) => {
-            }
-            (PacketType::Reset, _) => {
-            }
+            (PacketType::Fin, _) => {}
+            (PacketType::Reset, _) => {}
         }
 
         Ok(())
@@ -463,7 +459,7 @@ impl UtpManager {
                         }
                         SelectiveAckBit::Acked(seq_num) => {
                             bytes_newly_acked += self.ack_one_packet(seq_num, received_at);
-//                            bytes_newly_acked += self.state.remove_packet(seq_num).await;
+                            //                            bytes_newly_acked += self.state.remove_packet(seq_num).await;
                         }
                     }
                 }
@@ -512,9 +508,8 @@ impl UtpManager {
         packet: &Packet,
         ack_received_at: Timestamp,
         mut rtt: usize,
-        mut rtt_var: usize
-    ) -> (usize, usize)
-    {
+        mut rtt_var: usize,
+    ) -> (usize, usize) {
         if !packet.resent {
             let rtt_packet = packet.get_timestamp().elapsed_millis(ack_received_at) as usize;
 
@@ -536,25 +531,25 @@ impl UtpManager {
 
         let mut size = 0;
 
-        self.state
-            .inflight_packets
-            .retain(|_, p| {
-                !p.is_seq_less_equal(ack_number) || {
-                    let (r, rv) = Self::update_rtt(p, ack_received_at, rtt, rtt_var);
-                    rtt = r;
-                    rtt_var = rv;
-                    size += p.size();
+        self.state.inflight_packets.retain(|_, p| {
+            !p.is_seq_less_equal(ack_number) || {
+                let (r, rv) = Self::update_rtt(p, ack_received_at, rtt, rtt_var);
+                rtt = r;
+                rtt_var = rv;
+                size += p.size();
 
-                    // println!("remove from in_flight = {:?} with ack={:?}", p.get_seq_number(), ack_number);
+                // println!("remove from in_flight = {:?} with ack={:?}", p.get_seq_number(), ack_number);
 
-                    false
-                }
-            });
+                false
+            }
+        });
 
         self.rtt = rtt;
         self.rtt_var = rtt_var;
 
-        self.state.in_flight.fetch_sub(size as u32, Ordering::AcqRel);
+        self.state
+            .in_flight
+            .fetch_sub(size as u32, Ordering::AcqRel);
         size
     }
 
@@ -567,7 +562,9 @@ impl UtpManager {
             self.rtt = r;
             self.rtt_var = rv;
             size = packet.size();
-            self.state.in_flight.fetch_sub(size as u32, Ordering::AcqRel);
+            self.state
+                .in_flight
+                .fetch_sub(size as u32, Ordering::AcqRel);
         }
 
         size
@@ -751,11 +748,7 @@ impl UtpManager {
 
         let mut packets = data
             .chunks(packet_size)
-            .map(|p| {
-                arena.alloc_with(|packet_uninit| {
-                    Packet::new_in_place(packet_uninit, p)
-                })
-            });
+            .map(|p| arena.alloc_with(|packet_uninit| Packet::new_in_place(packet_uninit, p)));
 
         // let mut sent = 0;
 
