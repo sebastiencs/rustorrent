@@ -132,13 +132,24 @@ impl Dispatcher {
                 match packet.get_type() {
                     Ok(PacketType::Syn) => {
                         let incoming = UtpEvent::IncomingPacket { packet };
+
+                        let (sender, recv) = oneshot::channel();
+
                         let manager = Self::new_connection(
                             self.socket.clone(),
                             addr,
                             self.packet_arena.clone(),
                             None,
-                            None,
+                            Some(sender),
                         );
+
+                        let s = self.sender.clone();
+                        task::spawn(async move {
+                            if let Ok(c) = recv.await {
+                                s.send(c).await.unwrap();
+                            }
+                        });
+
                         self.ticker.try_send(manager.clone()).unwrap();
                         self.streams.insert(addr, manager.clone());
                         manager.send(incoming).await.unwrap();

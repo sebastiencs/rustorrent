@@ -5,6 +5,7 @@ use std::{
     ops::{Add, AddAssign, Deref, DerefMut, Sub, SubAssign},
 };
 
+mod ack_bitfield;
 pub mod stream;
 pub mod tick;
 //pub mod writer;
@@ -16,6 +17,8 @@ pub mod udp_socket;
 pub enum UtpState {
     /// not yet connected
     None,
+    /// Syn received, waiting for data
+    SynReceived,
     /// sent a syn packet, not received any acks
     SynSent,
     /// syn-ack received and in normal operation
@@ -49,10 +52,11 @@ impl From<u8> for UtpState {
     fn from(n: u8) -> UtpState {
         match n {
             0 => UtpState::None,
-            1 => UtpState::SynSent,
-            2 => UtpState::Connected,
-            3 => UtpState::FinSent,
-            4 => UtpState::MustConnect,
+            1 => UtpState::SynReceived,
+            2 => UtpState::SynSent,
+            3 => UtpState::Connected,
+            4 => UtpState::FinSent,
+            5 => UtpState::MustConnect,
             _ => unreachable!(),
         }
     }
@@ -62,10 +66,11 @@ impl From<UtpState> for u8 {
     fn from(s: UtpState) -> u8 {
         match s {
             UtpState::None => 0,
-            UtpState::SynSent => 1,
-            UtpState::Connected => 2,
-            UtpState::FinSent => 3,
-            UtpState::MustConnect => 4,
+            UtpState::SynReceived => 1,
+            UtpState::SynSent => 2,
+            UtpState::Connected => 3,
+            UtpState::FinSent => 4,
+            UtpState::MustConnect => 5,
         }
     }
 }
@@ -119,6 +124,13 @@ impl SequenceNumber {
         let dist_up = other - self;
 
         dist_up.0 <= dist_down.0
+    }
+
+    /// Compare self with other, with consideration to wrapping.
+    /// We can't implement PartialOrd because it doesn't satisfy
+    /// antisymmetry
+    pub fn cmp_greater(self, other: SequenceNumber) -> bool {
+        !self.cmp_less_equal(other)
     }
 }
 
@@ -1061,8 +1073,68 @@ pub const UDP_TEREDO_MTU: usize = TEREDO_MTU - IPV6_HEADER_SIZE - UDP_HEADER_SIZ
 
 #[cfg(test)]
 mod tests {
-    use super::listener::UtpListener;
+    use super::{listener::UtpListener, SequenceNumber};
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    #[test]
+    fn seq_number_less_equal() {
+        for num in (0..u16::MAX as isize + 1024) {
+            for offset in 0..1024 {
+                let num_less: u16 = ((num - offset) & 0xFFFF) as u16;
+                let num: u16 = (num & 0xFFFF) as u16;
+                assert!(SequenceNumber::from(num_less).cmp_less_equal(SequenceNumber::from(num)));
+            }
+        }
+    }
+
+    #[test]
+    fn seq_number_less() {
+        for num in (0..u16::MAX as isize + 1024) {
+            for offset in 0..1024 {
+                let num_less: u16 = ((num - offset) & 0xFFFF) as u16;
+                let num: u16 = (num & 0xFFFF) as u16;
+                assert_eq!(
+                    SequenceNumber::from(num_less).cmp_less(SequenceNumber::from(num)),
+                    // nums are equals when offset = 0
+                    offset != 0
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn seq_number_add() {
+        let seq_num = SequenceNumber::from(0);
+        for add in 0..u16::MAX as usize * 3 {
+            assert_eq!((seq_num + (add & 0xFFFF) as u16).0, (add & 0xFFFF) as u16);
+        }
+    }
+
+    // #[test]
+    // fn seq_number_sub() {
+    //     let seq_num = SequenceNumber::from(0);
+    //     for add in 0..u16::MAX as usize * 3 {
+    //         assert_eq!(
+    //             (seq_num - (add & 0xFFFF) as u16).0,
+    //             (add & 0xFFFF) as u16
+    //         );
+    //     }
+    // }
+
+    #[test]
+    fn seq_number_distance() {
+        let seq_num = SequenceNumber::from(u16::MAX - 10);
+        let seq_num2 = SequenceNumber::from(5);
+        assert_eq!(seq_num2 - seq_num, SequenceNumber::from(16));
+
+        let seq_num = SequenceNumber::from(2);
+        let seq_num2 = SequenceNumber::from(5);
+        assert_eq!(seq_num2 - seq_num, SequenceNumber::from(3));
+
+        let seq_num = SequenceNumber::from(2);
+        let seq_num2 = SequenceNumber::from(3);
+        assert_eq!(seq_num2 - seq_num, SequenceNumber::from(1));
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn send_data() {
@@ -1091,5 +1163,39 @@ mod tests {
         stream.wait_for_termination().await;
 
         println!("Sent in {:?}", start.elapsed());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn recv_data() {
+        let start = std::time::Instant::now();
+
+        let listener = UtpListener::bind(std::net::SocketAddrV4::new(
+            Ipv4Addr::new(0, 0, 0, 0),
+            10001,
+        ))
+        .await;
+
+        println!("accepting..");
+        let (stream, addr) = listener.accept().await;
+        println!("accepted");
+
+        let mut buffer = vec![];
+
+        stream.read(&mut buffer).await;
+
+        println!("DONEaaaa");
+
+        // let stream = listener
+        //     .connect(SocketAddr::new(
+        //         IpAddr::V4(Ipv4Addr::new(192, 168, 0, 144)),
+        //         7000,
+        //     ))
+        //     .await
+        //     .unwrap();
+        // // let stream = listener.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
+        // stream.write(&buffer).await;
+        // stream.wait_for_termination().await;
+
+        // println!("Sent in {:?}", start.elapsed());
     }
 }

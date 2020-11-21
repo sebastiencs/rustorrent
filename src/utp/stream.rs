@@ -25,7 +25,7 @@ pub(super) struct State {
     pub(super) utp_state: AtomicU8,
     pub(super) recv_id: AtomicU16,
     pub(super) send_id: AtomicU16,
-    pub(super) ack_number: AtomicU16,
+    //pub(super) ack_number: AtomicU16,
     pub(super) seq_number: AtomicU16,
     pub(super) remote_window: AtomicU32,
     pub(super) cwnd: AtomicU32,
@@ -104,12 +104,12 @@ impl State {
     pub(super) fn set_send_id(&self, send_id: ConnectionId) {
         self.send_id.store(send_id.into(), Ordering::Release)
     }
-    pub(super) fn ack_number(&self) -> SequenceNumber {
-        self.ack_number.load(Ordering::Acquire).into()
-    }
-    pub(super) fn set_ack_number(&self, ack_number: SequenceNumber) {
-        self.ack_number.store(ack_number.into(), Ordering::Release)
-    }
+    // pub(super) fn ack_number(&self) -> SequenceNumber {
+    //     self.ack_number.load(Ordering::Acquire).into()
+    // }
+    // pub(super) fn set_ack_number(&self, ack_number: SequenceNumber) {
+    //     self.ack_number.store(ack_number.into(), Ordering::Release)
+    // }
     pub(super) fn seq_number(&self) -> SequenceNumber {
         self.seq_number.load(Ordering::Acquire).into()
     }
@@ -151,7 +151,7 @@ impl Default for State {
             utp_state: AtomicU8::new(UtpState::None.into()),
             recv_id: AtomicU16::new(recv_id.into()),
             send_id: AtomicU16::new(send_id.into()),
-            ack_number: AtomicU16::new(SequenceNumber::zero().into()),
+            //ack_number: AtomicU16::new(SequenceNumber::zero().into()),
             seq_number: AtomicU16::new(SequenceNumber::random().into()),
             remote_window: AtomicU32::new(INIT_CWND * MSS),
             cwnd: AtomicU32::new(INIT_CWND * MSS),
@@ -176,6 +176,10 @@ pub struct UtpStream {
 
 impl UtpStream {
     pub async fn read(&self, _data: &mut [u8]) {
+        let a = self.receive.recv().await.unwrap();
+
+        println!("RES={:?}", a);
+
         // self.reader_command.send(ReaderCommand {
         //     length: data.len()
         // }).await;

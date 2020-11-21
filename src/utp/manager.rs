@@ -18,7 +18,10 @@ use super::{
 };
 use shared_arena::{ArenaBox, SharedArena};
 //use super::writer::{UtpWriter, WriterCommand, WriterUserCommand};
-use super::stream::{State, UtpStream};
+use super::{
+    ack_bitfield::AckedBitfield,
+    stream::{State, UtpStream},
+};
 
 use super::{
     DelayHistory, Packet, PacketType, Result, SelectiveAckBit, SequenceNumber, Timestamp, UtpError,
@@ -33,7 +36,6 @@ use std::{
 const TO_SEND_PACKETS_RESEND: usize = 1;
 const TO_SEND_PACKETS_RESEND_ONLY_LOST: usize = 1 << 1;
 
-#[derive(Debug)]
 pub(super) struct UtpManager {
     socket: Arc<UdpSocket>,
     recv: Pin<Box<Receiver<UtpEvent>>>,
@@ -49,6 +51,8 @@ pub(super) struct UtpManager {
     // writer: Sender<WriterCommand>,
     on_receive: Sender<ReceivedData>,
     on_receive_recv: Option<Receiver<ReceivedData>>,
+
+    ack_bitfield: AckedBitfield,
 
     packet_arena: Arc<SharedArena<Packet>>,
 
@@ -157,6 +161,7 @@ impl UtpManager {
             rtt: 0,
             rtt_var: 0,
             rto: 0,
+            ack_bitfield: AckedBitfield::default(),
         }
     }
 
@@ -217,6 +222,7 @@ impl UtpManager {
                 (Err(SendWouldBlock), Some(guard)) => {
                     guard.clear_ready();
                 }
+                (Err(SendWouldBlock), None) => {}
                 (Err(e), _) => return Err(e),
                 _ => {}
             }
@@ -354,11 +360,12 @@ impl UtpManager {
                 //println!("RECEIVED SYN {:?}", self.addr);
                 let connection_id = packet.get_connection_id();
 
-                self.state.set_utp_state(UtpState::Connected);
+                self.state.set_utp_state(UtpState::SynReceived);
                 self.state.set_recv_id(connection_id + 1);
                 self.state.set_send_id(connection_id);
                 self.state.set_seq_number(SequenceNumber::random());
-                self.state.set_ack_number(packet.get_seq_number());
+                // self.state.set_ack_number(packet.get_seq_number());
+                self.ack_bitfield.ack(packet.get_seq_number());
                 self.state.set_remote_window(packet.get_window_size());
 
                 self.send_packet(PacketType::State);
@@ -377,7 +384,8 @@ impl UtpManager {
                 // https://github.com/bittorrent/libutp/commit/13d33254262d46b638d35c4bc1a2f76cea885760
 
                 self.state.set_utp_state(UtpState::Connected);
-                self.state.set_ack_number(packet.get_seq_number() - 1);
+                // self.state.set_ack_number(packet.get_seq_number() - 1);
+                self.ack_bitfield.ack(packet.get_seq_number() - 1);
                 self.state.set_remote_window(packet.get_window_size());
 
                 if let Some(notify) = self.on_connected.take() {
@@ -399,10 +407,26 @@ impl UtpManager {
             (PacketType::State, _) => {
                 // Wrong Packet
             }
+            // TODO: Match only Connected & SynReceived
             (PacketType::Data, _) => {
-                // println!("Received {:?} '{:?}'", packet.get_seq_number(), String::from_utf8_lossy(packet.get_data()));
+                if let Some(notify) = self.on_connected.take() {
+                    self.state.set_utp_state(UtpState::Connected);
+                    let stream = self.get_stream().unwrap();
+                    notify.send((stream, self.addr)).unwrap();
+                }
+
+                let seq_num = packet.get_seq_number();
+                self.ack_bitfield.ack(seq_num);
+
+                println!(
+                    "Received {:?} '{:?}'",
+                    packet.get_seq_number(),
+                    String::from_utf8_lossy(packet.get_data())
+                );
                 // println!("Received '{:?}'", String::from_utf8_lossy(packet.get_data()));
-                self.state.set_ack_number(packet.get_seq_number());
+                // self.state.set_ack_number(packet.get_seq_number());
+
+                println!("DATA SEQNUM = {:?}", packet.get_seq_number());
 
                 self.send_packet(PacketType::State);
 
@@ -416,6 +440,10 @@ impl UtpManager {
 
         Ok(())
     }
+
+    // fn send_state(&mut self) {
+    //     // self.seq_received.sort();
+    // }
 
     fn handle_state(&mut self, packet: ArenaBox<Packet>) -> Result<()> {
         let ack_number = packet.get_ack_number();
@@ -632,7 +660,8 @@ impl UtpManager {
     }
 
     fn send_packet_inner(&mut self, mut packet: ArenaBox<Packet>, place: SendPush) -> Result<()> {
-        let ack_number = self.state.ack_number();
+        //let ack_number = self.state.ack_number();
+        let ack_number = self.ack_bitfield.current();
         let seq_number = self.state.seq_number();
         //let seq_number = self.state.increment_seq();
         let send_id = self.state.send_id();
@@ -703,7 +732,8 @@ impl UtpManager {
 
         // We copy the socket to satisfy the borrow checker
         let socket = self.socket.clone();
-        let ack_number = self.state.ack_number();
+        //let ack_number = self.state.ack_number();
+        let ack_number = self.ack_bitfield.current();
 
         self.to_send_detail |= if only_lost {
             TO_SEND_PACKETS_RESEND_ONLY_LOST
