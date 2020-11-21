@@ -723,6 +723,15 @@ impl Payload {
         }
     }
 
+    pub fn append(&mut self, data: &[u8]) {
+        let data_len = data.len();
+
+        assert!(data_len > 0);
+
+        self.data[..data_len].copy_from_slice(data);
+        self.len += data_len;
+    }
+
     pub fn len(&self) -> usize {
         self.len
     }
@@ -853,6 +862,14 @@ impl Packet {
             lost: false,
             received_at: None,
         }
+    }
+
+    pub fn add_selective_acks(&mut self, bytes: &[u8]) {
+        self.header.extension = 1;
+
+        // TODO: Make chunks of the extention
+        self.payload.append(&[0, bytes.len().try_into().unwrap()]);
+        self.payload.append(bytes);
     }
 
     pub fn received_at(&self) -> Timestamp {
@@ -1153,6 +1170,7 @@ mod tests {
         .await;
         let stream = listener
             .connect(SocketAddr::new(
+                // IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
                 IpAddr::V4(Ipv4Addr::new(192, 168, 0, 144)),
                 7000,
             ))

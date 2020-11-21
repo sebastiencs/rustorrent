@@ -24,7 +24,7 @@ pub(crate) struct AckedBitfield {
 impl std::fmt::Debug for AckedBitfield {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("AckedBitfield")
-            .field("first", &self.first.unwrap().0)
+            .field("first", &self.first.map(|n| n.0))
             .field("last", &self.last.0)
             .finish()?;
 
@@ -48,6 +48,10 @@ impl Default for AckedBitfield {
 
 impl AckedBitfield {
     pub(crate) fn ack(&mut self, num: SequenceNumber) {
+        if num.cmp_greater(self.last) {
+            self.last = num;
+        }
+
         match self.first {
             Some(first) if num == first + 1 => {
                 let prev_first = first;
@@ -75,10 +79,20 @@ impl AckedBitfield {
             }
             Some(_) => {}
         }
+    }
 
-        if num.cmp_greater(self.last) {
-            self.last = num;
+    pub(crate) fn bytes_for_packet(&self) -> Option<&[u8]> {
+        let first = self.first.unwrap();
+
+        if first == self.last {
+            return None;
         }
+
+        let distance: u16 = (self.last - first).into();
+        let distance = distance - 2;
+        let last_index = (distance / 8) as usize;
+
+        Some(&self.bitfield[..=last_index])
     }
 
     pub(crate) fn current(&self) -> SequenceNumber {
@@ -117,8 +131,10 @@ impl AckedBitfield {
 
         assert!(n < 8);
 
+        // println!("LA n={} last={:?} prev_first={:?}", n, self.last, prev_first);
+
         let distance: u16 = (self.last - prev_first).into();
-        let distance = distance - 2;
+        let distance = distance.max(2) - 2;
         let mask = MASKS[n];
         let shift_prev = 8 - n;
 

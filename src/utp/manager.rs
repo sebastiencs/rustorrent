@@ -33,8 +33,35 @@ use std::{
     time::{Duration, Instant},
 };
 
-const TO_SEND_PACKETS_RESEND: usize = 1;
-const TO_SEND_PACKETS_RESEND_ONLY_LOST: usize = 1 << 1;
+const RESEND: u8 = 1 << 0;
+const RESEND_ONLY_LOST: u8 = 1 << 1;
+const SEND_STATE: u8 = 1 << 2;
+
+struct NeedToSend {
+    detail: u8,
+}
+
+impl NeedToSend {
+    fn new() -> NeedToSend {
+        NeedToSend { detail: 0 }
+    }
+
+    fn has(&self, data: u8) -> bool {
+        self.detail & data != 0
+    }
+
+    fn set(&mut self, set: u8) {
+        self.detail |= set;
+    }
+
+    fn unset(&mut self, unset: u8) {
+        self.detail &= !unset;
+    }
+
+    fn is_empty(&self) -> bool {
+        self.detail == 0
+    }
+}
 
 pub(super) struct UtpManager {
     socket: Arc<UdpSocket>,
@@ -57,7 +84,7 @@ pub(super) struct UtpManager {
     packet_arena: Arc<SharedArena<Packet>>,
 
     to_send: VecDeque<ArenaBox<Packet>>,
-    to_send_detail: usize,
+    need_send: NeedToSend,
 
     timeout: Instant,
     /// Number of consecutive times we've been timeout
@@ -82,6 +109,8 @@ pub(super) struct UtpManager {
     rtt: usize,
     rtt_var: usize,
     rto: usize,
+
+    received: usize,
 }
 
 // #[derive(Debug)]
@@ -147,7 +176,7 @@ impl UtpManager {
             on_receive_recv: Some(on_receive),
             packet_arena,
             to_send: VecDeque::new(),
-            to_send_detail: 0,
+            need_send: NeedToSend::new(),
             timeout: Instant::now() + Duration::from_secs(3),
             ntimeout: 0,
             on_connected,
@@ -162,6 +191,7 @@ impl UtpManager {
             rtt_var: 0,
             rto: 0,
             ack_bitfield: AckedBitfield::default(),
+            received: 0,
         }
     }
 
@@ -177,7 +207,8 @@ impl UtpManager {
         &mut self,
         socket: &'a UdpSocket,
     ) -> Result<(UtpEvent, Option<FdGuard<'a, Socket>>)> {
-        let need_to_send = self.to_send_detail != 0 || !self.to_send.is_empty();
+        // let need_to_send = self.to_send_detail != 0 || !self.to_send.is_empty();
+        let need_to_send = !self.need_send.is_empty() || !self.to_send.is_empty();
 
         return tokio::select! {
             recv = self.recv.next() => {
@@ -224,7 +255,7 @@ impl UtpManager {
                 }
                 (Err(SendWouldBlock), None) => {}
                 (Err(e), _) => return Err(e),
-                _ => {}
+                (Ok(_), _) => {}
             }
         }
 
@@ -263,12 +294,19 @@ impl UtpManager {
                 }
             }
             UtpEvent::Writable => {
-                if self.to_send_detail != 0 {
-                    self.resend_packets(
-                        self.to_send_detail | TO_SEND_PACKETS_RESEND_ONLY_LOST
-                            == TO_SEND_PACKETS_RESEND_ONLY_LOST,
-                    )?;
+                if self.need_send.has(SEND_STATE) {
+                    self.send_state();
                 }
+                if self.need_send.has(RESEND | RESEND_ONLY_LOST) {
+                    let only_lost = self.need_send.has(RESEND_ONLY_LOST);
+                    self.resend_packets(only_lost)?;
+                }
+                // if self.to_send_detail != 0 {
+                //     self.resend_packets(
+                //         self.to_send_detail | TO_SEND_PACKETS_RESEND_ONLY_LOST
+                //             == TO_SEND_PACKETS_RESEND_ONLY_LOST,
+                //     )?;
+                // }
                 // TODO: Don't push front here
                 while let Some(packet) = self.to_send.pop_front() {
                     if !self.is_window_large_enough(packet.size()) {
@@ -318,7 +356,7 @@ impl UtpManager {
                 self.state.inflight_size(),
                 self.to_send.len()
             );
-            self.notify_finish();
+            // self.notify_finish();
             // println!("RTO {:?} RTT {:?} RTT_VAR {:?}", self.rto, self.rtt, self.rtt_var);
         }
 
@@ -368,7 +406,8 @@ impl UtpManager {
                 self.ack_bitfield.ack(packet.get_seq_number());
                 self.state.set_remote_window(packet.get_window_size());
 
-                self.send_packet(PacketType::State);
+                self.send_state();
+                //self.send_packet(PacketType::State);
 
                 // self.writer.send(WriterCommand::SendPacket {
                 //     packet_type: PacketType::State
@@ -418,21 +457,10 @@ impl UtpManager {
                 let seq_num = packet.get_seq_number();
                 self.ack_bitfield.ack(seq_num);
 
-                println!(
-                    "Received {:?} '{:?}'",
-                    packet.get_seq_number(),
-                    String::from_utf8_lossy(packet.get_data())
-                );
-                // println!("Received '{:?}'", String::from_utf8_lossy(packet.get_data()));
-                // self.state.set_ack_number(packet.get_seq_number());
+                self.received += packet.get_data().len();
+                // println!("received={}", self.received);
 
-                println!("DATA SEQNUM = {:?}", packet.get_seq_number());
-
-                self.send_packet(PacketType::State);
-
-                // self.writer.send(WriterCommand::SendPacket {
-                //     packet_type: PacketType::State
-                // }).await.unwrap();
+                self.send_state();
             }
             (PacketType::Fin, _) => {}
             (PacketType::Reset, _) => {}
@@ -441,9 +469,41 @@ impl UtpManager {
         Ok(())
     }
 
-    // fn send_state(&mut self) {
-    //     // self.seq_received.sort();
-    // }
+    fn send_state(&mut self) {
+        self.need_send.set(SEND_STATE);
+
+        let mut packet = Packet::new_type(PacketType::State);
+
+        let ack_number = self.ack_bitfield.current();
+        let seq_number = self.state.seq_number();
+        let send_id = self.state.send_id();
+        packet.set_ack_number(ack_number);
+        packet.set_packet_seq_number(seq_number);
+        packet.set_connection_id(send_id);
+        packet.set_window_size(1_048_576);
+        packet.update_timestamp();
+
+        if let Some(bytes) = self.ack_bitfield.bytes_for_packet() {
+            // println!("send with extensions {:?}", ack_number);
+            packet.add_selective_acks(bytes);
+        }
+
+        // let mut ok = false;
+
+        if self.try_send_to(&packet).is_ok() {
+            self.need_send.unset(SEND_STATE);
+            // ok = true;
+            // self.state.increment_seq();
+        }
+
+        // println!(
+        //     "Send state success={} ext={} ack={:?} seq={:?}",
+        //     ok,
+        //     packet.has_extension(),
+        //     ack_number,
+        //     seq_number,
+        // );
+    }
 
     fn handle_state(&mut self, packet: ArenaBox<Packet>) -> Result<()> {
         let ack_number = packet.get_ack_number();
@@ -735,12 +795,8 @@ impl UtpManager {
         //let ack_number = self.state.ack_number();
         let ack_number = self.ack_bitfield.current();
 
-        self.to_send_detail |= if only_lost {
-            TO_SEND_PACKETS_RESEND_ONLY_LOST
-        } else {
-            TO_SEND_PACKETS_RESEND
-        };
-        // self.to_send_detail = TO_SEND_PACKETS_RESEND;
+        self.need_send
+            .set(if only_lost { RESEND_ONLY_LOST } else { RESEND });
 
         // packet_size + self.state.inflight_size() <= self.state.cwnd() as usize
 
@@ -764,7 +820,8 @@ impl UtpManager {
             }
         }
 
-        self.to_send_detail &= !(TO_SEND_PACKETS_RESEND | TO_SEND_PACKETS_RESEND_ONLY_LOST);
+        self.need_send.unset(RESEND | RESEND_ONLY_LOST);
+        // self.to_send_detail &= !(TO_SEND_PACKETS_RESEND | TO_SEND_PACKETS_RESEND_ONLY_LOST);
         // println!("resent n={} TO_SEND_DETAIL {}", resent, self.to_send_detail);
 
         // println!("RESENT: {:?}", resent);
