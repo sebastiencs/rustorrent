@@ -1,4 +1,6 @@
-use async_channel::{Receiver, Sender, TryRecvError};
+use async_channel::{Receiver, Sender, TryRecvError, TrySendError};
+use futures::{ready, Future, Stream};
+use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::utils::Map;
 use shared_arena::ArenaBox;
@@ -10,7 +12,9 @@ use crate::utils::FromSlice;
 use std::{
     cell::{Cell, RefCell},
     io::{Cursor, Write},
+    pin::Pin,
     sync::atomic::{AtomicU16, AtomicU32, AtomicU8, Ordering},
+    task::Poll,
 };
 
 // pub struct WriterUserCommand {
@@ -174,7 +178,7 @@ pub(super) enum ReceivedData {
 
 #[derive(Debug)]
 pub struct UtpStream {
-    pub(super) receive: Receiver<ReceivedData>,
+    pub(super) receive: Pin<Box<Receiver<ReceivedData>>>,
     pub(super) writer_user_command: Sender<UtpEvent>,
     pub(super) received_data: RefCell<Map<SequenceNumber, ArenaBox<Packet>>>,
     pub(super) last_seq: Cell<Option<SequenceNumber>>,
@@ -188,7 +192,7 @@ impl UtpStream {
         writer_user_command: Sender<UtpEvent>,
     ) -> UtpStream {
         UtpStream {
-            receive,
+            receive: Box::pin(receive),
             writer_user_command,
             received_data: RefCell::new(Default::default()),
             last_seq: Cell::new(None),
@@ -197,75 +201,88 @@ impl UtpStream {
         }
     }
 
-    pub async fn read(&self, data: &mut [u8]) -> std::io::Result<usize> {
+    fn poll_read_private(
+        &self,
+        data: &mut [u8],
+        current: &mut Option<Result<ReceivedData, TryRecvError>>,
+    ) -> Poll<std::io::Result<usize>> {
         use ReceivedData::*;
 
         let mut user_data = Cursor::new(data);
-        let mut current = None;
 
         loop {
-            'inner: loop {
-                match current.take().unwrap_or_else(|| self.receive.try_recv()) {
-                    Ok(Data { packet }) => {
-                        assert!(self.last_seq.get().is_some());
-                        let mut map = self.received_data.borrow_mut();
-                        map.insert(packet.get_seq_number(), packet);
-                    }
-                    Err(TryRecvError::Empty) => {
-                        break 'inner;
-                    }
-                    Ok(FirstSequence { seq }) => {
-                        assert!(self.last_seq.get().is_none());
-                        self.last_seq.set(Some(seq));
-                    }
-                    Ok(Done) => {
-                        self.done.set(true);
-                        break 'inner;
-                    }
-                    Err(TryRecvError::Closed) => {
-                        self.done.set(true);
-                        break 'inner;
-                    }
+            match current.take().unwrap_or_else(|| self.receive.try_recv()) {
+                Ok(Data { packet }) => {
+                    assert!(self.last_seq.get().is_some());
+                    let mut map = self.received_data.borrow_mut();
+                    map.insert(packet.get_seq_number(), packet);
+                }
+                Err(TryRecvError::Empty) => {
+                    break;
+                }
+                Ok(FirstSequence { seq }) => {
+                    assert!(self.last_seq.get().is_none());
+                    self.last_seq.set(Some(seq));
+                }
+                Ok(Done) => {
+                    self.done.set(true);
+                    break;
+                }
+                Err(TryRecvError::Closed) => {
+                    self.done.set(true);
+                    break;
                 }
             }
+        }
 
-            let mut cursor = self.cursor.get();
-            let mut last_seq = self.last_seq.get().unwrap();
-            {
-                let mut map = self.received_data.borrow_mut();
+        let mut cursor = self.cursor.get();
+        let mut last_seq = self.last_seq.get().unwrap();
+        {
+            let mut map = self.received_data.borrow_mut();
 
-                while let Some(packet) = map.get(&last_seq) {
-                    let packet_data = packet.get_data();
-                    let data = &packet_data[cursor..];
+            while let Some(packet) = map.get(&last_seq) {
+                let packet_data = packet.get_data();
+                let data = &packet_data[cursor..];
 
-                    let written = user_data.write(data).unwrap();
+                let written = user_data.write(data).unwrap();
 
-                    if written != data.len() {
-                        self.cursor.set(cursor + written);
-                        self.last_seq.set(Some(last_seq));
-                        return Ok(user_data.position() as usize);
-                    }
-
-                    map.retain(|k, _| k.cmp_greater(last_seq));
-
-                    cursor = 0;
-                    last_seq += 1;
+                if written != data.len() {
+                    self.cursor.set(cursor + written);
+                    self.last_seq.set(Some(last_seq));
+                    return Poll::Ready(Ok(user_data.position() as usize));
                 }
+
+                map.retain(|k, _| k.cmp_greater(last_seq));
+
+                cursor = 0;
+                last_seq += 1;
             }
+        }
 
-            self.cursor.set(0);
-            self.last_seq.set(Some(last_seq));
+        self.cursor.set(0);
+        self.last_seq.set(Some(last_seq));
 
-            if user_data.position() > 0 {
-                return Ok(user_data.position() as usize);
-            }
+        if user_data.position() > 0 {
+            return Poll::Ready(Ok(user_data.position() as usize));
+        }
 
-            if self.done.get() {
-                return Err(std::io::ErrorKind::ConnectionAborted.into());
+        if self.done.get() {
+            return Poll::Ready(Err(std::io::ErrorKind::ConnectionAborted.into()));
+        }
+
+        Poll::Pending
+    }
+
+    pub async fn read(&self, data: &mut [u8]) -> std::io::Result<usize> {
+        let mut value = None;
+
+        loop {
+            if let Poll::Ready(v) = self.poll_read_private(data, &mut value) {
+                return v;
             }
 
             if let Ok(data) = self.receive.recv().await {
-                current.replace(Ok(data));
+                value.replace(Ok(data));
             }
         }
     }
@@ -285,6 +302,79 @@ impl UtpStream {
     }
 }
 
+impl AsyncRead for UtpStream {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let user_data =
+            unsafe { &mut *(buf.unfilled_mut() as *mut [std::mem::MaybeUninit<u8>] as *mut [u8]) };
+
+        let mut value = None;
+
+        loop {
+            match self.poll_read_private(user_data, &mut value) {
+                Poll::Ready(Ok(n)) => {
+                    unsafe { buf.assume_init(n) };
+                    buf.advance(n);
+                    return Poll::Ready(Ok(()));
+                }
+                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                _ => {}
+            }
+
+            if let Some(v) = ready!(self.receive.as_mut().poll_next(cx)) {
+                value.replace(Ok(v));
+            }
+        }
+    }
+}
+
+impl AsyncWrite for UtpStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, std::io::Error>> {
+        let data = Vec::from_slice(buf).into_boxed_slice();
+        let len = data.len();
+
+        match self
+            .writer_user_command
+            .try_send(UtpEvent::UserWrite { data })
+        {
+            Ok(_) => Poll::Ready(Ok(len)),
+            Err(TrySendError::Closed(_)) => {
+                Poll::Ready(Err(std::io::ErrorKind::ConnectionAborted.into()))
+            }
+            Err(TrySendError::Full(v)) => {
+                let send = self.writer_user_command.send(v);
+                tokio::pin!(send);
+
+                send.as_mut().poll(cx).map(|v| {
+                    v.map(|_| len)
+                        .map_err(|_| std::io::ErrorKind::ConnectionAborted.into())
+                })
+            }
+        }
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        todo!()
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        todo!()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -292,6 +382,7 @@ mod tests {
     use super::{Packet, ReceivedData, UtpStream};
     use async_channel::bounded;
     use shared_arena::Arena;
+    use tokio::io::AsyncReadExt;
 
     #[tokio::test]
     async fn utp_read() {
@@ -378,6 +469,50 @@ mod tests {
 
         let res = stream.read(&mut buffer).await;
         assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn utp_read_async_read() {
+        let arena = Arena::new();
+
+        let (sender, recv) = bounded(10);
+        let (writer, _) = bounded(10);
+        let mut stream = UtpStream::new(recv, writer);
+
+        sender
+            .try_send(ReceivedData::FirstSequence { seq: 1.into() })
+            .unwrap();
+
+        let mut packet = arena.alloc(Packet::new(&[1, 2, 3, 4, 5, 6, 7, 8, 9]));
+        packet.set_seq_number(1.into());
+        sender.try_send(ReceivedData::Data { packet }).unwrap();
+
+        let mut packet = arena.alloc(Packet::new(&[13, 14, 15]));
+        packet.set_seq_number(3.into());
+        sender.try_send(ReceivedData::Data { packet }).unwrap();
+
+        let mut packet = arena.alloc(Packet::new(&[10, 11, 12]));
+        packet.set_seq_number(2.into());
+        sender.try_send(ReceivedData::Data { packet }).unwrap();
+
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100));
+            let mut packet = arena.alloc(Packet::new(&[100, 101, 102]));
+            packet.set_seq_number(4.into());
+            sender.try_send(ReceivedData::Data { packet }).unwrap();
+
+            tokio::time::sleep(Duration::from_millis(50));
+        });
+
+        let mut buffer = [0; 18];
+        let res = stream.read_exact(&mut buffer).await;
+
+        assert_eq!(
+            &buffer,
+            &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 100, 101, 102]
+        );
+
+        assert!(stream.read_u8().await.is_err());
     }
 
     #[tokio::test]
