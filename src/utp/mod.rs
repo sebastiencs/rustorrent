@@ -1153,7 +1153,7 @@ mod tests {
         assert_eq!(seq_num2 - seq_num, SequenceNumber::from(1));
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn send_data() {
         // let file = "/home/sebastien/Downloads/Escape.Plan.2013.1080p.BluRay.x265-RARBG-[rarbg.to].torrent";
         let file = "/home/sebastien/Downloads/Fedora-Cinnamon-Live-x86_64-32-1.6.iso";
@@ -1172,7 +1172,8 @@ mod tests {
             .connect(SocketAddr::new(
                 // IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
                 IpAddr::V4(Ipv4Addr::new(192, 168, 0, 144)),
-                7000,
+                10001,
+                // 7000,
             ))
             .await
             .unwrap();
@@ -1183,12 +1184,13 @@ mod tests {
         println!("Sent in {:?}", start.elapsed());
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn recv_data() {
         let start = std::time::Instant::now();
 
         let listener = UtpListener::bind(std::net::SocketAddrV4::new(
             Ipv4Addr::new(0, 0, 0, 0),
+            // 7000,
             10001,
         ))
         .await;

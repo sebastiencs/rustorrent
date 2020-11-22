@@ -1,4 +1,4 @@
-use async_channel::{bounded, Receiver, Sender};
+use async_channel::{unbounded, Receiver, Sender};
 use futures::StreamExt;
 use socket2::Socket;
 use tokio::{
@@ -11,6 +11,8 @@ use fixed::types::I48F16;
 use std::{collections::VecDeque, net::SocketAddr, pin::Pin, sync::Arc};
 
 // use tokio::sync::mpsc::{Receiver as TokioReceiver, channel, error::TrySendError as TokioTrySendError};
+
+// use crate::utils::Map;
 
 use super::{
     stream::ReceivedData,
@@ -111,6 +113,7 @@ pub(super) struct UtpManager {
     rto: usize,
 
     received: usize,
+    // received_data: Map<SequenceNumber, Box<[u8]>>
 }
 
 // #[derive(Debug)]
@@ -164,7 +167,7 @@ impl UtpManager {
         packet_arena: Arc<SharedArena<Packet>>,
         on_connected: Option<oneshot::Sender<(UtpStream, SocketAddr)>>,
     ) -> UtpManager {
-        let (on_receive_sender, on_receive) = bounded(1);
+        let (on_receive_sender, on_receive) = unbounded();
 
         UtpManager {
             socket,
@@ -196,10 +199,10 @@ impl UtpManager {
     }
 
     pub fn get_stream(&mut self) -> Option<UtpStream> {
-        Some(UtpStream {
-            receive: self.on_receive_recv.take()?,
-            writer_user_command: self.sender.clone(),
-        })
+        Some(UtpStream::new(
+            self.on_receive_recv.take()?,
+            self.sender.clone(),
+        ))
     }
 
     #[allow(clippy::needless_lifetimes)]
@@ -403,7 +406,7 @@ impl UtpManager {
                 self.state.set_send_id(connection_id);
                 self.state.set_seq_number(SequenceNumber::random());
                 // self.state.set_ack_number(packet.get_seq_number());
-                self.ack_bitfield.ack(packet.get_seq_number());
+                self.ack_bitfield.init(packet.get_seq_number());
                 self.state.set_remote_window(packet.get_window_size());
 
                 self.send_state();
@@ -452,12 +455,22 @@ impl UtpManager {
                     self.state.set_utp_state(UtpState::Connected);
                     let stream = self.get_stream().unwrap();
                     notify.send((stream, self.addr)).unwrap();
+
+                    let seq = packet.get_seq_number() - 1;
+                    self.on_receive
+                        .try_send(ReceivedData::FirstSequence { seq })
+                        .unwrap();
                 }
 
                 let seq_num = packet.get_seq_number();
                 self.ack_bitfield.ack(seq_num);
 
                 self.received += packet.get_data().len();
+
+                self.on_receive
+                    .try_send(ReceivedData::Data { packet })
+                    .unwrap();
+
                 // println!("received={}", self.received);
 
                 self.send_state();
@@ -471,6 +484,8 @@ impl UtpManager {
 
     fn send_state(&mut self) {
         self.need_send.set(SEND_STATE);
+
+        // TODO: Defer ack if recv is not empty
 
         let mut packet = Packet::new_type(PacketType::State);
 
@@ -493,7 +508,7 @@ impl UtpManager {
         if self.try_send_to(&packet).is_ok() {
             self.need_send.unset(SEND_STATE);
             // ok = true;
-            // self.state.increment_seq();
+            self.timeout = Instant::now() + Duration::from_millis(500);
         }
 
         // println!(

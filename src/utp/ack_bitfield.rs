@@ -81,6 +81,13 @@ impl AckedBitfield {
         }
     }
 
+    pub(crate) fn init(&mut self, num: SequenceNumber) {
+        assert!(self.first.is_none());
+
+        self.first.replace(num);
+        self.last = num;
+    }
+
     pub(crate) fn bytes_for_packet(&self) -> Option<&[u8]> {
         let first = self.first.unwrap();
 

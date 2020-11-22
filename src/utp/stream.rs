@@ -1,4 +1,4 @@
-use async_channel::{Receiver, Sender};
+use async_channel::{Receiver, Sender, TryRecvError};
 
 use crate::utils::Map;
 use shared_arena::ArenaBox;
@@ -7,7 +7,11 @@ use shared_arena::ArenaBox;
 use super::{manager::UtpEvent, ConnectionId, Packet, SequenceNumber, UtpState, INIT_CWND, MSS};
 use crate::utils::FromSlice;
 
-use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU8, Ordering};
+use std::{
+    cell::{Cell, RefCell},
+    io::{Cursor, Write},
+    sync::atomic::{AtomicU16, AtomicU32, AtomicU8, Ordering},
+};
 
 // pub struct WriterUserCommand {
 //     pub(super) data: Vec<u8>
@@ -163,28 +167,107 @@ impl Default for State {
 
 #[derive(Debug)]
 pub(super) enum ReceivedData {
-    Packet {},
+    Data { packet: ArenaBox<Packet> },
+    FirstSequence { seq: SequenceNumber },
     Done,
 }
 
 #[derive(Debug)]
 pub struct UtpStream {
-    // reader_command: Sender<ReaderCommand>,
     pub(super) receive: Receiver<ReceivedData>,
     pub(super) writer_user_command: Sender<UtpEvent>,
+    pub(super) received_data: RefCell<Map<SequenceNumber, ArenaBox<Packet>>>,
+    pub(super) last_seq: Cell<Option<SequenceNumber>>,
+    pub(super) cursor: Cell<usize>,
+    pub(super) done: Cell<bool>,
 }
 
 impl UtpStream {
-    pub async fn read(&self, _data: &mut [u8]) {
-        let a = self.receive.recv().await.unwrap();
+    pub(super) fn new(
+        receive: Receiver<ReceivedData>,
+        writer_user_command: Sender<UtpEvent>,
+    ) -> UtpStream {
+        UtpStream {
+            receive,
+            writer_user_command,
+            received_data: RefCell::new(Default::default()),
+            last_seq: Cell::new(None),
+            cursor: Cell::new(0),
+            done: Cell::new(false),
+        }
+    }
 
-        println!("RES={:?}", a);
+    pub async fn read(&self, data: &mut [u8]) -> std::io::Result<usize> {
+        use ReceivedData::*;
 
-        // self.reader_command.send(ReaderCommand {
-        //     length: data.len()
-        // }).await;
+        let mut user_data = Cursor::new(data);
+        let mut current = None;
 
-        // self.reader_result.recv().await;
+        loop {
+            'inner: loop {
+                match current.take().unwrap_or_else(|| self.receive.try_recv()) {
+                    Ok(Data { packet }) => {
+                        assert!(self.last_seq.get().is_some());
+                        let mut map = self.received_data.borrow_mut();
+                        map.insert(packet.get_seq_number(), packet);
+                    }
+                    Err(TryRecvError::Empty) => {
+                        break 'inner;
+                    }
+                    Ok(FirstSequence { seq }) => {
+                        assert!(self.last_seq.get().is_none());
+                        self.last_seq.set(Some(seq));
+                    }
+                    Ok(Done) => {
+                        self.done.set(true);
+                        break 'inner;
+                    }
+                    Err(TryRecvError::Closed) => {
+                        self.done.set(true);
+                        break 'inner;
+                    }
+                }
+            }
+
+            let mut cursor = self.cursor.get();
+            let mut last_seq = self.last_seq.get().unwrap();
+            {
+                let mut map = self.received_data.borrow_mut();
+
+                while let Some(packet) = map.get(&last_seq) {
+                    let packet_data = packet.get_data();
+                    let data = &packet_data[cursor..];
+
+                    let written = user_data.write(data).unwrap();
+
+                    if written != data.len() {
+                        self.cursor.set(cursor + written);
+                        self.last_seq.set(Some(last_seq));
+                        return Ok(user_data.position() as usize);
+                    }
+
+                    map.retain(|k, _| k.cmp_greater(last_seq));
+
+                    cursor = 0;
+                    last_seq += 1;
+                }
+            }
+
+            self.cursor.set(0);
+            self.last_seq.set(Some(last_seq));
+
+            if user_data.position() > 0 {
+                return Ok(user_data.position() as usize);
+            }
+
+            if self.done.get() {
+                return Err(std::io::ErrorKind::ConnectionAborted.into());
+            }
+
+            if let Ok(data) = self.receive.recv().await {
+                current.replace(Ok(data));
+            }
+        }
     }
 
     pub async fn write(&self, data: &[u8]) {
@@ -200,4 +283,137 @@ impl UtpStream {
             println!("Done received");
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::{Packet, ReceivedData, UtpStream};
+    use async_channel::bounded;
+    use shared_arena::Arena;
+
+    #[tokio::test]
+    async fn utp_read() {
+        let arena = Arena::new();
+
+        let (sender, recv) = bounded(10);
+        let (writer, _) = bounded(10);
+        let stream = UtpStream::new(recv, writer);
+
+        sender
+            .try_send(ReceivedData::FirstSequence { seq: 1.into() })
+            .unwrap();
+
+        let mut packet = arena.alloc(Packet::new(&[1, 2, 3]));
+        packet.set_seq_number(1.into());
+        sender.try_send(ReceivedData::Data { packet }).unwrap();
+
+        let mut packet = arena.alloc(Packet::new(&[7, 8, 9]));
+        packet.set_seq_number(3.into());
+        sender.try_send(ReceivedData::Data { packet }).unwrap();
+
+        let mut packet = arena.alloc(Packet::new(&[4, 5, 6]));
+        packet.set_seq_number(2.into());
+        sender.try_send(ReceivedData::Data { packet }).unwrap();
+
+        let mut buffer = [0; 64];
+        stream.read(&mut buffer).await;
+
+        assert_eq!(&buffer[..9], &[1, 2, 3, 4, 5, 6, 7, 8, 9]);
+
+        sender.try_send(ReceivedData::Done).unwrap();
+        assert!(stream.read(&mut buffer).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn utp_read_partial() {
+        let arena = Arena::new();
+
+        let (sender, recv) = bounded(10);
+        let (writer, _) = bounded(10);
+        let stream = UtpStream::new(recv, writer);
+
+        sender
+            .try_send(ReceivedData::FirstSequence { seq: 1.into() })
+            .unwrap();
+
+        let mut packet = arena.alloc(Packet::new(&[1, 2, 3, 4, 5, 6, 7, 8, 9]));
+        packet.set_seq_number(1.into());
+        sender.try_send(ReceivedData::Data { packet }).unwrap();
+
+        let mut packet = arena.alloc(Packet::new(&[13, 14, 15]));
+        packet.set_seq_number(3.into());
+        sender.try_send(ReceivedData::Data { packet }).unwrap();
+
+        let mut packet = arena.alloc(Packet::new(&[10, 11, 12]));
+        packet.set_seq_number(2.into());
+        sender.try_send(ReceivedData::Data { packet }).unwrap();
+
+        let mut buffer = [0; 4];
+
+        stream.read(&mut buffer).await;
+        assert_eq!(&buffer[..4], &[1, 2, 3, 4]);
+
+        stream.read(&mut buffer).await;
+        assert_eq!(&buffer[..4], &[5, 6, 7, 8]);
+
+        stream.read(&mut buffer).await;
+        assert_eq!(&buffer[..4], &[9, 10, 11, 12]);
+
+        stream.read(&mut buffer).await;
+        assert_eq!(&buffer[..3], &[13, 14, 15]);
+
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50));
+            let mut packet = arena.alloc(Packet::new(&[100, 101, 102]));
+            packet.set_seq_number(4.into());
+            sender.try_send(ReceivedData::Data { packet }).unwrap();
+
+            tokio::time::sleep(Duration::from_millis(50));
+        });
+
+        stream.read(&mut buffer).await;
+        assert_eq!(&buffer[..3], &[100, 101, 102]);
+
+        let res = stream.read(&mut buffer).await;
+        assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn utp_read_close_on_await() {
+        let (sender, recv) = bounded(10);
+        let (writer, _) = bounded(10);
+        let stream = UtpStream::new(recv, writer);
+
+        sender
+            .try_send(ReceivedData::FirstSequence { seq: 1.into() })
+            .unwrap();
+
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50));
+            drop(sender);
+        });
+
+        let mut buffer = [0; 4];
+        let res = stream.read(&mut buffer).await;
+        assert!(res.is_err());
+    }
+
+    // #[tokio::test]
+    // #[should_panic(expected = "send first sequence")]
+    // async fn utp_read_no_init() {
+    //     let arena = Arena::new();
+
+    //     let (sender, recv) = bounded(10);
+    //     let (writer, _) = bounded(10);
+    //     let stream = UtpStream::new(recv, writer);
+
+    //     let mut packet = arena.alloc(Packet::new(&[1,2,3]));
+    //     packet.seq_number = 1.into();
+    //     sender.try_send(ReceivedData::Data { packet }).unwrap();
+
+    //     let mut buffer: Vec<u8> = vec![64; 0];
+    //     stream.read(buffer.as_mut_slice()).await.unwrap();
+    // }
 }
