@@ -456,12 +456,12 @@ mod tests {
         assert_eq!(&buffer[..3], &[13, 14, 15]);
 
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(50));
+            tokio::time::sleep(Duration::from_millis(50)).await;
             let mut packet = arena.alloc(Packet::new(&[100, 101, 102]));
             packet.set_seq_number(4.into());
             sender.try_send(ReceivedData::Data { packet }).unwrap();
 
-            tokio::time::sleep(Duration::from_millis(50));
+            tokio::time::sleep(Duration::from_millis(50)).await;
         });
 
         stream.read(&mut buffer).await;
@@ -496,12 +496,12 @@ mod tests {
         sender.try_send(ReceivedData::Data { packet }).unwrap();
 
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(100));
+            tokio::time::sleep(Duration::from_millis(100)).await;
             let mut packet = arena.alloc(Packet::new(&[100, 101, 102]));
             packet.set_seq_number(4.into());
             sender.try_send(ReceivedData::Data { packet }).unwrap();
 
-            tokio::time::sleep(Duration::from_millis(50));
+            tokio::time::sleep(Duration::from_millis(50)).await;
         });
 
         let mut buffer = [0; 18];
@@ -526,7 +526,7 @@ mod tests {
             .unwrap();
 
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(50));
+            tokio::time::sleep(Duration::from_millis(50)).await;
             drop(sender);
         });
 

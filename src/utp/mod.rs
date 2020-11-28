@@ -1168,12 +1168,13 @@ mod tests {
             10001,
         ))
         .await;
+
         let stream = listener
             .connect(SocketAddr::new(
-                // IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-                IpAddr::V4(Ipv4Addr::new(192, 168, 0, 144)),
-                10001,
-                // 7000,
+                IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+                // IpAddr::V4(Ipv4Addr::new(192, 168, 0, 144)),
+                // 10001,
+                7000,
             ))
             .await
             .unwrap();
@@ -1199,9 +1200,16 @@ mod tests {
         let (stream, addr) = listener.accept().await;
         println!("accepted");
 
-        let mut buffer = vec![];
+        let mut buffer = [0; 65000];
 
-        stream.read(&mut buffer).await;
+        loop {
+            let res = stream.read(&mut buffer).await;
+
+            if let Err(e) = res {
+                println!("END ERROR={:?}", e);
+                break;
+            }
+        }
 
         println!("DONEaaaa");
 

@@ -135,7 +135,7 @@ impl std::fmt::Debug for UtpEvent {
             UtpEvent::UserWrite { data } => write!(f, "UserWrite {:?}", data.len()),
             UtpEvent::Writable => write!(f, "Writable"),
             UtpEvent::Timeout => write!(f, "Timeout"),
-            UtpEvent::IncomingPacket { packet } => write!(f, "IncomingPacket {:?}", packet),
+            UtpEvent::IncomingPacket { .. } => write!(f, "IncomingPacket"),
         }
     }
 }
@@ -456,7 +456,7 @@ impl UtpManager {
                     let stream = self.get_stream().unwrap();
                     notify.send((stream, self.addr)).unwrap();
 
-                    let seq = packet.get_seq_number() - 1;
+                    let seq = packet.get_seq_number();
                     self.on_receive
                         .try_send(ReceivedData::FirstSequence { seq })
                         .unwrap();
@@ -475,8 +475,12 @@ impl UtpManager {
 
                 self.send_state();
             }
-            (PacketType::Fin, _) => {}
-            (PacketType::Reset, _) => {}
+            (PacketType::Fin, _) => {
+                return Err(UtpError::MustClose);
+            }
+            (PacketType::Reset, _) => {
+                return Err(UtpError::MustClose);
+            }
         }
 
         Ok(())
