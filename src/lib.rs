@@ -11,6 +11,7 @@ pub mod bitfield;
 pub mod cache_line;
 pub mod errors;
 pub mod extensions;
+pub mod logger;
 pub mod metadata;
 pub mod pieces;
 pub mod session;
@@ -20,6 +21,7 @@ pub mod time;
 pub mod udp_ext;
 pub mod utils;
 pub mod utp;
+
 // pub mod memory_pool;
 
 //https://blog.cloudflare.com/how-to-receive-a-million-packets/

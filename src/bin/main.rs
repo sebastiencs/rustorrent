@@ -262,11 +262,16 @@ async fn main() {
 
     // return ;
 
-    let stdin = io::stdin();
-    let mut buffer = Vec::new();
-    let mut handle = stdin.lock();
+    // let stdin = io::stdin();
+    // let mut buffer = Vec::new();
+    // let mut handle = stdin.lock();
 
-    handle.read_to_end(&mut buffer).unwrap();
+    // handle.read_to_end(&mut buffer).unwrap();
+
+    let file = "/home/sebastien/Downloads/Fedora-Workstation-Live-x86_64-33.torrent";
+    // let file = "/home/sebastien/Downloads/Fedora-Workstation-Live-x86_64-33_Beta.torrent";
+    // let file = "/home/sebastien/Downloads/ubuntu-20.10-desktop-amd64.iso.torrent";
+    let buffer = std::fs::read(file).unwrap();
 
     //let (meta, info) = de::from_bytes_with_hash::<MetaTorrent>(&buffer).unwrap();
     let torrent = de::read_meta(&buffer).unwrap();

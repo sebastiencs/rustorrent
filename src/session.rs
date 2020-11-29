@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::metadata::Torrent;
+use crate::{logger, metadata::Torrent};
 //use crate::http_client::{self, AnnounceQuery, AnnounceResponse};
 
 //use crate::http_client::HttpError;
@@ -62,6 +62,8 @@ pub struct Session {
 
 impl Session {
     pub fn new() -> Session {
+        logger::start();
+
         let (sender, receiver) = unbounded();
         let runtime = Arc::new(Runtime::new().unwrap());
         let sha1_workers = Sha1Workers::new_pool(runtime.clone());

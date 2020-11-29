@@ -3,6 +3,7 @@ mod udp;
 
 use async_channel::Sender;
 use async_trait::async_trait;
+use kv_log_macro::{error, info, warn};
 
 use std::{
     net::SocketAddr,
@@ -66,7 +67,7 @@ impl Tracker {
 
         self.addrs = self.resolve_host().await;
 
-        println!("RESOLVED ADDRS {:?}", self.addrs);
+        info!("[tracker] Resolved addresses {:?}", self.addrs);
 
         if self.addrs.is_empty() {
             self.send_to_supervisor(HostUnresolved).await;
@@ -75,8 +76,8 @@ impl Tracker {
 
         match self.connect_and_request().await {
             Ok(peer_addrs) => {
-                println!(
-                    "PEERS FOUND ! {:?}\nLENGTH = {:?}",
+                info!(
+                    "[tracker] Peers found {:?}\nLength = {:?}",
                     peer_addrs,
                     peer_addrs.len()
                 );
@@ -104,7 +105,7 @@ impl Tracker {
             }
             Ok(empty) => Ok(empty),
             Err(e) => {
-                println!("ANNOUNCE FAILED {:?}", e);
+                error!("[tracker] Announce failed {:?}", e);
                 Err(e)
             }
         }
@@ -136,7 +137,9 @@ impl Tracker {
         match data.url.scheme() {
             "http" => http::HttpConnection::new(data, addr),
             "udp" => udp::UdpConnection::new(data, addr),
-            _ => unreachable!(),
+            scheme => {
+                panic!("Unhandled scheme {:?}", scheme);
+            }
         }
     }
 
@@ -153,6 +156,6 @@ impl Tracker {
 
 impl Drop for Tracker {
     fn drop(&mut self) {
-        println!("ATRACKER DROPPED !",);
+        warn!("[tracker] Dropped !",);
     }
 }

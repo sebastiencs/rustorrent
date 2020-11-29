@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use kv_log_macro::{debug, info};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::net::SocketAddr;
 use tokio::{
@@ -49,7 +50,7 @@ async fn get_peers_addrs(response: &AnnounceResponse) -> Vec<SocketAddr> {
         None => {}
     }
 
-    println!("ADDRS: {:#?}", addrs);
+    debug!("[http tracker] peers found: {:#?}", addrs);
     addrs
 }
 
@@ -233,14 +234,14 @@ async fn send<T: DeserializeOwned, Q: ToQuery>(
 
     let req = format_request(url, query);
 
-    println!("REQ {}", req);
+    debug!("[http tracker] ", { request: req });
 
     stream.write(req.as_bytes()).await?;
     stream.flush().await?;
 
     let response = read_response(stream).await?;
 
-    println!("DATA {:x?}", String::from_utf8_lossy(&response));
+    // println!("DATA {:x?}", String::from_utf8_lossy(&response));
 
     let value = from_bytes(&response)?;
 
@@ -300,12 +301,13 @@ where
     Q: ToQuery,
     R: DeserializeOwned,
 {
-    println!(
-        "URL: {:?} {:?} {:?} {:?}",
-        url,
-        url.host(),
-        url.port(),
-        url.scheme()
+    info!(
+        "[http tracker]", {
+            url: url.to_string(),
+            host: url.host().map(|h| h.to_string()),
+            port: url.port(),
+            scheme: url.scheme()
+        }
     );
 
     send(url, query, addr).await

@@ -2,6 +2,8 @@ use async_channel::{bounded, Receiver, Sender};
 use crossbeam_channel::Sender as SyncSender;
 use slab::Slab;
 use std::sync::Arc;
+// use log::info;
+use kv_log_macro::{debug, warn};
 
 use std::net::SocketAddr;
 
@@ -149,7 +151,7 @@ impl TorrentSupervisor {
     }
 
     fn connect_to_peers(&self, addr: &SocketAddr) {
-        println!("CONNECTING TO: {:?}", addr);
+        debug!("Connecting", { addr: addr.to_string() });
 
         let addr = *addr;
         let my_addr = self.my_addr.clone();
@@ -160,12 +162,12 @@ impl TorrentSupervisor {
             let mut peer = match Peer::new(addr, pieces_detail, my_addr, extern_id).await {
                 Ok(peer) => peer,
                 Err(e) => {
-                    println!("PEER ERROR {:?}", e);
+                    warn!("Peer error {:?}", e, { addr: addr.to_string() });
                     return;
                 }
             };
             let result = peer.start().await;
-            println!("PEER TERMINATED: {:?}", result);
+            warn!("[{}] Peer terminated: {:?}", peer.internal_id(), result, { addr: addr.to_string() });
         });
     }
 
@@ -240,13 +242,15 @@ impl TorrentSupervisor {
                     if self.pending_pieces.contains(id) {
                         let _piece = self.pending_pieces.remove(id);
                     };
-                    println!("PIECE CHECKED FROM THE POOL: {}", valid);
+                    debug!("Piece checked from the pool: {}", valid);
                 }
                 PeerDiscovered { addrs } => {
                     for addr in &addrs {
                         let mut peers = self.peers.values();
                         if !peers.any(|p| &p.socket == addr) {
                             self.connect_to_peers(addr);
+                        } else {
+                            warn!("Already connected to {:?}, ignoring", addr);
                         }
                     }
                 }

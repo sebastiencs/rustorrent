@@ -5,6 +5,7 @@ use futures::{
     future::{Fuse, FutureExt},
     Future,
 };
+use kv_log_macro::info;
 use tokio::{io::BufReader, net::TcpStream};
 
 use std::{
@@ -278,6 +279,8 @@ impl Peer {
 
         let id = PEER_COUNTER.fetch_add(1, Ordering::SeqCst);
 
+        info!("[{}] Connected", id, { addr: addr.to_string() });
+
         Ok(Peer {
             addr,
             supervisor,
@@ -294,6 +297,10 @@ impl Peer {
             pieces_buffer: Map::default(),
             peer_detail: Default::default(),
         })
+    }
+
+    pub(crate) fn internal_id(&self) -> PeerId {
+        self.id
     }
 
     async fn send_message(&mut self, msg: MessagePeer<'_>) -> Result<()> {
@@ -484,7 +491,7 @@ impl Peer {
                     }
                 }
                 Peer(Err(e)) => {
-                    eprintln!("[{}] PEER ERROR MSG {:?}", self.id, e);
+                    info!("[{}] PEER ERROR MSG {:?}", self.id, e);
                     return Err(e);
                 }
             }
@@ -507,11 +514,11 @@ impl Peer {
             };
 
             if let Some(task) = task {
-                // println!("[{}] SENT TASK {:?}", self.id, task);
+                // info!("[{}] SENT TASK {:?}", self.id, task);
                 self.send_request(task).await?;
             } else {
                 //self.pieces_actor.get_pieces_to_downloads().await;
-                println!(
+                info!(
                     "[{:?}] No More Task ! {} downloaded in {:?}s",
                     self.id,
                     self.nblocks,
@@ -521,7 +528,7 @@ impl Peer {
             }
         } else {
             self.send_message(MessagePeer::Interested).await?;
-            println!("[{}] SENT INTERESTED", self.id);
+            info!("[{}] Send interested", self.id);
         }
         Ok(())
     }
@@ -555,23 +562,23 @@ impl Peer {
         match msg {
             Choke => {
                 self.set_choked(true);
-                println!("[{}] CHOKE", self.id);
+                info!("[{}] Choke", self.id);
             }
             UnChoke => {
                 // If the peer has piece we're interested in
                 // Send a Request
                 self.set_choked(false);
-                println!("[{}] UNCHOKE", self.id);
+                info!("[{}] Unchoke", self.id);
 
                 self.maybe_send_request().await?;
             }
             Interested => {
                 // Unshoke this peer
-                println!("INTERESTED",);
+                info!("[{}] Interested", self.id);
             }
             NotInterested => {
                 // Shoke this peer
-                println!("NOT INTERESTED",);
+                info!("[{}] Not interested", self.id);
             }
             Have { piece_index } => {
                 use TorrentNotification::UpdateBitfield;
@@ -586,7 +593,7 @@ impl Peer {
                     .await
                     .unwrap();
 
-                println!("[{:?}] HAVE {}", self.id, piece_index);
+                info!("[{:?}] Have {}", self.id, piece_index);
             }
             BitField(bitfield) => {
                 // Send an Interested ?
@@ -605,7 +612,7 @@ impl Peer {
                     .await
                     .unwrap();
 
-                println!("[{:?}] BITFIELD", self.id);
+                info!("[{:?}] Bitfield", self.id);
             }
             Request {
                 index,
@@ -614,7 +621,7 @@ impl Peer {
             } => {
                 // Mark this peer as interested
                 // Make sure this peer is not choked or resend a choke
-                println!("REQUEST {} {} {}", index, begin, length);
+                info!("[{}] Request {} {} {}", self.id, index, begin, length);
             }
             Piece {
                 index,
@@ -624,7 +631,7 @@ impl Peer {
                 // If we already have it, send another Request
                 // Check the sum and write to disk
                 // Send Request
-                //println!("[{:?}] PIECE {} {} {}", self.id, index, begin, block.len());
+                //info!("[{:?}] PIECE {} {} {}", self.id, index, begin, block.len());
 
                 if self.start.is_none() {
                     self.start.replace(Instant::now());
@@ -657,26 +664,26 @@ impl Peer {
                 length,
             } => {
                 // Cancel a Request
-                println!("PIECE {} {} {}", index, begin, length);
+                info!("[{}] Piece {} {} {}", self.id, index, begin, length);
             }
             Port(port) => {
-                println!("PORT {}", port);
+                info!("[{}] Port {}", self.id, port);
             }
             KeepAlive => {
-                println!("KEEP ALICE");
+                info!("[{}] Keep alive", self.id);
             }
             Extension(ExtendedMessage::Handshake(_handshake)) => {
                 self.send_extended_handshake().await?;
                 //self.maybe_send_request().await;
-                //println!("[{}] EXTENDED HANDSHAKE SENT", self.id);
+                //info!("[{}] EXTENDED HANDSHAKE SENT", self.id);
             }
             Extension(ExtendedMessage::Message { id, buffer }) => {
                 if id == 1 {
                     if let Ok(addrs) = crate::bencode::de::from_bytes::<PEXMessage>(buffer) {
+                        let addrs: Vec<SocketAddr> = addrs.into();
+                        info!("[{}] new peers from pex {:?}", self.id, addrs);
                         self.supervisor
-                            .send(TorrentNotification::PeerDiscovered {
-                                addrs: addrs.into(),
-                            })
+                            .send(TorrentNotification::PeerDiscovered { addrs })
                             .await
                             .unwrap();
                     };
@@ -685,7 +692,12 @@ impl Peer {
             Unknown { id, buffer } => {
                 // Check extension
                 // Disconnect
-                println!("UNKNOWN {:?} {}", id, String::from_utf8_lossy(buffer));
+                info!(
+                    "[{}] Unknown {:?} {}",
+                    self.id,
+                    id,
+                    String::from_utf8_lossy(buffer)
+                );
             }
         }
         Ok(())
@@ -713,7 +725,7 @@ impl Peer {
             .send(TorrentNotification::AddPiece(piece_buffer))
             .await
             .unwrap();
-        //println!("[{}] PIECE COMPLETED {}", self.id, index);
+        //info!("[{}] PIECE COMPLETED {}", self.id, index);
     }
 
     async fn read_messages(&mut self) -> Result<usize> {
@@ -782,7 +794,7 @@ impl Peer {
 
         // TODO: Check the info hash and send to other TorrentSupervisor if necessary
 
-        println!("[{}] HANDSHAKE DONE", self.id);
+        info!("[{}] Handshake done", self.id);
 
         let peer_id = PeerExternId::new(&self.buffer[len + 28..len + 48]);
 
