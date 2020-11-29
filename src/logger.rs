@@ -1,4 +1,4 @@
-use colorful::{core::color_string::CString, Color, Colorful};
+use ansi_term::{ANSIGenericString, Colour};
 use log::{kv, LevelFilter, Log, Metadata, Record};
 use std::io::{self, StdoutLock, Write};
 
@@ -58,15 +58,15 @@ impl Log for Logger {
     fn flush(&self) {}
 }
 
-fn get_level(level: log::Level) -> CString {
+fn get_level(level: log::Level) -> ANSIGenericString<'static, str> {
     use log::Level::*;
 
     match level {
-        Trace => "TRACE".color(Color::Magenta),
-        Debug => "DEBUG".color(Color::Blue),
-        Info => "INFO".color(Color::Green),
-        Warn => "WARN".color(Color::Yellow),
-        Error => "ERROR".color(Color::Red),
+        Trace => Colour::Purple.paint("TRACE"),
+        Debug => Colour::Blue.paint("DEBUG"),
+        Info => Colour::Green.paint("INFO"),
+        Warn => Colour::Yellow.paint("WARN"),
+        Error => Colour::Red.paint("ERROR"),
     }
 }
 
@@ -84,7 +84,7 @@ fn format_kv_pairs<'b>(mut out: &mut StdoutLock<'b>, record: &Record) {
             write!(
                 self.string,
                 " {}: {}",
-                key.to_string().color(Color::Yellow).bold(),
+                Colour::Yellow.bold().paint(key.to_string()),
                 val
             )
             .unwrap();
