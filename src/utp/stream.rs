@@ -291,7 +291,7 @@ impl UtpStream {
         }
 
         if is_closed {
-            return Poll::Ready(Err(std::io::ErrorKind::ConnectionAborted.into()));
+            return Poll::Ready(Ok(0));
         }
 
         Poll::Pending
@@ -447,7 +447,7 @@ mod tests {
 
         sender.try_send(ReceivedData::Done).unwrap();
         drop(sender);
-        assert!(stream.read(&mut buffer).await.is_err());
+        assert_eq!(stream.read(&mut buffer).await.unwrap(), 0);
     }
 
     #[tokio::test]
@@ -500,8 +500,8 @@ mod tests {
         stream.read(&mut buffer).await.unwrap();
         assert_eq!(&buffer[..3], &[100, 101, 102]);
 
-        let res = stream.read(&mut buffer).await;
-        assert!(res.is_err());
+        let res = stream.read(&mut buffer).await.unwrap();
+        assert_eq!(res, 0);
     }
 
     #[tokio::test]
@@ -564,8 +564,8 @@ mod tests {
         });
 
         let mut buffer = [0; 4];
-        let res = stream.read(&mut buffer).await;
-        assert!(res.is_err());
+        let res = stream.read(&mut buffer).await.unwrap();
+        assert_eq!(res, 0);
     }
 
     // #[tokio::test]
