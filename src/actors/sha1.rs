@@ -155,6 +155,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::eq_op)]
     fn compare_sum_simd_slice() {
         let full = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
         assert_eq!(compare_20_bytes(&full, &full), full == full);

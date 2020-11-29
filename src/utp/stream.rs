@@ -441,7 +441,7 @@ mod tests {
         sender.try_send(ReceivedData::Data { packet }).unwrap();
 
         let mut buffer = [0; 64];
-        stream.read(&mut buffer).await;
+        stream.read(&mut buffer).await.unwrap();
 
         assert_eq!(&buffer[..9], &[1, 2, 3, 4, 5, 6, 7, 8, 9]);
 
@@ -476,16 +476,16 @@ mod tests {
 
         let mut buffer = [0; 4];
 
-        stream.read(&mut buffer).await;
+        stream.read(&mut buffer).await.unwrap();
         assert_eq!(&buffer[..4], &[1, 2, 3, 4]);
 
-        stream.read(&mut buffer).await;
+        stream.read(&mut buffer).await.unwrap();
         assert_eq!(&buffer[..4], &[5, 6, 7, 8]);
 
-        stream.read(&mut buffer).await;
+        stream.read(&mut buffer).await.unwrap();
         assert_eq!(&buffer[..4], &[9, 10, 11, 12]);
 
-        stream.read(&mut buffer).await;
+        stream.read(&mut buffer).await.unwrap();
         assert_eq!(&buffer[..3], &[13, 14, 15]);
 
         tokio::spawn(async move {
@@ -497,7 +497,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(50)).await;
         });
 
-        stream.read(&mut buffer).await;
+        stream.read(&mut buffer).await.unwrap();
         assert_eq!(&buffer[..3], &[100, 101, 102]);
 
         let res = stream.read(&mut buffer).await;
@@ -538,7 +538,7 @@ mod tests {
         });
 
         let mut buffer = [0; 18];
-        let res = stream.read_exact(&mut buffer).await;
+        stream.read_exact(&mut buffer).await.unwrap();
 
         assert_eq!(
             &buffer,

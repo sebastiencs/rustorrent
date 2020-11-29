@@ -140,7 +140,7 @@ jobs:
         # if: always()
         with:
           command: clippy
-          args: --all-features -- -D warnings
+          args: -Zunstable-options --all-features --tests -- -Dwarnings
 
   grcov:
     name: Coverage

@@ -1097,7 +1097,7 @@ mod tests {
 
     #[test]
     fn seq_number_less_equal() {
-        for num in (0..u16::MAX as isize + 1024) {
+        for num in 0..u16::MAX as isize + 1024 {
             for offset in 0..1024 {
                 let num_less: u16 = ((num - offset) & 0xFFFF) as u16;
                 let num: u16 = (num & 0xFFFF) as u16;
@@ -1108,7 +1108,7 @@ mod tests {
 
     #[test]
     fn seq_number_less() {
-        for num in (0..u16::MAX as isize + 1024) {
+        for num in 0..u16::MAX as isize + 1024 {
             for offset in 0..1024 {
                 let num_less: u16 = ((num - offset) & 0xFFFF) as u16;
                 let num: u16 = (num & 0xFFFF) as u16;
@@ -1181,15 +1181,15 @@ mod tests {
             .await
             .unwrap();
         // let stream = listener.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
-        stream.write(&buffer).await;
-        stream.wait_for_termination().await;
+        stream.write(&buffer).await.unwrap();
+        stream.flush().await.unwrap();
 
         println!("Sent in {:?}", start.elapsed());
     }
 
     // #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn recv_data() {
-        let start = std::time::Instant::now();
+        // let start = std::time::Instant::now();
 
         let listener = UtpListener::bind(std::net::SocketAddrV4::new(
             Ipv4Addr::new(0, 0, 0, 0),
@@ -1199,7 +1199,7 @@ mod tests {
         .await;
 
         println!("accepting..");
-        let (stream, addr) = listener.accept().await;
+        let (stream, _addr) = listener.accept().await;
         println!("accepted");
 
         let mut buffer = [0; 65000];
@@ -1250,9 +1250,12 @@ mod tests {
                 .await
                 .unwrap();
 
-            stream.write(&buffer).await;
-            stream.flush().await;
-            stream.write_all(&[1, 2, 3, 4, 5, 6, 7, 8, 9]).await;
+            stream.write(&buffer).await.unwrap();
+            stream.flush().await.unwrap();
+            stream
+                .write_all(&[1, 2, 3, 4, 5, 6, 7, 8, 9])
+                .await
+                .unwrap();
         }
 
         let file_clone = Arc::clone(&file_data);
@@ -1264,11 +1267,11 @@ mod tests {
             UtpListener::bind(std::net::SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 7000)).await;
 
         println!("accepting..");
-        let (mut stream, addr) = listener.accept().await;
+        let (mut stream, _addr) = listener.accept().await;
         println!("accepted");
 
         let mut result = vec![];
-        let res = stream.read_to_end(&mut result).await;
+        stream.read_to_end(&mut result).await.unwrap();
 
         assert_eq!(&result[..LENGTH], *file_data);
         assert_eq!(&result[LENGTH..], &[1, 2, 3, 4, 5, 6, 7, 8, 9]);
