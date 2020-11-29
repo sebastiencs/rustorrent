@@ -1,4 +1,4 @@
-use async_channel::{unbounded, Receiver, Sender};
+use async_channel::{unbounded, Receiver, Sender, TrySendError};
 use futures::StreamExt;
 use socket2::Socket;
 use tokio::{
@@ -148,7 +148,8 @@ enum SendPush {
 
 impl Drop for UtpManager {
     fn drop(&mut self) {
-        println!("DROP UTP MANAGER",);
+        self.send_fin();
+        //println!("DROP UTP MANAGER",);
         // if let Some(on_connected) = self.on_connected.take() {
         //     task::spawn(async move {
         //         on_connected.send(None).await
@@ -250,6 +251,8 @@ impl UtpManager {
         let socket = self.socket.clone();
 
         while let Ok((incoming, mut guard)) = { self.receive_timeout(&socket).await } {
+            // println!("{:?} dispatch {:?}", self.addr, incoming);
+
             let result = self.process_incoming(incoming);
 
             match (result, &mut guard) {
@@ -359,7 +362,7 @@ impl UtpManager {
                 self.state.inflight_size(),
                 self.to_send.len()
             );
-            // self.notify_finish();
+            self.notify_finish()?;
             // println!("RTO {:?} RTT {:?} RTT_VAR {:?}", self.rto, self.rtt, self.rtt_var);
         }
 
@@ -368,16 +371,23 @@ impl UtpManager {
         Ok(())
     }
 
-    fn notify_finish(&self) {
+    fn notify_finish(&self) -> Result<()> {
         println!(
             "FINISH flight={} to_send={}",
             self.state.inflight_size(),
             self.to_send.len()
         );
-        let on_receive = self.on_receive.clone();
-        task::spawn(async move {
-            on_receive.send(ReceivedData::Done).await.unwrap();
-        });
+        match self.on_receive.try_send(ReceivedData::Done) {
+            Ok(_) => Ok(()),
+            Err(TrySendError::Closed(_)) => Err(UtpError::MustClose),
+            Err(TrySendError::Full(_)) => {
+                let on_receive = self.on_receive.clone();
+                task::spawn(async move {
+                    on_receive.send(ReceivedData::Done).await.ok();
+                });
+                Ok(())
+            }
+        }
     }
 
     fn dispatch(&mut self, packet: ArenaBox<Packet>) -> Result<()> {
@@ -800,6 +810,23 @@ impl UtpManager {
         self.state.add_packet_inflight(seq_number, packet);
 
         Ok(())
+    }
+
+    fn send_fin(&mut self) {
+        let mut packet = Packet::new_type(PacketType::Fin);
+
+        let ack_number = self.ack_bitfield.current();
+        let seq_number = self.state.seq_number();
+        let send_id = self.state.send_id();
+        packet.set_ack_number(ack_number);
+        packet.set_packet_seq_number(seq_number);
+        packet.set_connection_id(send_id);
+        packet.set_window_size(1_048_576);
+        packet.update_timestamp();
+
+        if let Err(e) = self.try_send_to(&packet) {
+            println!("Fail to send syn {:?}", e);
+        }
     }
 
     fn resend_packets(&mut self, only_lost: bool) -> Result<()> {

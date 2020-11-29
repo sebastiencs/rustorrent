@@ -1091,7 +1091,9 @@ pub const UDP_TEREDO_MTU: usize = TEREDO_MTU - IPV6_HEADER_SIZE - UDP_HEADER_SIZ
 #[cfg(test)]
 mod tests {
     use super::{listener::UtpListener, SequenceNumber};
+    use rand::Rng;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[test]
     fn seq_number_less_equal() {
@@ -1153,7 +1155,7 @@ mod tests {
         assert_eq!(seq_num2 - seq_num, SequenceNumber::from(1));
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    // #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn send_data() {
         // let file = "/home/sebastien/Downloads/Escape.Plan.2013.1080p.BluRay.x265-RARBG-[rarbg.to].torrent";
         let file = "/home/sebastien/Downloads/Fedora-Cinnamon-Live-x86_64-32-1.6.iso";
@@ -1169,7 +1171,7 @@ mod tests {
         ))
         .await;
 
-        let stream = listener
+        let mut stream = listener
             .connect(SocketAddr::new(
                 IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
                 // IpAddr::V4(Ipv4Addr::new(192, 168, 0, 144)),
@@ -1185,7 +1187,7 @@ mod tests {
         println!("Sent in {:?}", start.elapsed());
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    // #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn recv_data() {
         let start = std::time::Instant::now();
 
@@ -1201,29 +1203,74 @@ mod tests {
         println!("accepted");
 
         let mut buffer = [0; 65000];
+        let mut bytes = 0;
 
         loop {
             let res = stream.read(&mut buffer).await;
 
-            if let Err(e) = res {
-                println!("END ERROR={:?}", e);
-                break;
+            match res {
+                Ok(n) => {
+                    bytes += n;
+                }
+                Err(e) => {
+                    println!("END ERROR={:?}", e);
+                    break;
+                }
             }
         }
 
-        println!("DONEaaaa");
+        println!("DONE {:?}", bytes);
+    }
 
-        // let stream = listener
-        //     .connect(SocketAddr::new(
-        //         IpAddr::V4(Ipv4Addr::new(192, 168, 0, 144)),
-        //         7000,
-        //     ))
-        //     .await
-        //     .unwrap();
-        // // let stream = listener.connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 7000)).await.unwrap();
-        // stream.write(&buffer).await;
-        // stream.wait_for_termination().await;
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn recv_send_data() {
+        use std::sync::Arc;
 
-        // println!("Sent in {:?}", start.elapsed());
+        const LENGTH: usize = 64_000_000;
+
+        let mut rng = rand::thread_rng();
+        let mut data = vec![0; LENGTH];
+        rng.fill(data.as_mut_slice());
+        let file_data = Arc::new(data);
+
+        async fn send_inner(buffer: Arc<Vec<u8>>) {
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+            let listener = UtpListener::bind(std::net::SocketAddrV4::new(
+                Ipv4Addr::new(0, 0, 0, 0),
+                10005,
+            ))
+            .await;
+
+            let mut stream = listener
+                .connect(SocketAddr::new(
+                    IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+                    7000,
+                ))
+                .await
+                .unwrap();
+
+            stream.write(&buffer).await;
+            stream.flush().await;
+            stream.write_all(&[1, 2, 3, 4, 5, 6, 7, 8, 9]).await;
+        }
+
+        let file_clone = Arc::clone(&file_data);
+        tokio::spawn(async move {
+            send_inner(file_clone).await;
+        });
+
+        let listener =
+            UtpListener::bind(std::net::SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 7000)).await;
+
+        println!("accepting..");
+        let (mut stream, addr) = listener.accept().await;
+        println!("accepted");
+
+        let mut result = vec![];
+        let res = stream.read_to_end(&mut result).await;
+
+        assert_eq!(&result[..LENGTH], *file_data);
+        assert_eq!(&result[LENGTH..], &[1, 2, 3, 4, 5, 6, 7, 8, 9]);
     }
 }

@@ -179,12 +179,14 @@ pub(super) enum ReceivedData {
 #[derive(Debug)]
 pub struct UtpStream {
     pub(super) receive: Pin<Box<Receiver<ReceivedData>>>,
-    pub(super) writer_user_command: Sender<UtpEvent>,
-    pub(super) received_data: RefCell<Map<SequenceNumber, ArenaBox<Packet>>>,
-    pub(super) last_seq: Cell<Option<SequenceNumber>>,
-    pub(super) cursor: Cell<usize>,
-    pub(super) done: Cell<bool>,
+    pub writer_user_command: Sender<UtpEvent>,
+    pub received_data: RefCell<Map<SequenceNumber, ArenaBox<Packet>>>,
+    pub last_seq: Cell<Option<SequenceNumber>>,
+    pub cursor: Cell<usize>,
+    pub flushed: Cell<bool>,
 }
+
+unsafe impl Send for UtpStream {}
 
 impl UtpStream {
     pub(super) fn new(
@@ -197,18 +199,12 @@ impl UtpStream {
             received_data: RefCell::new(Default::default()),
             last_seq: Cell::new(None),
             cursor: Cell::new(0),
-            done: Cell::new(false),
+            flushed: Cell::new(false),
         }
     }
 
-    fn poll_read_private(
-        &self,
-        data: &mut [u8],
-        current: &mut Option<Result<ReceivedData, TryRecvError>>,
-    ) -> Poll<std::io::Result<usize>> {
+    fn handle_messages(&self, current: &mut Option<Result<ReceivedData, TryRecvError>>) -> bool {
         use ReceivedData::*;
-
-        let mut user_data = Cursor::new(data);
 
         loop {
             match current.take().unwrap_or_else(|| self.receive.try_recv()) {
@@ -225,15 +221,43 @@ impl UtpStream {
                     self.last_seq.set(Some(seq));
                 }
                 Ok(Done) => {
-                    self.done.set(true);
+                    self.flushed.set(true);
                     break;
                 }
                 Err(TryRecvError::Closed) => {
-                    self.done.set(true);
-                    break;
+                    return true;
                 }
             }
         }
+
+        false
+    }
+
+    fn poll_flushed_private(
+        &self,
+        current: &mut Option<Result<ReceivedData, TryRecvError>>,
+    ) -> Poll<()> {
+        if self.flushed.get() {
+            return Poll::Ready(());
+        }
+
+        let is_closed = self.handle_messages(current);
+
+        if self.flushed.get() || is_closed {
+            return Poll::Ready(());
+        }
+
+        Poll::Pending
+    }
+
+    fn poll_read_private(
+        &self,
+        data: &mut [u8],
+        current: &mut Option<Result<ReceivedData, TryRecvError>>,
+    ) -> Poll<std::io::Result<usize>> {
+        let mut user_data = Cursor::new(data);
+
+        let is_closed = self.handle_messages(current);
 
         let mut cursor = self.cursor.get();
         let mut last_seq = self.last_seq.get().unwrap();
@@ -266,7 +290,7 @@ impl UtpStream {
             return Poll::Ready(Ok(user_data.position() as usize));
         }
 
-        if self.done.get() {
+        if is_closed {
             return Poll::Ready(Err(std::io::ErrorKind::ConnectionAborted.into()));
         }
 
@@ -285,14 +309,6 @@ impl UtpStream {
                 value.replace(Ok(data));
             }
         }
-    }
-
-    pub async fn write(&self, data: &[u8]) {
-        let data = Vec::from_slice(data).into_boxed_slice();
-        self.writer_user_command
-            .send(UtpEvent::UserWrite { data })
-            .await
-            .unwrap();
     }
 
     pub async fn wait_for_termination(&self) {
@@ -344,7 +360,10 @@ impl AsyncWrite for UtpStream {
             .writer_user_command
             .try_send(UtpEvent::UserWrite { data })
         {
-            Ok(_) => Poll::Ready(Ok(len)),
+            Ok(_) => {
+                self.flushed.set(false);
+                Poll::Ready(Ok(len))
+            }
             Err(TrySendError::Closed(_)) => {
                 Poll::Ready(Err(std::io::ErrorKind::ConnectionAborted.into()))
             }
@@ -353,18 +372,31 @@ impl AsyncWrite for UtpStream {
                 tokio::pin!(send);
 
                 send.as_mut().poll(cx).map(|v| {
-                    v.map(|_| len)
-                        .map_err(|_| std::io::ErrorKind::ConnectionAborted.into())
+                    v.map(|_| {
+                        self.flushed.set(false);
+                        len
+                    })
+                    .map_err(|_| std::io::ErrorKind::ConnectionAborted.into())
                 })
             }
         }
     }
 
     fn poll_flush(
-        self: Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<(), std::io::Error>> {
-        todo!()
+        let mut value = None;
+
+        loop {
+            if let Poll::Ready(_) = self.poll_flushed_private(&mut value) {
+                return Poll::Ready(Ok(()));
+            } else if let Some(v) = ready!(self.receive.as_mut().poll_next(cx)) {
+                value.replace(Ok(v));
+            } else {
+                return Poll::Pending;
+            }
+        }
     }
 
     fn poll_shutdown(
@@ -414,6 +446,7 @@ mod tests {
         assert_eq!(&buffer[..9], &[1, 2, 3, 4, 5, 6, 7, 8, 9]);
 
         sender.try_send(ReceivedData::Done).unwrap();
+        drop(sender);
         assert!(stream.read(&mut buffer).await.is_err());
     }
 
