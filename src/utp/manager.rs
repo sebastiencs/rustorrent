@@ -324,7 +324,7 @@ impl UtpManager {
                 }
             }
             UtpEvent::UserWrite { data } => {
-                self.send(&data)?;
+                self.send(&data);
             }
         }
         Ok(())
@@ -874,7 +874,7 @@ impl UtpManager {
         Ok(())
     }
 
-    fn send(&mut self, data: &[u8]) -> Result<()> {
+    fn send(&mut self, data: &[u8]) {
         let packet_size = self.packet_size();
 
         // We clone the arena to satisfy the borrow checker with self
@@ -905,8 +905,6 @@ impl UtpManager {
         self.to_send.extend(packets);
 
         // eprintln!("sent={}, to_send length={}", sent, self.to_send.len());
-
-        Ok(())
     }
 
     fn is_window_large_enough(&self, packet_size: usize) -> bool {
