@@ -97,7 +97,7 @@ pub struct TorrentSupervisor {
     // in case there is no peer
     my_addr: Sender<TorrentNotification>,
 
-    pieces_detail: Pieces,
+    pieces_infos: Arc<Pieces>,
 
     peers: Map<PeerId, PeerState>,
 
@@ -115,9 +115,9 @@ pub type Result<T> = std::result::Result<T, TorrentError>;
 impl TorrentSupervisor {
     pub fn new(torrent: Torrent, sha1_workers: SyncSender<Sha1Task>) -> TorrentSupervisor {
         let (my_addr, receiver) = bounded(100);
-        let pieces_detail = Pieces::from(&torrent);
+        let pieces_infos = Arc::new(Pieces::from(&torrent));
 
-        let num_pieces = pieces_detail.num_pieces;
+        let num_pieces = pieces_infos.num_pieces;
         let mut pieces = Vec::with_capacity(num_pieces);
         pieces.resize_with(num_pieces, Default::default);
 
@@ -127,7 +127,7 @@ impl TorrentSupervisor {
             metadata: Arc::new(torrent),
             receiver,
             my_addr,
-            pieces_detail,
+            pieces_infos,
             pieces,
             peers: Default::default(),
             sha1_workers,
@@ -155,11 +155,11 @@ impl TorrentSupervisor {
 
         let addr = *addr;
         let my_addr = self.my_addr.clone();
-        let pieces_detail = self.pieces_detail.clone();
+        let pieces_infos = self.pieces_infos.clone();
         let extern_id = self.extern_id.clone();
 
         tokio::spawn(async move {
-            let mut peer = match Peer::new(addr, pieces_detail, my_addr, extern_id).await {
+            let mut peer = match Peer::new(addr, pieces_infos, my_addr, extern_id).await {
                 Ok(peer) => peer,
                 Err(e) => {
                     warn!("Peer error {:?}", e, { addr: addr.to_string() });
@@ -209,7 +209,7 @@ impl TorrentSupervisor {
                         self.peers.insert(
                             id,
                             PeerState {
-                                bitfield: BitField::new(self.pieces_detail.num_pieces),
+                                bitfield: BitField::new(self.pieces_infos.num_pieces),
                                 queue_tasks: queue,
                                 addr,
                                 socket,
@@ -221,7 +221,7 @@ impl TorrentSupervisor {
                 AddPiece(piece_block) => {
                     let index = piece_block.piece_index;
                     if let Some(sum_metadata) =
-                        self.pieces_detail.sha1_pieces.get(index).map(Arc::clone)
+                        self.pieces_infos.sha1_pieces.get(index).map(Arc::clone)
                     {
                         let piece_buffer = Arc::new(piece_block);
                         let addr = self.my_addr.clone();
@@ -260,8 +260,8 @@ impl TorrentSupervisor {
 
     async fn find_pieces_for_peer(&mut self, peer: PeerId, update: &BitFieldUpdate) -> bool {
         let pieces = &mut self.pieces;
-        let nblock_piece = self.pieces_detail.nblocks_piece;
-        let block_size = self.pieces_detail.block_size;
+        let nblock_piece = self.pieces_infos.nblocks_piece;
+        let block_size = self.pieces_infos.block_size;
 
         let queue_peer = self
             .peers

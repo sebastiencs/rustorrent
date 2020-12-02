@@ -5,7 +5,7 @@ use serde::{
 
 use serde::Deserialize;
 
-use std::{cell::Cell, fmt, sync::Arc};
+use std::{cell::Cell, fmt};
 
 #[derive(Debug, PartialEq)]
 pub enum DeserializeError {
@@ -94,7 +94,7 @@ pub fn read_meta(s: &[u8]) -> Result<Torrent> {
 
     Ok(Torrent {
         meta,
-        info_hash: Arc::new(info_hash),
+        info_hash: info_hash.into(),
     })
 }
 

@@ -69,7 +69,7 @@ impl Sha1Worker {
                 id,
                 addr,
             } => {
-                let sha1 = crate::sha1::sha1(piece_buffer.buf.as_slice());
+                let sha1 = crate::sha1::sha1(&piece_buffer.buf);
 
                 let valid = compare_20_bytes(&sha1[..], &sum_metadata[..]);
 

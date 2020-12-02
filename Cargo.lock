@@ -588,6 +588,7 @@ dependencies = [
  "byteorder",
  "chrono",
  "coarsetime",
+ "concurrent-queue",
  "crossbeam-channel",
  "crossbeam-epoch",
  "fixed",

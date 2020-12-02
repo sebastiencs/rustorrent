@@ -106,7 +106,7 @@ pub struct AnnounceRequest {
     pub connection_id: u64,
     pub action: Action,
     pub transaction_id: u32,
-    pub info_hash: Arc<Vec<u8>>,
+    pub info_hash: Arc<[u8]>,
     //    pub info_hash: [u8; 20],
     pub peer_id: Arc<PeerExternId>,
     //    pub peer_id: [u8; 20],
@@ -125,7 +125,7 @@ pub struct ScrapeRequest {
     pub connection_id: u64,
     pub action: Action,
     pub transaction_id: u32,
-    pub info_hash: Arc<Vec<u8>>, // TODO: Handle more hash
+    pub info_hash: Arc<[u8]>, // TODO: Handle more hash
 }
 
 impl<'a> From<&'a UdpConnection> for AnnounceRequest {

@@ -66,6 +66,7 @@ slab = "0.4"
 async-trait = "0.1"
 rand = "0.7"
 ahash = { version = "0.5", default-features = false }
+concurrent-queue = "1.2"
 
 libc = { version = "0.2", features = ["extra_traits"] }
 # libc = { version = "0.2", default-features = false }

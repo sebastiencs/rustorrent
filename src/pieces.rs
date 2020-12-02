@@ -6,7 +6,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct Pieces {
     /// Info hash
-    pub info_hash: Arc<Vec<u8>>,
+    pub info_hash: Arc<[u8]>,
     /// Number of pieces
     pub num_pieces: usize,
     /// SHA1 of each piece
@@ -145,7 +145,7 @@ impl PieceInfo {
 }
 
 pub struct PieceBuffer {
-    pub buf: Vec<u8>,
+    pub buf: Box<[u8]>,
     pub piece_index: usize,
     pub bytes_added: usize,
 }
@@ -155,6 +155,7 @@ impl PieceBuffer {
     fn new(piece_index: usize, piece_size: usize) -> PieceBuffer {
         let mut buf = Vec::with_capacity(piece_size);
         unsafe { buf.set_len(piece_size) };
+        let buf = buf.into_boxed_slice();
 
         // println!("ADDING PIECE_BUFFER {} SIZE={}", piece_index, piece_size);
 

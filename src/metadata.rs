@@ -92,7 +92,7 @@ pub struct MetaTorrent {
 #[derive(Debug)]
 pub struct Torrent {
     pub meta: MetaTorrent,
-    pub info_hash: Arc<Vec<u8>>,
+    pub info_hash: Arc<[u8]>,
 }
 
 pub struct UrlIterator<'a> {

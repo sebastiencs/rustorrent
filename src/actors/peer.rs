@@ -344,14 +344,14 @@ pub struct Peer {
     choked: Choke,
     /// List of pieces to download
     tasks: PeerTask,
-    _tasks: Option<VecDeque<PieceToDownload>>,
+    local_tasks: Option<VecDeque<PieceToDownload>>,
 
     /// Small buffers where the downloaded blocks are kept.
     /// Once the piece is full, we send it to TorrentSupervisor
     /// and remove it here.
     pieces_buffer: Map<usize, PieceBuffer>,
 
-    pieces_detail: Pieces,
+    pieces_infos: Arc<Pieces>,
 
     nblocks: usize,         // Downloaded
     start: Option<Instant>, // Downloaded,
@@ -364,12 +364,12 @@ pub struct Peer {
 impl Peer {
     pub async fn new(
         addr: SocketAddr,
-        pieces_detail: Pieces,
+        pieces_infos: Arc<Pieces>,
         supervisor: Sender<TorrentNotification>,
         extern_id: Arc<PeerExternId>,
     ) -> Result<Peer> {
         let stream = TcpStream::connect(&addr).await?;
-        let piece_length = pieces_detail.piece_length;
+        let piece_length = pieces_infos.piece_length;
 
         let id = PEER_COUNTER.fetch_add(1, Ordering::SeqCst);
 
@@ -378,7 +378,7 @@ impl Peer {
         Ok(Peer {
             addr,
             supervisor,
-            pieces_detail,
+            pieces_infos,
             id,
             extern_id,
             tasks: PeerTask::default(),
@@ -387,7 +387,7 @@ impl Peer {
             choked: Choke::Choked,
             nblocks: 0,
             start: None,
-            _tasks: None,
+            local_tasks: None,
             pieces_buffer: Map::default(),
             peer_detail: Default::default(),
         })
@@ -551,16 +551,16 @@ impl Peer {
     }
 
     async fn take_tasks(&mut self) -> Option<PieceToDownload> {
-        if self._tasks.is_none() {
+        if self.local_tasks.is_none() {
             let t = self.tasks.read().await;
-            self._tasks = Some(t.clone());
+            self.local_tasks = Some(t.clone());
         }
-        self._tasks.as_mut().and_then(|t| t.pop_front())
+        self.local_tasks.as_mut().and_then(|t| t.pop_front())
     }
 
     async fn maybe_send_request(&mut self) -> Result<()> {
         if !self.am_choked() {
-            let task = match self._tasks.as_mut() {
+            let task = match self.local_tasks.as_mut() {
                 Some(tasks) => tasks.pop_front(),
                 _ => self.take_tasks().await,
             };
@@ -652,7 +652,7 @@ impl Peer {
                 use crate::bitfield::BitField;
                 use TorrentNotification::UpdateBitfield;
 
-                let bitfield = BitField::from(bitfield, self.pieces_detail.num_pieces)?;
+                let bitfield = BitField::from(bitfield, self.pieces_infos.num_pieces)?;
 
                 let update = BitFieldUpdate::from(bitfield);
 
@@ -691,7 +691,7 @@ impl Peer {
 
                 self.nblocks += block.len();
 
-                let piece_size = self.pieces_detail.piece_size(index as usize);
+                let piece_size = self.pieces_infos.piece_size(index as usize);
                 let mut is_completed = false;
 
                 self.pieces_buffer
@@ -801,7 +801,7 @@ impl Peer {
         cursor.write_all(&[19])?;
         cursor.write_all(b"BitTorrent protocol")?;
         cursor.write_all(&reserved[..])?;
-        cursor.write_all(self.pieces_detail.info_hash.as_ref())?;
+        cursor.write_all(self.pieces_infos.info_hash.as_ref())?;
         cursor.write_all(&**self.extern_id)?;
 
         self.write(&handshake).await?;
