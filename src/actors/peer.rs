@@ -1,12 +1,12 @@
 use async_channel::{bounded, Sender};
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use coarsetime::Instant;
-use futures::{
-    future::{Fuse, FutureExt},
-    Future,
+use futures::{ready, StreamExt};
+use kv_log_macro::{error, info};
+use tokio::{
+    io::{AsyncRead, AsyncWrite, ReadBuf},
+    net::TcpStream,
 };
-use kv_log_macro::info;
-use tokio::{io::BufReader, net::TcpStream};
 
 use std::{
     convert::{TryFrom, TryInto},
@@ -17,6 +17,7 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
+    task::{Context, Poll},
 };
 
 use crate::{
@@ -165,11 +166,6 @@ pub enum PeerCommand {
     Die,
 }
 
-enum PeerWaitEvent {
-    Peer(Result<usize>),
-    Supervisor(Option<PeerCommand>),
-}
-
 use hashbrown::HashMap;
 
 #[derive(Default)]
@@ -241,11 +237,108 @@ impl PartialEq for PeerExternId {
 
 impl Eq for PeerExternId {}
 
+trait AsyncReadWrite: AsyncRead + AsyncWrite + Send {}
+impl<T: AsyncRead + AsyncWrite + Send> AsyncReadWrite for T {}
+
+struct PeerReadBuffer {
+    reader: Pin<Box<dyn AsyncReadWrite>>,
+    buffer: Box<[u8]>,
+    pos: usize,
+    msg_len: usize,
+    pre_data: usize,
+}
+
+impl PeerReadBuffer {
+    fn new<T>(stream: T, piece_length: usize) -> PeerReadBuffer
+    where
+        T: AsyncReadWrite + 'static,
+    {
+        PeerReadBuffer {
+            reader: Box::pin(stream),
+            buffer: vec![0; piece_length].into_boxed_slice(),
+            pos: 0,
+            msg_len: 0,
+            pre_data: 0,
+        }
+    }
+
+    fn get_mut(&mut self) -> Pin<&mut dyn AsyncReadWrite> {
+        self.reader.as_mut()
+    }
+
+    fn buffer(&self) -> &[u8] {
+        assert_ne!(self.msg_len, 0);
+        &self.buffer[self.pre_data..self.msg_len]
+    }
+
+    fn consume(&mut self) {
+        let pos = self.pos;
+        let msg_len = self.msg_len;
+        self.buffer.copy_within(msg_len..pos, 0);
+        self.pos -= msg_len;
+        self.msg_len = 0;
+        self.pre_data = 0;
+    }
+
+    fn read_at_least(&mut self, n: usize, cx: &mut Context<'_>) -> Poll<Result<()>> {
+        use tokio::io::ErrorKind::UnexpectedEof;
+
+        while self.pos < n {
+            let mut buf = ReadBuf::new(&mut self.buffer[self.pos..]);
+            ready!(self.reader.as_mut().poll_read(cx, &mut buf))?;
+            let filled = buf.filled().len();
+            if filled == 0 {
+                return Poll::Ready(Err(TorrentError::IO(UnexpectedEof.into())));
+            }
+            self.pos += filled;
+        }
+
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_handshake(&mut self, cx: &mut Context<'_>) -> Poll<Result<()>> {
+        ready!(self.read_at_least(1, cx))?;
+
+        let length = self.buffer[0] as usize;
+
+        ready!(self.read_at_least(length + 48, cx))?;
+
+        self.pre_data = 1;
+        self.msg_len = length + 48 + 1;
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_next_message(&mut self, cx: &mut Context<'_>) -> Poll<Result<()>> {
+        ready!(self.read_at_least(4, cx))?;
+
+        let length = {
+            let mut cursor = Cursor::new(&self.buffer);
+            cursor.read_u32::<BigEndian>().unwrap() as usize
+        };
+
+        assert!(length + 4 < self.buffer.len());
+
+        ready!(self.read_at_least(length + 4, cx))?;
+
+        self.pre_data = 4;
+        self.msg_len = 4 + length;
+        Poll::Ready(Ok(()))
+    }
+
+    async fn read_message(&mut self) -> Result<()> {
+        futures::future::poll_fn(|cx| self.poll_next_message(cx)).await
+    }
+
+    async fn read_handshake(&mut self) -> Result<()> {
+        futures::future::poll_fn(|cx| self.poll_handshake(cx)).await
+    }
+}
+
 pub struct Peer {
     id: PeerId,
     addr: SocketAddr,
     supervisor: Sender<TorrentNotification>,
-    reader: BufReader<TcpStream>,
+    reader: PeerReadBuffer,
     buffer: Vec<u8>,
     /// Are we choked from the peer
     choked: Choke,
@@ -276,10 +369,11 @@ impl Peer {
         extern_id: Arc<PeerExternId>,
     ) -> Result<Peer> {
         let stream = TcpStream::connect(&addr).await?;
+        let piece_length = pieces_detail.piece_length;
 
         let id = PEER_COUNTER.fetch_add(1, Ordering::SeqCst);
 
-        info!("[{}] Connected", id, { addr: addr.to_string() });
+        info!("[{}] Connected", id, { addr: addr.to_string(), piece_length: piece_length });
 
         Ok(Peer {
             addr,
@@ -288,7 +382,7 @@ impl Peer {
             id,
             extern_id,
             tasks: PeerTask::default(),
-            reader: BufReader::with_capacity(32 * 1024, stream),
+            reader: PeerReadBuffer::new(stream, piece_length + 1024),
             buffer: Vec::with_capacity(32 * 1024),
             choked: Choke::Choked,
             nblocks: 0,
@@ -308,7 +402,7 @@ impl Peer {
 
         use tokio::io::AsyncWriteExt;
 
-        let writer = self.reader.get_mut();
+        let mut writer = self.reader.get_mut();
         writer.write_all(self.buffer.as_slice()).await?;
         writer.flush().await?;
 
@@ -408,49 +502,13 @@ impl Peer {
         cursor.flush().unwrap();
     }
 
-    fn writer(&mut self) -> &mut TcpStream {
+    fn writer(&mut self) -> Pin<&mut dyn AsyncReadWrite> {
         self.reader.get_mut()
-    }
-
-    async fn wait_event(
-        &mut self,
-        mut cmds: Pin<
-            &mut Fuse<
-                impl Future<Output = std::result::Result<PeerCommand, async_channel::RecvError>>,
-            >,
-        >,
-    ) -> PeerWaitEvent {
-        // use futures::async_await::*;
-        use futures::{future, pin_mut, task::Poll};
-
-        let msgs = self.read_messages();
-        pin_mut!(msgs); // Pin on the stack
-
-        // assert_unpin(&msgs);
-        // assert_unpin(&cmds);
-        // assert_fused_future();
-
-        future::poll_fn(|cx| {
-            match msgs.as_mut().poll(cx).map(PeerWaitEvent::Peer) {
-                v @ Poll::Ready(_) => return v,
-                _ => {}
-            }
-
-            match cmds
-                .as_mut()
-                .poll(cx)
-                .map(|v| v.ok())
-                .map(PeerWaitEvent::Supervisor)
-            {
-                v @ Poll::Ready(_) => v,
-                _ => Poll::Pending,
-            }
-        })
-        .await
     }
 
     pub async fn start(&mut self) -> Result<()> {
         let (addr, cmds) = bounded(1000);
+        let mut cmds = Box::pin(cmds);
 
         let extern_id = self.do_handshake().await?;
 
@@ -465,20 +523,18 @@ impl Peer {
             .await
             .unwrap();
 
-        let cmds = cmds.recv().fuse();
-        let mut cmds = Box::pin(cmds);
-
         loop {
-            use PeerWaitEvent::*;
+            tokio::select! {
+                msg = self.reader.read_message() => {
+                    msg?;
 
-            match self.wait_event(cmds.as_mut()).await {
-                Peer(Ok(_n)) => {
                     self.dispatch().await?;
+                    self.reader.consume();
                 }
-                Supervisor(command) => {
+                cmd = cmds.next() => {
                     use PeerCommand::*;
 
-                    match command {
+                    match cmd {
                         Some(TasksAvailables) => {
                             self.maybe_send_request().await?;
                         }
@@ -489,10 +545,6 @@ impl Peer {
                             // Disconnected
                         }
                     }
-                }
-                Peer(Err(e)) => {
-                    info!("[{}] PEER ERROR MSG {:?}", self.id, e);
-                    return Err(e);
                 }
             }
         }
@@ -557,7 +609,7 @@ impl Peer {
     async fn dispatch(&mut self) -> Result<()> {
         use MessagePeer::*;
 
-        let msg = MessagePeer::try_from(self.buffer.as_slice())?;
+        let msg = MessagePeer::try_from(self.reader.buffer())?;
 
         match msg {
             Choke => {
@@ -692,7 +744,7 @@ impl Peer {
             Unknown { id, buffer } => {
                 // Check extension
                 // Disconnect
-                info!(
+                error!(
                     "[{}] Unknown {:?} {}",
                     self.id,
                     id,
@@ -728,42 +780,8 @@ impl Peer {
         //info!("[{}] PIECE COMPLETED {}", self.id, index);
     }
 
-    async fn read_messages(&mut self) -> Result<usize> {
-        self.read_exactly(4).await?;
-
-        let length = {
-            let mut cursor = Cursor::new(&self.buffer);
-            cursor.read_u32::<BigEndian>()? as usize
-        };
-
-        if length == 0 {
-            return Ok(0); // Keep Alive
-        }
-
-        self.read_exactly(length).await?;
-
-        Ok(length)
-    }
-
-    async fn read_exactly(&mut self, n: usize) -> Result<()> {
-        use tokio::io::AsyncReadExt;
-
-        let reader = &mut self.reader;
-        self.buffer.clear();
-
-        if reader.take(n as u64).read_to_end(&mut self.buffer).await? != n {
-            return Err(tokio::io::Error::new(
-                tokio::io::ErrorKind::UnexpectedEof,
-                "Size doesn't match",
-            )
-            .into());
-        }
-
-        Ok(())
-    }
-
     async fn write(&mut self, data: &[u8]) -> Result<()> {
-        let writer = self.writer();
+        let mut writer = self.writer();
         use tokio::prelude::*;
 
         writer.write_all(data).await?;
@@ -788,15 +806,17 @@ impl Peer {
 
         self.write(&handshake).await?;
 
-        self.read_exactly(1).await?;
-        let len = self.buffer[0] as usize;
-        self.read_exactly(len + 48).await?;
+        self.reader.read_handshake().await?;
+        let buffer = self.reader.buffer();
+        let length = buffer.len();
 
         // TODO: Check the info hash and send to other TorrentSupervisor if necessary
 
         info!("[{}] Handshake done", self.id);
 
-        let peer_id = PeerExternId::new(&self.buffer[len + 28..len + 48]);
+        let peer_id = PeerExternId::new(&buffer[length - 20..]);
+
+        self.reader.consume();
 
         Ok(Arc::new(peer_id))
     }

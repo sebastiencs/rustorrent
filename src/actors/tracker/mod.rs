@@ -156,6 +156,6 @@ impl Tracker {
 
 impl Drop for Tracker {
     fn drop(&mut self) {
-        warn!("[tracker] Dropped !",);
+        warn!("[tracker] Dropped: {:?}", self.data.url);
     }
 }
