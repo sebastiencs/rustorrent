@@ -1,4 +1,4 @@
-use crate::{actors::peer::PeerTask, metadata::Torrent};
+use crate::{actors::peer::PeerTask, metadata::Torrent, piece_picker::PieceIndex};
 use smallvec::{smallvec, SmallVec};
 
 use std::sync::Arc;
@@ -103,6 +103,16 @@ impl Pieces {
             self.piece_length
         }
     }
+
+    pub fn piece_size_of(&self, piece_index: PieceIndex) -> u32 {
+        let piece_index: usize = piece_index.into();
+
+        if piece_index == self.num_pieces - 1 {
+            self.last_piece_length as u32
+        } else {
+            self.piece_length as u32
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -113,9 +123,9 @@ pub struct PieceToDownload {
 }
 
 impl PieceToDownload {
-    pub fn new(piece: usize, start: usize, size: usize) -> PieceToDownload {
+    pub fn new(piece: u32, start: usize, size: usize) -> PieceToDownload {
         PieceToDownload {
-            piece: piece as u32,
+            piece,
             start: start as u32,
             size: size as u32,
         }

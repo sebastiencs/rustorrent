@@ -1,6 +1,7 @@
 use async_channel::{bounded, Sender};
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use coarsetime::Instant;
+use concurrent_queue::ConcurrentQueue;
 use futures::{ready, StreamExt};
 use kv_log_macro::{error, info};
 use tokio::{
@@ -24,6 +25,8 @@ use crate::{
     bitfield::BitFieldUpdate,
     errors::TorrentError,
     extensions::{ExtendedHandshake, ExtendedMessage, PEXMessage},
+    piece_collector::Block,
+    piece_picker::{BlockIndex, PieceIndex},
     pieces::{PieceBuffer, PieceToDownload, Pieces},
     supervisors::torrent::{Result, TorrentNotification},
     utils::Map,
@@ -31,7 +34,14 @@ use crate::{
 
 static PEER_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-pub type PeerId = usize;
+#[derive(Eq, PartialEq, Copy, Clone, Debug, Hash)]
+pub struct PeerId(usize);
+
+impl std::fmt::Display for PeerId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 #[derive(Debug)]
 enum MessagePeer<'a> {
@@ -50,8 +60,8 @@ enum MessagePeer<'a> {
         length: u32,
     },
     Piece {
-        index: u32,
-        begin: u32,
+        index: PieceIndex,
+        begin: BlockIndex,
         block: &'a [u8],
     },
     Cancel {
@@ -102,8 +112,8 @@ impl<'a> TryFrom<&'a [u8]> for MessagePeer<'a> {
             }
             7 => {
                 let mut cursor = Cursor::new(buffer);
-                let index = cursor.read_u32::<BigEndian>()?;
-                let begin = cursor.read_u32::<BigEndian>()?;
+                let index = cursor.read_u32::<BigEndian>()?.into();
+                let begin = cursor.read_u32::<BigEndian>()?.into();
                 let block = &buffer[8..];
 
                 MessagePeer::Piece {
@@ -158,7 +168,7 @@ enum Choke {
 
 use std::collections::VecDeque;
 
-pub type PeerTask = Arc<tokio::sync::RwLock<VecDeque<PieceToDownload>>>;
+pub type PeerTask = Arc<ConcurrentQueue<PieceToDownload>>;
 
 #[derive(Debug)]
 pub enum PeerCommand {
@@ -379,9 +389,9 @@ impl Peer {
             addr,
             supervisor,
             pieces_infos,
-            id,
+            id: PeerId(id),
             extern_id,
-            tasks: PeerTask::default(),
+            tasks: Arc::new(ConcurrentQueue::bounded(200)),
             reader: PeerReadBuffer::new(stream, piece_length + 1024),
             buffer: Vec::with_capacity(32 * 1024),
             choked: Choke::Choked,
@@ -462,8 +472,8 @@ impl Peer {
                     .write_u32::<BigEndian>(9 + block.len() as u32)
                     .unwrap();
                 cursor.write_u8(7).unwrap();
-                cursor.write_u32::<BigEndian>(index).unwrap();
-                cursor.write_u32::<BigEndian>(begin).unwrap();
+                cursor.write_u32::<BigEndian>(index.into()).unwrap();
+                cursor.write_u32::<BigEndian>(begin.into()).unwrap();
                 cursor.write_all(block).unwrap();
             }
             MessagePeer::Cancel {
@@ -536,7 +546,7 @@ impl Peer {
 
                     match cmd {
                         Some(TasksAvailables) => {
-                            self.maybe_send_request().await?;
+                            self.maybe_send_request("task_available").await?;
                         }
                         Some(Die) => {
                             return Ok(());
@@ -550,31 +560,19 @@ impl Peer {
         }
     }
 
-    async fn take_tasks(&mut self) -> Option<PieceToDownload> {
-        if self.local_tasks.is_none() {
-            let t = self.tasks.read().await;
-            self.local_tasks = Some(t.clone());
-        }
-        self.local_tasks.as_mut().and_then(|t| t.pop_front())
-    }
-
-    async fn maybe_send_request(&mut self) -> Result<()> {
+    async fn maybe_send_request(&mut self, caller: &'static str) -> Result<()> {
         if !self.am_choked() {
-            let task = match self.local_tasks.as_mut() {
-                Some(tasks) => tasks.pop_front(),
-                _ => self.take_tasks().await,
-            };
-
-            if let Some(task) = task {
+            if let Ok(task) = self.tasks.pop() {
                 // info!("[{}] SENT TASK {:?}", self.id, task);
                 self.send_request(task).await?;
             } else {
                 //self.pieces_actor.get_pieces_to_downloads().await;
                 info!(
-                    "[{:?}] No More Task ! {} downloaded in {:?}s",
+                    "[{}] No More Task ! {} downloaded in {:?}s caller={:?}",
                     self.id,
                     self.nblocks,
-                    self.start.map(|s| s.elapsed().as_secs())
+                    self.start.map(|s| s.elapsed().as_secs()),
+                    caller,
                 );
                 // Steal others tasks
             }
@@ -622,7 +620,7 @@ impl Peer {
                 self.set_choked(false);
                 info!("[{}] Unchoke", self.id);
 
-                self.maybe_send_request().await?;
+                self.maybe_send_request("unchoke").await?;
             }
             Interested => {
                 // Unshoke this peer
@@ -645,7 +643,7 @@ impl Peer {
                     .await
                     .unwrap();
 
-                info!("[{:?}] Have {}", self.id, piece_index);
+                info!("[{}] Have {}", self.id, piece_index);
             }
             BitField(bitfield) => {
                 // Send an Interested ?
@@ -664,7 +662,7 @@ impl Peer {
                     .await
                     .unwrap();
 
-                info!("[{:?}] Bitfield", self.id);
+                info!("[{}] Bitfield", self.id);
             }
             Request {
                 index,
@@ -683,7 +681,7 @@ impl Peer {
                 // If we already have it, send another Request
                 // Check the sum and write to disk
                 // Send Request
-                //info!("[{:?}] PIECE {} {} {}", self.id, index, begin, block.len());
+                // info!("[{}] Block index={:?} begin={:?} length{}", self.id, index, begin, block.len());
 
                 if self.start.is_none() {
                     self.start.replace(Instant::now());
@@ -691,24 +689,15 @@ impl Peer {
 
                 self.nblocks += block.len();
 
-                let piece_size = self.pieces_infos.piece_size(index as usize);
-                let mut is_completed = false;
-
-                self.pieces_buffer
-                    .entry(index as usize)
-                    .and_modify(|p| {
-                        p.add_block(begin, block);
-                        is_completed = p.is_completed();
+                self.supervisor
+                    .send(TorrentNotification::AddBlock {
+                        id: self.id,
+                        block: Block::from((index, begin, block)),
                     })
-                    .or_insert_with(|| {
-                        PieceBuffer::new_with_block(index, piece_size, begin, block)
-                    });
+                    .await
+                    .unwrap();
 
-                if is_completed {
-                    self.send_completed(index).await;
-                }
-
-                self.maybe_send_request().await?;
+                self.maybe_send_request("block_received").await?;
             }
             Cancel {
                 index,
@@ -768,16 +757,6 @@ impl Peer {
             handshake,
         )))
         .await
-    }
-
-    async fn send_completed(&mut self, index: u32) {
-        let piece_buffer = self.pieces_buffer.remove(&(index as usize)).unwrap();
-
-        self.supervisor
-            .send(TorrentNotification::AddPiece(piece_buffer))
-            .await
-            .unwrap();
-        //info!("[{}] PIECE COMPLETED {}", self.id, index);
     }
 
     async fn write(&mut self, data: &[u8]) -> Result<()> {

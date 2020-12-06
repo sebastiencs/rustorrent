@@ -13,6 +13,8 @@ pub mod errors;
 pub mod extensions;
 pub mod logger;
 pub mod metadata;
+pub mod piece_collector;
+pub mod piece_picker;
 pub mod pieces;
 pub mod session;
 pub mod sha1;

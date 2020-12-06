@@ -58,7 +58,8 @@ impl<'a> std::fmt::Debug for MetaInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("Info")
             .field("piece_length", &self.piece_length)
-            .field("pieces", &&self.pieces.get(0..self.pieces.len()))
+            .field("npieces", &self.pieces.len())
+            //.field("pieces", &&self.pieces.get(0..self.pieces.len()))
             .field("files", &self.files)
             .finish()
     }

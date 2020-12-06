@@ -48,6 +48,9 @@ impl std::hash::Hasher for NoHash {
     fn write_u64(&mut self, n: u64) {
         self.0 = n as usize
     }
+    fn write_u32(&mut self, n: u32) {
+        self.0 = n as usize
+    }
     fn write_u16(&mut self, n: u16) {
         self.0 = n as usize
     }

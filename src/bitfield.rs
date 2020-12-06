@@ -1,13 +1,15 @@
-use crate::{errors::TorrentError, supervisors::torrent::Result, utils::FromSlice};
+use crate::{
+    errors::TorrentError, piece_picker::PieceIndex, supervisors::torrent::Result, utils::FromSlice,
+};
 
 pub enum BitFieldUpdate {
     BitField(BitField),
-    Piece(usize),
+    Piece(PieceIndex),
 }
 
 impl From<u32> for BitFieldUpdate {
     fn from(p: u32) -> BitFieldUpdate {
-        BitFieldUpdate::Piece(p as usize)
+        BitFieldUpdate::Piece(PieceIndex::from(p))
     }
 }
 
@@ -19,22 +21,14 @@ impl From<BitField> for BitFieldUpdate {
 
 #[derive(Debug)]
 pub struct BitField {
-    inner: Vec<u8>,
+    inner: Box<[u8]>,
     nbits: usize,
 }
 
 impl BitField {
-    // TODO: Handle this and update
-    pub fn empty() -> BitField {
-        BitField {
-            inner: Vec::new(),
-            nbits: 0,
-        }
-    }
-
     pub fn new(nbits: usize) -> BitField {
         BitField {
-            inner: vec![0; nbits],
+            inner: vec![0; (nbits / 8) + 1].into_boxed_slice(),
             nbits,
         }
     }
@@ -42,7 +36,7 @@ impl BitField {
     pub fn from(bitfield: &[u8], nbits: usize) -> Result<BitField> {
         if nbits < bitfield.len() * 8 {
             Ok(BitField {
-                inner: Vec::from_slice(bitfield),
+                inner: Vec::from_slice(bitfield).into_boxed_slice(),
                 nbits,
             })
         } else {
@@ -50,7 +44,9 @@ impl BitField {
         }
     }
 
-    pub fn get_bit(&self, index: usize) -> bool {
+    pub fn get_bit<I: Into<usize>>(&self, index: I) -> bool {
+        let index: usize = index.into();
+
         if index < self.nbits {
             let slice_index = index / 8;
             let bit_index = index % 8;
@@ -61,7 +57,9 @@ impl BitField {
         }
     }
 
-    pub fn set_bit(&mut self, index: usize) {
+    pub fn set_bit<I: Into<usize>>(&mut self, index: I) {
+        let index: usize = index.into();
+
         if index < self.nbits {
             let slice_index = index / 8;
             let bit_index = index % 8;
@@ -76,8 +74,19 @@ impl BitField {
                 *self = bitfield;
             }
             BitFieldUpdate::Piece(piece) => {
-                self.set_bit(piece as usize);
+                self.set_bit(piece);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BitField;
+
+    #[test]
+    fn size() {
+        let bitfield = BitField::new(12);
+        println!("bitfield={:?}", bitfield);
     }
 }
