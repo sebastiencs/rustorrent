@@ -27,9 +27,8 @@ use crate::{
     extensions::{ExtendedHandshake, ExtendedMessage, PEXMessage},
     piece_collector::Block,
     piece_picker::{BlockIndex, PieceIndex},
-    pieces::{PieceBuffer, PieceToDownload, Pieces},
+    pieces::{BlockToDownload, Pieces},
     supervisors::torrent::{Result, TorrentNotification},
-    utils::Map,
 };
 
 static PEER_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -51,12 +50,12 @@ enum MessagePeer<'a> {
     Interested,
     NotInterested,
     Have {
-        piece_index: u32,
+        piece_index: PieceIndex,
     },
     BitField(&'a [u8]),
     Request {
-        index: u32,
-        begin: u32,
+        index: PieceIndex,
+        begin: BlockIndex,
         length: u32,
     },
     Piece {
@@ -65,8 +64,8 @@ enum MessagePeer<'a> {
         block: &'a [u8],
     },
     Cancel {
-        index: u32,
-        begin: u32,
+        index: PieceIndex,
+        begin: BlockIndex,
         length: u32,
     },
     Port(u16),
@@ -93,15 +92,15 @@ impl<'a> TryFrom<&'a [u8]> for MessagePeer<'a> {
             3 => MessagePeer::NotInterested,
             4 => {
                 let mut cursor = Cursor::new(buffer);
-                let piece_index = cursor.read_u32::<BigEndian>()?;
+                let piece_index = cursor.read_u32::<BigEndian>()?.into();
 
                 MessagePeer::Have { piece_index }
             }
             5 => MessagePeer::BitField(buffer),
             6 => {
                 let mut cursor = Cursor::new(buffer);
-                let index = cursor.read_u32::<BigEndian>()?;
-                let begin = cursor.read_u32::<BigEndian>()?;
+                let index = cursor.read_u32::<BigEndian>()?.into();
+                let begin = cursor.read_u32::<BigEndian>()?.into();
                 let length = cursor.read_u32::<BigEndian>()?;
 
                 MessagePeer::Request {
@@ -124,8 +123,8 @@ impl<'a> TryFrom<&'a [u8]> for MessagePeer<'a> {
             }
             8 => {
                 let mut cursor = Cursor::new(buffer);
-                let index = cursor.read_u32::<BigEndian>()?;
-                let begin = cursor.read_u32::<BigEndian>()?;
+                let index = cursor.read_u32::<BigEndian>()?.into();
+                let begin = cursor.read_u32::<BigEndian>()?.into();
                 let length = cursor.read_u32::<BigEndian>()?;
 
                 MessagePeer::Cancel {
@@ -168,7 +167,7 @@ enum Choke {
 
 use std::collections::VecDeque;
 
-pub type PeerTask = Arc<ConcurrentQueue<PieceToDownload>>;
+pub type PeerTask = Arc<ConcurrentQueue<BlockToDownload>>;
 
 #[derive(Debug)]
 pub enum PeerCommand {
@@ -354,12 +353,7 @@ pub struct Peer {
     choked: Choke,
     /// List of pieces to download
     tasks: PeerTask,
-    local_tasks: Option<VecDeque<PieceToDownload>>,
-
-    /// Small buffers where the downloaded blocks are kept.
-    /// Once the piece is full, we send it to TorrentSupervisor
-    /// and remove it here.
-    pieces_buffer: Map<usize, PieceBuffer>,
+    local_tasks: Option<VecDeque<BlockToDownload>>,
 
     pieces_infos: Arc<Pieces>,
 
@@ -398,7 +392,6 @@ impl Peer {
             nblocks: 0,
             start: None,
             local_tasks: None,
-            pieces_buffer: Map::default(),
             peer_detail: Default::default(),
         })
     }
@@ -443,7 +436,7 @@ impl Peer {
             MessagePeer::Have { piece_index } => {
                 cursor.write_u32::<BigEndian>(5).unwrap();
                 cursor.write_u8(4).unwrap();
-                cursor.write_u32::<BigEndian>(piece_index).unwrap();
+                cursor.write_u32::<BigEndian>(piece_index.into()).unwrap();
             }
             MessagePeer::BitField(bitfield) => {
                 cursor
@@ -459,8 +452,8 @@ impl Peer {
             } => {
                 cursor.write_u32::<BigEndian>(13).unwrap();
                 cursor.write_u8(6).unwrap();
-                cursor.write_u32::<BigEndian>(index).unwrap();
-                cursor.write_u32::<BigEndian>(begin).unwrap();
+                cursor.write_u32::<BigEndian>(index.into()).unwrap();
+                cursor.write_u32::<BigEndian>(begin.into()).unwrap();
                 cursor.write_u32::<BigEndian>(length).unwrap();
             }
             MessagePeer::Piece {
@@ -483,8 +476,8 @@ impl Peer {
             } => {
                 cursor.write_u32::<BigEndian>(13).unwrap();
                 cursor.write_u8(8).unwrap();
-                cursor.write_u32::<BigEndian>(index).unwrap();
-                cursor.write_u32::<BigEndian>(begin).unwrap();
+                cursor.write_u32::<BigEndian>(index.into()).unwrap();
+                cursor.write_u32::<BigEndian>(begin.into()).unwrap();
                 cursor.write_u32::<BigEndian>(length).unwrap();
             }
             MessagePeer::Port(port) => {
@@ -583,11 +576,11 @@ impl Peer {
         Ok(())
     }
 
-    async fn send_request(&mut self, task: PieceToDownload) -> Result<()> {
+    async fn send_request(&mut self, task: BlockToDownload) -> Result<()> {
         self.send_message(MessagePeer::Request {
             index: task.piece,
             begin: task.start,
-            length: task.size,
+            length: task.length,
         })
         .await
     }
@@ -643,7 +636,7 @@ impl Peer {
                     .await
                     .unwrap();
 
-                info!("[{}] Have {}", self.id, piece_index);
+                info!("[{}] Have {:?}", self.id, piece_index);
             }
             BitField(bitfield) => {
                 // Send an Interested ?
@@ -671,7 +664,7 @@ impl Peer {
             } => {
                 // Mark this peer as interested
                 // Make sure this peer is not choked or resend a choke
-                info!("[{}] Request {} {} {}", self.id, index, begin, length);
+                info!("[{}] Request {:?} {:?} {}", self.id, index, begin, length);
             }
             Piece {
                 index,
@@ -705,7 +698,7 @@ impl Peer {
                 length,
             } => {
                 // Cancel a Request
-                info!("[{}] Piece {} {} {}", self.id, index, begin, length);
+                info!("[{}] Piece {:?} {:?} {}", self.id, index, begin, length);
             }
             Port(port) => {
                 info!("[{}] Port {}", self.id, port);

@@ -1,6 +1,5 @@
 use async_channel::{bounded, Receiver, Sender};
 use crossbeam_channel::Sender as SyncSender;
-use slab::Slab;
 use std::sync::Arc;
 // use log::info;
 use kv_log_macro::{debug, info, warn};
@@ -16,8 +15,8 @@ use crate::{
     errors::TorrentError,
     metadata::Torrent,
     piece_collector::{Block, PieceCollector},
-    piece_picker::PiecePicker,
-    pieces::{PieceBuffer, PieceToDownload, Pieces},
+    piece_picker::{BlockIndex, PiecePicker},
+    pieces::{BlockToDownload, Pieces},
     supervisors::tracker::TrackerSupervisor,
     utils::Map,
 };
@@ -111,8 +110,6 @@ pub struct TorrentSupervisor {
 
     sha1_workers: SyncSender<Sha1Task>,
 
-    pending_pieces: Slab<Arc<PieceBuffer>>,
-
     extern_id: Arc<PeerExternId>,
 }
 
@@ -137,7 +134,6 @@ impl TorrentSupervisor {
             piece_picker,
             peers: Map::default(),
             sha1_workers,
-            pending_pieces: Slab::new(),
             extern_id,
         }
     }
@@ -195,13 +191,12 @@ impl TorrentSupervisor {
                         {
                             let nblock_piece = self.pieces_infos.nblocks_piece;
                             let block_size = self.pieces_infos.block_size;
-                            let piece_index: u32 = piece_index.into();
 
                             for i in 0..nblock_piece {
                                 peer.queue_tasks
-                                    .push(PieceToDownload::new(
+                                    .push(BlockToDownload::new(
                                         piece_index,
-                                        i * block_size,
+                                        BlockIndex::from(i as u32 * block_size),
                                         block_size,
                                     ))
                                     .unwrap();
@@ -255,13 +250,12 @@ impl TorrentSupervisor {
                             {
                                 let nblock_piece = self.pieces_infos.nblocks_piece;
                                 let block_size = self.pieces_infos.block_size;
-                                let piece_index: u32 = piece_index.into();
 
                                 for i in 0..nblock_piece {
                                     peer.queue_tasks
-                                        .push(PieceToDownload::new(
+                                        .push(BlockToDownload::new(
                                             piece_index,
-                                            i * block_size,
+                                            BlockIndex::from(i as u32 * block_size),
                                             block_size,
                                         ))
                                         .unwrap();
@@ -272,10 +266,10 @@ impl TorrentSupervisor {
                         }
                     }
                 }
-                ResultChecksum { id, valid } => {
-                    if self.pending_pieces.contains(id) {
-                        let _piece = self.pending_pieces.remove(id);
-                    };
+                ResultChecksum { id: _, valid } => {
+                    // if self.pending_pieces.contains(id) {
+                    //     let _piece = self.pending_pieces.remove(id);
+                    // };
                     debug!("Piece checked from the pool: {}", valid);
                 }
                 PeerDiscovered { addrs } => {

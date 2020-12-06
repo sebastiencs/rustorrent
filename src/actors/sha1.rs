@@ -4,12 +4,12 @@ use tokio::runtime::Runtime;
 
 use std::{ptr::read_unaligned, sync::Arc};
 
-use crate::{pieces::PieceBuffer, supervisors::torrent::TorrentNotification};
+use crate::supervisors::torrent::TorrentNotification;
 
 pub enum Sha1Task {
     CheckSum {
         /// Piece downloaded from a peer
-        piece_buffer: Arc<PieceBuffer>,
+        piece: Box<[u8]>,
         /// Sum in the metadata file
         sum_metadata: Arc<[u8; 20]>,
         id: usize,
@@ -64,12 +64,12 @@ impl Sha1Worker {
     fn process(&mut self, task: Sha1Task) {
         match task {
             Sha1Task::CheckSum {
-                piece_buffer,
+                piece,
                 sum_metadata,
                 id,
                 addr,
             } => {
-                let sha1 = crate::sha1::sha1(&piece_buffer.buf);
+                let sha1 = crate::sha1::sha1(&piece);
 
                 let valid = compare_20_bytes(&sha1[..], &sum_metadata[..]);
 

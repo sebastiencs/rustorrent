@@ -212,7 +212,7 @@ impl PieceCollector {
             return self
                 .pieces
                 .remove(&piece_index)
-                .map(|meta| meta.take_piece());
+                .map(PieceMetadata::take_piece);
         }
 
         None

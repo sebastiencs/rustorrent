@@ -1,5 +1,7 @@
-use crate::{actors::peer::PeerTask, metadata::Torrent, piece_picker::PieceIndex};
-use smallvec::{smallvec, SmallVec};
+use crate::{
+    metadata::Torrent,
+    piece_picker::{BlockIndex, PieceIndex},
+};
 
 use std::sync::Arc;
 
@@ -15,7 +17,7 @@ pub struct Pieces {
     /// peers_pieces[0] is the number of peers having the piece 0
     //    peers_pieces: Vec<u8>,
     /// Size of a block
-    pub block_size: usize,
+    pub block_size: u32,
     /// Number of block in 1 piece
     pub nblocks_piece: usize,
     /// Number of block in the last piece
@@ -60,7 +62,7 @@ impl From<&Torrent> for Pieces {
             info_hash: Arc::clone(&torrent.info_hash),
             num_pieces,
             sha1_pieces,
-            block_size,
+            block_size: block_size as u32,
             nblocks_piece,
             nblocks_last_piece,
             piece_length,
@@ -96,14 +98,6 @@ impl Pieces {
     //     }
     // }
 
-    pub fn piece_size(&self, piece_index: usize) -> usize {
-        if piece_index == self.num_pieces - 1 {
-            self.last_piece_length
-        } else {
-            self.piece_length
-        }
-    }
-
     pub fn piece_size_of(&self, piece_index: PieceIndex) -> u32 {
         let piece_index: usize = piece_index.into();
 
@@ -116,101 +110,18 @@ impl Pieces {
 }
 
 #[derive(Clone, Debug)]
-pub struct PieceToDownload {
-    pub piece: u32,
-    pub start: u32,
-    pub size: u32,
+pub struct BlockToDownload {
+    pub piece: PieceIndex,
+    pub start: BlockIndex,
+    pub length: u32,
 }
 
-impl PieceToDownload {
-    pub fn new(piece: u32, start: usize, size: usize) -> PieceToDownload {
-        PieceToDownload {
+impl BlockToDownload {
+    pub fn new(piece: PieceIndex, start: BlockIndex, length: u32) -> BlockToDownload {
+        BlockToDownload {
             piece,
-            start: start as u32,
-            size: size as u32,
+            start,
+            length,
         }
-    }
-}
-
-#[derive(Debug)]
-pub struct PieceInfo {
-    pub bytes_downloaded: usize,
-    pub workers: SmallVec<[PeerTask; 4]>,
-}
-
-impl PieceInfo {
-    pub fn new(queue: PeerTask) -> PieceInfo {
-        PieceInfo {
-            bytes_downloaded: 0,
-            workers: smallvec![queue],
-        }
-    }
-
-    // fn new(peer: &Peer) -> PieceInfo {
-    //     PieceInfo {
-    //         bytes_downloaded: 0,
-    //         workers: smallvec![peer.tasks.clone()]
-    //     }
-    // }
-}
-
-pub struct PieceBuffer {
-    pub buf: Box<[u8]>,
-    pub piece_index: usize,
-    pub bytes_added: usize,
-}
-
-impl PieceBuffer {
-    /// piece_size might be different than piece_length if it's the last piece
-    fn new(piece_index: usize, piece_size: usize) -> PieceBuffer {
-        let mut buf = Vec::with_capacity(piece_size);
-        unsafe { buf.set_len(piece_size) };
-        let buf = buf.into_boxed_slice();
-
-        // println!("ADDING PIECE_BUFFER {} SIZE={}", piece_index, piece_size);
-
-        PieceBuffer {
-            buf,
-            piece_index,
-            bytes_added: 0,
-        }
-    }
-
-    pub fn new_with_block(
-        piece_index: u32,
-        piece_size: usize,
-        begin: u32,
-        block: &[u8],
-    ) -> PieceBuffer {
-        let mut piece_buffer = PieceBuffer::new(piece_index as usize, piece_size);
-        piece_buffer.add_block(begin, block);
-        piece_buffer
-    }
-
-    /// begin: offset of the block in the piece
-    pub fn add_block(&mut self, begin: u32, block: &[u8]) {
-        let block_len = block.len();
-
-        let begin = begin as usize;
-        let buffer_len = self.buf.len();
-        if let Some(buffer) = self.buf.get_mut(begin..begin + block_len) {
-            buffer.copy_from_slice(block);
-            self.bytes_added += block_len;
-        } else {
-            panic!(
-                "ERROR on addblock BEGIN={} BLOCK_LEN={} BUF_LEN={}",
-                begin, block_len, buffer_len
-            );
-        }
-    }
-
-    fn added(&self) -> usize {
-        self.bytes_added
-    }
-
-    /// The piece is considered completed once added block size match with
-    /// the piece size. There is no check where the blocks have been added
-    pub fn is_completed(&self) -> bool {
-        self.buf.len() == self.bytes_added
     }
 }

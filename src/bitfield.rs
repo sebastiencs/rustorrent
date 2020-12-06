@@ -7,9 +7,9 @@ pub enum BitFieldUpdate {
     Piece(PieceIndex),
 }
 
-impl From<u32> for BitFieldUpdate {
-    fn from(p: u32) -> BitFieldUpdate {
-        BitFieldUpdate::Piece(PieceIndex::from(p))
+impl<T: Into<PieceIndex>> From<T> for BitFieldUpdate {
+    fn from(p: T) -> BitFieldUpdate {
+        BitFieldUpdate::Piece(p.into())
     }
 }
 
