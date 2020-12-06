@@ -43,7 +43,7 @@ impl std::fmt::Display for PeerId {
 }
 
 #[derive(Debug)]
-enum MessagePeer<'a> {
+pub(crate) enum MessagePeer<'a> {
     KeepAlive,
     Choke,
     UnChoke,
@@ -164,8 +164,6 @@ enum Choke {
     UnChoked,
     Choked,
 }
-
-use std::collections::VecDeque;
 
 pub type PeerTask = Arc<ConcurrentQueue<BlockToDownload>>;
 
@@ -353,7 +351,6 @@ pub struct Peer {
     choked: Choke,
     /// List of pieces to download
     tasks: PeerTask,
-    local_tasks: Option<VecDeque<BlockToDownload>>,
 
     pieces_infos: Arc<Pieces>,
 
@@ -391,7 +388,6 @@ impl Peer {
             choked: Choke::Choked,
             nblocks: 0,
             start: None,
-            local_tasks: None,
             peer_detail: Default::default(),
         })
     }
@@ -400,10 +396,13 @@ impl Peer {
         self.id
     }
 
-    async fn send_message(&mut self, msg: MessagePeer<'_>) -> Result<()> {
-        self.write_message_in_buffer(msg);
-
+    async fn send_message<'m, M>(&mut self, msg: M) -> Result<()>
+    where
+        M: Into<MessagePeer<'m>>,
+    {
         use tokio::io::AsyncWriteExt;
+
+        self.write_message_in_buffer(msg.into());
 
         let mut writer = self.reader.get_mut();
         writer.write_all(self.buffer.as_slice()).await?;
@@ -539,7 +538,7 @@ impl Peer {
 
                     match cmd {
                         Some(TasksAvailables) => {
-                            self.maybe_send_request("task_available").await?;
+                            self.maybe_request_block("task_available").await?;
                         }
                         Some(Die) => {
                             return Ok(());
@@ -553,36 +552,24 @@ impl Peer {
         }
     }
 
-    async fn maybe_send_request(&mut self, caller: &'static str) -> Result<()> {
-        if !self.am_choked() {
-            if let Ok(task) = self.tasks.pop() {
-                // info!("[{}] SENT TASK {:?}", self.id, task);
-                self.send_request(task).await?;
-            } else {
-                //self.pieces_actor.get_pieces_to_downloads().await;
-                info!(
-                    "[{}] No More Task ! {} downloaded in {:?}s caller={:?}",
-                    self.id,
-                    self.nblocks,
-                    self.start.map(|s| s.elapsed().as_secs()),
-                    caller,
-                );
-                // Steal others tasks
-            }
-        } else {
-            self.send_message(MessagePeer::Interested).await?;
+    async fn maybe_request_block(&mut self, caller: &'static str) -> Result<()> {
+        if self.am_choked() {
             info!("[{}] Send interested", self.id);
+            return self.send_message(MessagePeer::Interested).await;
         }
-        Ok(())
-    }
 
-    async fn send_request(&mut self, task: BlockToDownload) -> Result<()> {
-        self.send_message(MessagePeer::Request {
-            index: task.piece,
-            begin: task.start,
-            length: task.length,
-        })
-        .await
+        if let Ok(task) = self.tasks.pop() {
+            return self.send_message(task).await;
+        }
+
+        info!(
+            "[{}] No More Task ! {} downloaded in {:?}s caller={:?}",
+            self.id,
+            self.nblocks,
+            self.start.map(|s| s.elapsed().as_secs()),
+            caller,
+        );
+        Ok(())
     }
 
     fn set_choked(&mut self, choked: bool) {
@@ -613,7 +600,7 @@ impl Peer {
                 self.set_choked(false);
                 info!("[{}] Unchoke", self.id);
 
-                self.maybe_send_request("unchoke").await?;
+                self.maybe_request_block("unchoke").await?;
             }
             Interested => {
                 // Unshoke this peer
@@ -690,7 +677,7 @@ impl Peer {
                     .await
                     .unwrap();
 
-                self.maybe_send_request("block_received").await?;
+                self.maybe_request_block("block_received").await?;
             }
             Cancel {
                 index,

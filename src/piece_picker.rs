@@ -129,6 +129,12 @@ impl PiecePicker {
         }
     }
 
+    pub fn set_as_downloaded(&mut self, piece: PieceIndex) {
+        let index: usize = piece.into();
+        self.states[index].downloaded = true;
+        self.sort_indexed();
+    }
+
     pub fn pick_piece(&mut self, peer_id: PeerId, bitfield: &BitField) -> Option<PieceIndex> {
         if let Some(peers_per_piece) =
             self.sorted_index[self.start_at..]

@@ -1,4 +1,5 @@
 use crate::{
+    actors::peer::MessagePeer,
     metadata::Torrent,
     piece_picker::{BlockIndex, PieceIndex},
 };
@@ -109,7 +110,7 @@ impl Pieces {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct BlockToDownload {
     pub piece: PieceIndex,
     pub start: BlockIndex,
@@ -122,6 +123,16 @@ impl BlockToDownload {
             piece,
             start,
             length,
+        }
+    }
+}
+
+impl<'a> Into<MessagePeer<'a>> for BlockToDownload {
+    fn into(self) -> MessagePeer<'a> {
+        MessagePeer::Request {
+            index: self.piece,
+            begin: self.start,
+            length: self.length,
         }
     }
 }

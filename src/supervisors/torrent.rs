@@ -241,6 +241,7 @@ impl TorrentSupervisor {
 
                     if let Some(_piece) = self.collector.add_block(&block) {
                         info!("[{}] Piece completed {:?}", id, piece_index);
+                        self.piece_picker.set_as_downloaded(piece_index);
                     }
 
                     if let Some(peer) = self.peers.get_mut(&id) {
@@ -261,7 +262,7 @@ impl TorrentSupervisor {
                                         .unwrap();
                                 }
 
-                                peer.addr.send(PeerCommand::TasksAvailables).await.unwrap();
+                                peer.addr.send(PeerCommand::TasksAvailables).await.ok();
                             }
                         }
                     }
