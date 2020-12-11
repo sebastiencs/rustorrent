@@ -74,6 +74,12 @@ impl<T> Sender<T> {
     }
 }
 
+impl<T: Copy> Sender<T> {
+    pub fn push_slice(&self, slice: &[T]) -> Result<(), PushError<()>> {
+        self.queue.push_slice(slice)
+    }
+}
+
 unsafe impl<T> Send for Sender<T> {}
 unsafe impl<T> Send for Receiver<T> {}
 
@@ -436,6 +442,51 @@ mod tests {
             let mut last_value = 0;
 
             for n in 0..1_000_000 {
+                loop {
+                    match recv.pop() {
+                        Ok(v) => {
+                            assert_eq!(v, n, "value={} loop={} last_value={}", v, n, last_value);
+                            last_value = v;
+                            break;
+                        }
+                        Err(PopError::Closed) => panic!(),
+                        _ => {}
+                    }
+                }
+            }
+
+            std::thread::sleep(Duration::from_millis(10));
+            assert_eq!(recv.pop(), Err(PopError::Closed));
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Way too slow on miri
+    fn threads_slice() {
+        for size in 5..=10 {
+            let (mut sender, mut recv) = Queue::new(size);
+
+            std::thread::spawn(move || {
+                sender.push(1).unwrap();
+
+                for n in (0..1_000_000).step_by(3) {
+                    loop {
+                        match sender.push_slice(&[n, n + 1, n + 2]) {
+                            Ok(_) => break,
+                            Err(PushError::Closed(_)) => panic!("closed"),
+                            _ => {}
+                        }
+                    }
+                }
+            });
+
+            while let Err(e) = recv.pop() {
+                assert_eq!(e, PopError::Empty);
+            }
+
+            let mut last_value = 0;
+
+            for n in 0..=1_000_001 {
                 loop {
                     match recv.pop() {
                         Ok(v) => {
