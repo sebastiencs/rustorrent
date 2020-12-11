@@ -389,7 +389,7 @@ impl AsyncWrite for UtpStream {
         let mut value = None;
 
         loop {
-            if let Poll::Ready(_) = self.poll_flushed_private(&mut value) {
+            if self.poll_flushed_private(&mut value).is_ready() {
                 return Poll::Ready(Ok(()));
             } else if let Some(v) = ready!(self.receive.as_mut().poll_next(cx)) {
                 value.replace(Ok(v));
