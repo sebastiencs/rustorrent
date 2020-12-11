@@ -3,7 +3,10 @@ use std::{
     fmt::Debug,
     mem::MaybeUninit,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{
+            AtomicUsize,
+            Ordering::{Acquire, Relaxed, Release},
+        },
         Arc,
     },
 };
@@ -116,15 +119,26 @@ impl<T> Queue<T> {
 
     fn set_closed(&self) {
         self.tail
-            .fetch_update(Ordering::Release, Ordering::Relaxed, |tail| {
-                Some(tail | CLOSED_BIT)
-            })
+            .fetch_update(Release, Relaxed, |tail| Some(tail | CLOSED_BIT))
             .unwrap();
     }
 
+    pub fn len(&self) -> usize {
+        let tail = self.tail.load(Acquire);
+        tail - self.head.load(Acquire)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn available(&self) -> usize {
+        self.buffer.len() - self.len()
+    }
+
     pub fn push(&self, elem: T) -> Result<(), PushError<T>> {
-        let tail = self.tail.load(Ordering::Relaxed);
-        let head = self.head.load(Ordering::Acquire);
+        let tail = self.tail.load(Relaxed);
+        let head = self.head.load(Acquire);
 
         let is_closed = tail & CLOSED_BIT != 0;
         let tail = tail & !CLOSED_BIT;
@@ -142,15 +156,15 @@ impl<T> Queue<T> {
                 data.write(MaybeUninit::new(elem));
             }
 
-            self.tail.store(tail.wrapping_add(1), Ordering::Release);
+            self.tail.store(tail.wrapping_add(1), Release);
 
             Ok(())
         }
     }
 
     pub fn pop(&self) -> Result<T, PopError> {
-        let head = self.head.load(Ordering::Relaxed);
-        let tail = self.tail.load(Ordering::Acquire);
+        let head = self.head.load(Relaxed);
+        let tail = self.tail.load(Acquire);
 
         let is_closed = tail & CLOSED_BIT != 0;
         let tail = tail & (!CLOSED_BIT);
@@ -167,9 +181,47 @@ impl<T> Queue<T> {
             let data = self.buffer[index].data.get();
             let data = unsafe { data.read().assume_init() };
 
-            self.head.store(head.wrapping_add(1), Ordering::Release);
+            self.head.store(head.wrapping_add(1), Release);
 
             Ok(data)
+        }
+    }
+}
+
+impl<T: Copy> Queue<T> {
+    pub fn push_slice(&self, slice: &[T]) -> Result<(), PushError<()>> {
+        let tail = self.tail.load(Relaxed);
+        let head = self.head.load(Acquire);
+
+        let is_closed = tail & CLOSED_BIT != 0;
+        let tail = tail & !CLOSED_BIT;
+        let buffer_length = self.buffer.len();
+        let slice_length = slice.len();
+
+        if is_closed {
+            Err(PushError::Closed(()))
+        } else if head.wrapping_add(buffer_length) < tail.wrapping_add(slice_length) {
+            Err(PushError::Full(()))
+        } else {
+            let index = tail % buffer_length;
+
+            let buffer: &mut [T] = unsafe {
+                #[allow(clippy::cast_ref_to_mut)]
+                &mut *(&self.buffer[..] as *const [Elem<T>] as *mut [T])
+            };
+
+            if index + slice_length > buffer_length {
+                let length = buffer_length - index;
+                buffer[index..].copy_from_slice(&slice[..length]);
+
+                buffer[..slice_length - length].copy_from_slice(&slice[length..]);
+            } else {
+                buffer[index..index + slice_length].copy_from_slice(slice);
+            }
+
+            self.tail.store(tail.wrapping_add(slice_length), Release);
+
+            Ok(())
         }
     }
 }
@@ -191,6 +243,71 @@ mod tests {
         assert_eq!(queue.pop().unwrap(), 2);
 
         assert_eq!(queue.pop(), Err(PopError::Empty));
+    }
+
+    #[test]
+    fn slice() {
+        let queue = Queue::new_queue(5);
+
+        queue.push_slice(&[1, 2, 3]).unwrap();
+        queue.push(4).unwrap();
+        queue.push_slice(&[5]).unwrap();
+
+        assert_eq!(queue.pop().unwrap(), 1);
+        assert_eq!(queue.pop().unwrap(), 2);
+        assert_eq!(queue.pop().unwrap(), 3);
+        assert_eq!(queue.pop().unwrap(), 4);
+        assert_eq!(queue.pop().unwrap(), 5);
+
+        assert_eq!(queue.pop(), Err(PopError::Empty));
+
+        let queue = Queue::new_queue(5);
+
+        queue.push_slice(&[1, 2]).unwrap();
+        assert_eq!(queue.pop().unwrap(), 1);
+        assert_eq!(queue.pop().unwrap(), 2);
+        assert_eq!(queue.pop(), Err(PopError::Empty));
+
+        queue.push_slice(&[1, 2, 3, 4]).unwrap();
+        queue.push_slice(&[5]).unwrap();
+        for n in 1..=5 {
+            assert_eq!(queue.pop().unwrap(), n);
+        }
+
+        assert!(queue.is_empty());
+
+        let queue = Queue::new_queue(5);
+        queue.push_slice(&[1, 2, 3, 4, 5]).unwrap();
+        for n in 1..=5 {
+            assert_eq!(queue.pop().unwrap(), n);
+        }
+
+        let queue = Queue::new_queue(5);
+        assert!(queue.push_slice(&[1, 2, 3, 4, 5, 6]).is_err());
+
+        let queue = Queue::new_queue(5);
+        queue.push(1).unwrap();
+        queue.push_slice(&[2, 3, 4, 5]).unwrap();
+        for n in 1..=5 {
+            assert_eq!(queue.pop().unwrap(), n);
+        }
+
+        let queue = Queue::new_queue(5);
+        queue.push(1).unwrap();
+        queue.push_slice(&[2, 3, 4, 5, 6]).unwrap_err();
+        assert_eq!(queue.pop().unwrap(), 1);
+        assert!(queue.is_empty());
+
+        let queue = Queue::new_queue(5);
+        queue.push(1).unwrap();
+        queue.pop().unwrap();
+        queue.push_slice(&[2, 3, 4, 5, 6]).unwrap();
+        queue.push(1).unwrap_err();
+        for n in 2..=6 {
+            assert_eq!(queue.pop().unwrap(), n);
+        }
+
+        assert_eq!(queue.available(), 5);
     }
 
     #[test]
@@ -293,6 +410,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Way too slow on miri
     fn threads() {
         for size in 1..=10 {
             let (mut sender, mut recv) = Queue::new(size);
