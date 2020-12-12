@@ -52,6 +52,8 @@ struct Queue<T> {
     /// push modify the tail
     tail: AtomicUsize,
     buffer: Box<[Elem<T>]>,
+    /// Read-only value
+    mask_bit: usize,
 }
 
 struct Receiver<T> {
@@ -108,6 +110,7 @@ impl<T> Queue<T> {
             head: AtomicUsize::new(0),
             tail: AtomicUsize::new(0),
             buffer: buffer.into_boxed_slice(),
+            mask_bit: (capacity + 1).next_power_of_two(),
         }
     }
 
@@ -146,23 +149,26 @@ impl<T> Queue<T> {
         let tail = self.tail.load(Relaxed);
         let head = self.head.load(Acquire);
 
-        let is_closed = tail & CLOSED_BIT != 0;
-        let tail = tail & !CLOSED_BIT;
-        let buffer_length = self.buffer.len();
-
-        if is_closed {
+        if tail & CLOSED_BIT != 0 {
             Err(PushError::Closed(elem))
-        } else if head.wrapping_add(buffer_length) == tail {
+        } else if head.wrapping_add(self.mask_bit) == tail {
             Err(PushError::Full(elem))
         } else {
-            let index = tail % buffer_length;
+            let index = tail & (self.mask_bit - 1);
 
             let data = self.buffer[index].data.get();
             unsafe {
                 data.write(MaybeUninit::new(elem));
             }
 
-            self.tail.store(tail.wrapping_add(1), Release);
+            let next = if index + 1 < self.buffer.len() {
+                tail + 1
+            } else {
+                let lap = tail & !(self.mask_bit - 1);
+                lap.wrapping_add(self.mask_bit)
+            };
+
+            self.tail.store(next, Release);
 
             Ok(())
         }
@@ -172,22 +178,26 @@ impl<T> Queue<T> {
         let head = self.head.load(Relaxed);
         let tail = self.tail.load(Acquire);
 
-        let is_closed = tail & CLOSED_BIT != 0;
-        let tail = tail & (!CLOSED_BIT);
-
-        if head == tail {
-            if is_closed {
+        if tail & !CLOSED_BIT == head {
+            if tail & CLOSED_BIT != 0 {
                 Err(PopError::Closed)
             } else {
                 Err(PopError::Empty)
             }
         } else {
-            let index = head % self.buffer.len();
+            let index = head & (self.mask_bit - 1);
 
             let data = self.buffer[index].data.get();
             let data = unsafe { data.read().assume_init() };
 
-            self.head.store(head.wrapping_add(1), Release);
+            let next = if index + 1 < self.buffer.len() {
+                head + 1
+            } else {
+                let lap = head & !(self.mask_bit - 1);
+                lap.wrapping_add(self.mask_bit)
+            };
+
+            self.head.store(next, Release);
 
             Ok(data)
         }
@@ -199,18 +209,25 @@ impl<T: Copy> Queue<T> {
         let tail = self.tail.load(Relaxed);
         let head = self.head.load(Acquire);
 
-        let is_closed = tail & CLOSED_BIT != 0;
-        let tail = tail & !CLOSED_BIT;
+        if tail & CLOSED_BIT != 0 {
+            return Err(PushError::Closed(()));
+        }
+
         let buffer_length = self.buffer.len();
         let slice_length = slice.len();
+        let index = tail & (self.mask_bit - 1);
 
-        if is_closed {
-            Err(PushError::Closed(()))
-        } else if head.wrapping_add(buffer_length) < tail.wrapping_add(slice_length) {
+        let next_tail = if index + slice_length < buffer_length {
+            tail + slice_length
+        } else {
+            let lap = tail & !(self.mask_bit - 1);
+            let lap = lap.wrapping_add(self.mask_bit);
+            lap.wrapping_add((index + slice_length) % buffer_length)
+        };
+
+        if head.wrapping_add(self.mask_bit) < next_tail {
             Err(PushError::Full(()))
         } else {
-            let index = tail % buffer_length;
-
             let buffer: &mut [T] = unsafe {
                 #[allow(clippy::cast_ref_to_mut)]
                 &mut *(&self.buffer[..] as *const [Elem<T>] as *mut [T])
@@ -225,7 +242,7 @@ impl<T: Copy> Queue<T> {
                 buffer[index..index + slice_length].copy_from_slice(slice);
             }
 
-            self.tail.store(tail.wrapping_add(slice_length), Release);
+            self.tail.store(next_tail, Release);
 
             Ok(())
         }
@@ -252,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn slice() {
+    fn slices() {
         let queue = Queue::new_queue(5);
 
         queue.push_slice(&[1, 2, 3]).unwrap();
@@ -314,6 +331,29 @@ mod tests {
         }
 
         assert_eq!(queue.available(), 5);
+
+        let queue = Queue::new_queue(5);
+        queue.push_slice(&[1, 2, 3, 4, 5]).unwrap();
+        queue.push(6).unwrap_err();
+        queue.push_slice(&[7]).unwrap_err();
+        assert_eq!(queue.pop().unwrap(), 1);
+        assert!(!queue.is_empty());
+
+        let queue = Queue::new_queue(5);
+        queue.push(0).unwrap();
+        assert_eq!(queue.pop().unwrap(), 0);
+        assert_eq!(queue.pop(), Err(PopError::Empty));
+        queue.push_slice(&[1, 2, 3]).unwrap();
+        queue.push_slice(&[4, 5, 6]).unwrap_err();
+        assert_eq!(queue.pop().unwrap(), 1);
+        assert_eq!(queue.pop().unwrap(), 2);
+        assert_eq!(queue.pop().unwrap(), 3);
+        queue.push_slice(&[7, 8, 9]).unwrap();
+        assert_eq!(queue.pop().unwrap(), 7);
+        assert_eq!(queue.pop().unwrap(), 8);
+        assert_eq!(queue.pop().unwrap(), 9);
+        queue.push_slice(&[10, 11, 12]).unwrap();
+        assert_eq!(queue.pop().unwrap(), 10);
     }
 
     #[test]
