@@ -164,8 +164,7 @@ impl<T> Queue<T> {
             let next = if index + 1 < self.buffer.len() {
                 tail + 1
             } else {
-                let lap = tail & !(self.mask_bit - 1);
-                lap.wrapping_add(self.mask_bit)
+                (tail & !(self.mask_bit - 1)).wrapping_add(self.mask_bit)
             };
 
             self.tail.store(next, Release);
@@ -193,8 +192,7 @@ impl<T> Queue<T> {
             let next = if index + 1 < self.buffer.len() {
                 head + 1
             } else {
-                let lap = head & !(self.mask_bit - 1);
-                lap.wrapping_add(self.mask_bit)
+                (head & !(self.mask_bit - 1)).wrapping_add(self.mask_bit)
             };
 
             self.head.store(next, Release);
@@ -220,9 +218,9 @@ impl<T: Copy> Queue<T> {
         let next_tail = if index + slice_length < buffer_length {
             tail + slice_length
         } else {
-            let lap = tail & !(self.mask_bit - 1);
-            let lap = lap.wrapping_add(self.mask_bit);
-            lap.wrapping_add((index + slice_length) % buffer_length)
+            (tail & !(self.mask_bit - 1))
+                .wrapping_add(self.mask_bit)
+                .wrapping_add((index + slice_length) % buffer_length)
         };
 
         if head.wrapping_add(self.mask_bit) < next_tail {
