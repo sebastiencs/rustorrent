@@ -295,6 +295,8 @@ impl PieceCollector {
     }
 
     pub fn iter_empty_ranges(&self, piece_index: PieceIndex) -> IterEmptyRanges {
+        assert!(usize::from(piece_index) < self.pieces_infos.num_pieces);
+
         IterEmptyRanges {
             start_at: 0.into(),
             block_size: self.pieces_infos.block_size,
@@ -328,7 +330,129 @@ impl PieceCollector {
 
 #[cfg(test)]
 mod tests {
-    use super::PieceRanges;
+    use std::sync::Arc;
+
+    use crate::pieces::Pieces;
+
+    use super::{Block, PieceCollector, PieceRanges};
+
+    #[test]
+    fn iter_empty() {
+        let pieces_info = Arc::new(Pieces {
+            info_hash: Arc::new([]),
+            num_pieces: 9,
+            sha1_pieces: Arc::new(Vec::new()),
+            block_size: 100,
+            last_block_size: 50,
+            nblocks_piece: 13,
+            nblocks_last_piece: 8,
+            piece_length: 1250,
+            last_piece_length: 791,
+            files_size: 0,
+        });
+
+        let mut collector = PieceCollector::new(&pieces_info);
+
+        let iter = collector.iter_empty_ranges(1.into());
+
+        for (empty, cmp) in iter.zip(&[
+            (0, 100),
+            (100, 100),
+            (200, 100),
+            (300, 100),
+            (400, 100),
+            (500, 100),
+            (600, 100),
+            (700, 100),
+            (800, 100),
+            (900, 100),
+            (1000, 100),
+            (1100, 100),
+            (1200, 50),
+        ]) {
+            assert_eq!(empty.start, cmp.0);
+            assert_eq!(empty.end, empty.start + cmp.1);
+        }
+
+        collector.add_block(&Block {
+            piece_index: 2.into(),
+            index: 220.into(),
+            block: vec![0; 79].into_boxed_slice(),
+        });
+
+        collector.add_block(&Block {
+            piece_index: 2.into(),
+            index: 480.into(),
+            block: vec![0; 101].into_boxed_slice(),
+        });
+
+        for (empty, cmp) in collector.iter_empty_ranges(2.into()).zip(&[
+            (0, 100),
+            (100, 100),
+            (200, 20),
+            (299, 100),
+            (399, 81),
+            (581, 100),
+            (681, 100),
+            (781, 100),
+            (881, 100),
+            (981, 100),
+            (1081, 100),
+            (1181, 69),
+        ]) {
+            assert_eq!(empty.start, cmp.0);
+            assert_eq!(empty.end, cmp.0 + cmp.1);
+        }
+
+        collector.add_block(&Block {
+            piece_index: 3.into(),
+            index: 0.into(),
+            block: vec![0; 79].into_boxed_slice(),
+        });
+
+        collector.add_block(&Block {
+            piece_index: 3.into(),
+            index: 480.into(),
+            block: vec![0; 770].into_boxed_slice(),
+        });
+
+        for (empty, cmp) in collector.iter_empty_ranges(3.into()).zip(&[
+            (79, 100),
+            (179, 100),
+            (279, 100),
+            (379, 100),
+            (479, 1),
+        ]) {
+            assert_eq!(empty.start, cmp.0);
+            assert_eq!(empty.end, cmp.0 + cmp.1);
+        }
+
+        collector.add_block(&Block {
+            piece_index: 8.into(),
+            index: 0.into(),
+            block: vec![0; 79].into_boxed_slice(),
+        });
+
+        collector.add_block(&Block {
+            piece_index: 8.into(),
+            index: 480.into(),
+            block: vec![0; 30].into_boxed_slice(),
+        });
+
+        for (empty, cmp) in collector.iter_empty_ranges(8.into()).zip(&[
+            (79, 100),
+            (179, 100),
+            (279, 100),
+            (379, 100),
+            (479, 1),
+            (510, 100),
+            (610, 100),
+            (710, 81),
+        ]) {
+            assert_eq!(empty.start, cmp.0);
+            assert_eq!(empty.end, cmp.0 + cmp.1);
+        }
+    }
 
     #[test]
     fn range_empty() {

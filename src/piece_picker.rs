@@ -1,4 +1,4 @@
-use std::{fmt::Debug, ops::Range, sync::Arc};
+use std::{fmt::Debug, sync::Arc};
 
 use fastrand::Rng;
 //use kv_log_macro::info;
@@ -186,40 +186,25 @@ impl PiecePicker {
     }
 
     fn add_piece_to_download(&mut self, piece_index: PieceIndex) {
-        let next_piece = piece_index.next_piece();
-
-        for to_download in self.to_download.iter_mut().rev() {
+        // We're only interested with the last added piece, because
+        // previous pieces could have a higher priority
+        if let Some(to_download) = self.to_download.last_mut() {
             match to_download {
-                TaskDownload::Piece(p) => {
-                    let piece = *p;
-                    if piece == next_piece {
-                        *to_download = TaskDownload::PiecesRange(Range {
-                            start: piece_index,
-                            end: piece,
-                        });
-                        return;
-                    } else if p.next_piece() == piece_index {
-                        *to_download = TaskDownload::PiecesRange(Range {
-                            start: piece,
-                            end: piece_index,
-                        });
-                        return;
-                    }
+                TaskDownload::Piece { piece_index: p } if p.next_piece() == piece_index => {
+                    *to_download = TaskDownload::PiecesRange {
+                        start: *p,
+                        end: piece_index.next_piece(),
+                    };
+                    return;
                 }
-                TaskDownload::PiecesRange(range) => {
-                    if range.end == piece_index {
-                        range.end = next_piece;
-                        return;
-                    } else if range.start == next_piece {
-                        range.start = piece_index;
-                        return;
-                    }
+                TaskDownload::PiecesRange { start: _, end } if *end == piece_index => {
+                    *end = piece_index.next_piece();
+                    return;
                 }
-                //TaskDownload::Block(_) => {}
-                TaskDownload::BlockRange { .. } => {}
+                _ => {}
             }
-        }
-        self.to_download.push(TaskDownload::Piece(piece_index));
+        };
+        self.to_download.push(TaskDownload::Piece { piece_index });
     }
 
     /// TODO: This might use generator once it's stable
@@ -331,7 +316,8 @@ impl PiecePicker {
 
                         picker.to_download.push(TaskDownload::BlockRange {
                             piece_index,
-                            range: next_empty,
+                            start: next_empty.start.into(),
+                            end: next_empty.end.into(),
                         });
                     }
 
@@ -398,17 +384,15 @@ impl PiecePicker {
 
 #[cfg(test)]
 mod tests {
-    // use std::sync::Arc;
-
-    // use bitfield::BitField;
+    use std::sync::Arc;
 
     use crate::{
         actors::peer::PeerId,
         logger,
-        pieces::{BlockToDownload, TaskDownload},
+        pieces::{BlockToDownload, Pieces, TaskDownload},
     };
 
-    use super::{BlockIndex, PeersPerPiece, PieceIndex, PieceState};
+    use super::{BlockIndex, PeersPerPiece, PieceIndex, PiecePicker, PieceState};
 
     fn assert_eq_states(states: &[PieceState], cmp: &[(bool, &[PeerId])]) {
         assert_eq!(states.len(), cmp.len());
@@ -448,6 +432,81 @@ mod tests {
             assert_eq!(s.start, c.1);
             assert_eq!(s.length, c.2);
         }
+    }
+
+    #[test]
+    fn add_piece_to_download() {
+        let pieces_info = Arc::new(Pieces {
+            info_hash: Arc::new([]),
+            num_pieces: 9,
+            sha1_pieces: Arc::new(Vec::new()),
+            block_size: 100,
+            last_block_size: 50,
+            nblocks_piece: 13,
+            nblocks_last_piece: 7,
+            piece_length: 1250,
+            last_piece_length: 114688,
+            files_size: 0,
+        });
+
+        let mut picker = PiecePicker::new(&pieces_info);
+
+        picker.add_piece_to_download(1.into());
+        assert_eq!(
+            &picker.to_download,
+            &[TaskDownload::Piece {
+                piece_index: 1.into()
+            }]
+        );
+
+        picker.add_piece_to_download(2.into());
+        assert_eq!(
+            &picker.to_download,
+            &[TaskDownload::PiecesRange {
+                start: 1.into(),
+                end: 3.into()
+            }]
+        );
+
+        picker.add_piece_to_download(3.into());
+        assert_eq!(
+            &picker.to_download,
+            &[TaskDownload::PiecesRange {
+                start: 1.into(),
+                end: 4.into()
+            }]
+        );
+
+        picker.add_piece_to_download(5.into());
+        assert_eq!(
+            &picker.to_download,
+            &[
+                TaskDownload::PiecesRange {
+                    start: 1.into(),
+                    end: 4.into()
+                },
+                TaskDownload::Piece {
+                    piece_index: 5.into()
+                }
+            ]
+        );
+
+        picker.add_piece_to_download(0.into());
+        assert_eq!(
+            &picker.to_download,
+            &[
+                TaskDownload::PiecesRange {
+                    start: 1.into(),
+                    end: 4.into()
+                },
+                TaskDownload::Piece {
+                    piece_index: 5.into()
+                },
+                TaskDownload::Piece {
+                    piece_index: 0.into()
+                },
+            ]
+        );
     }
 
     #[test]

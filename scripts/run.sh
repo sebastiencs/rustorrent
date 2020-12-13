@@ -51,10 +51,12 @@ case "$1" in
         rm -rf target-cov/debug/deps/*.gcda
 
         cargo build --tests
-        cargo test --no-fail-fast
+        cargo test --no-fail-fast add_p
         # cargo test --all-features --no-fail-fast
 
         grcov ./target-cov/debug/ -s . -t html --llvm --branch --ignore-not-existing --ignore "*rust/library*" --ignore "*registry*" --excl-line "grcov_ignore|assert"
+
+        exit 0
         ;;
     source-coverage)
         export CARGO_INCREMENTAL="0"

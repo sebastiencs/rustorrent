@@ -4,7 +4,7 @@ use crate::{
     piece_picker::{BlockIndex, PieceIndex},
 };
 
-use std::{fmt::Debug, ops::Range, sync::Arc};
+use std::{fmt::Debug, sync::Arc};
 
 #[derive(Debug, Clone)]
 pub struct Pieces {
@@ -141,17 +141,19 @@ impl Pieces {
     }
 }
 
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum TaskDownload {
     /// 1 piece
-    Piece(PieceIndex),
-    /// A range of pieces
-    PiecesRange(Range<PieceIndex>),
-    // Block(BlockToDownload),
-    /// 1 specific block
+    Piece { piece_index: PieceIndex },
+    /// A range of pieces, excluding 'end'
+    /// We can't use std::ops::Range because it's not Copy
+    PiecesRange { start: PieceIndex, end: PieceIndex },
+    /// 1 specific block, excluding 'end'
+    /// We can't use std::ops::Range because it's not Copy
     BlockRange {
         piece_index: PieceIndex,
-        range: Range<u32>,
+        start: BlockIndex,
+        end: BlockIndex,
     },
 }
 
@@ -195,7 +197,7 @@ impl<'a> Into<MessagePeer<'a>> for BlockToDownload {
 mod tests {
     use std::sync::Arc;
 
-    use super::Pieces;
+    use super::{Pieces, TaskDownload};
 
     #[test]
     fn block_length() {
@@ -305,5 +307,9 @@ mod tests {
 
         // Invalid index
         assert_eq!(pieces_info.piece_size_of(9.into()), 788);
+    }
+
+    fn task_download_size() {
+        assert_eq!(std::mem::size_of::<TaskDownload>(), 16)
     }
 }
