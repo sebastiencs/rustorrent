@@ -97,6 +97,15 @@ impl<T> Drop for Receiver<T> {
     }
 }
 
+impl<T> Drop for Queue<T> {
+    fn drop(&mut self) {
+        // TODO: Optimize this
+        while let Ok(value) = self.pop() {
+            drop(value)
+        }
+    }
+}
+
 impl<T> Queue<T> {
     fn new_queue(capacity: usize) -> Self {
         assert!(capacity > 0);
