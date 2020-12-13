@@ -300,6 +300,9 @@ mod tests {
     use std::ffi::OsStr;
 
     #[test]
+    // Miri takes all the RAM
+    // TODO: Report the bug on miri
+    #[cfg_attr(miri, ignore)]
     fn read_torrent_file() {
         let file = env!("CARGO_MANIFEST_DIR").to_owned()
             + "/scripts/Fedora-Workstation-Live-x86_64-33_Beta.torrent";
@@ -325,6 +328,9 @@ mod tests {
     }
 
     #[test]
+    // Miri takes all the RAM
+    // TODO: Report the bug on miri
+    #[cfg_attr(miri, ignore)]
     fn parse_torrent_fail() {
         use de::DeserializeError::*;
 
@@ -401,6 +407,9 @@ mod tests {
     }
 
     #[test]
+    // Miri takes all the RAM
+    // TODO: Report the bug on miri
+    #[cfg_attr(miri, ignore)]
     fn parse_torrent_success() {
         use super::Torrent;
 
@@ -596,6 +605,9 @@ mod tests {
     }
 
     #[test]
+    // Miri takes all the RAM
+    // TODO: Report the bug on miri
+    #[cfg_attr(miri, ignore)]
     fn parse_torrent_file() {
         let dir = env!("CARGO_MANIFEST_DIR").to_owned() + "/scripts/test_torrents/";
 

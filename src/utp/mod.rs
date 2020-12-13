@@ -1096,6 +1096,7 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Too slow on Miri, no unsafe code involve
     fn seq_number_less_equal() {
         for num in 0..u16::MAX as isize + 1024 {
             for offset in 0..1024 {
@@ -1107,6 +1108,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Too slow on Miri, no unsafe code involve
     fn seq_number_less() {
         for num in 0..u16::MAX as isize + 1024 {
             for offset in 0..1024 {
@@ -1223,6 +1225,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    #[cfg_attr(miri, ignore)] // Miri doesn't support epoll
     async fn recv_send_data() {
         use std::sync::Arc;
 

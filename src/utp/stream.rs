@@ -417,6 +417,7 @@ mod tests {
     use tokio::io::AsyncReadExt;
 
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Miri doesn't support epoll
     async fn utp_read() {
         let arena = Arena::new();
 
@@ -451,6 +452,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Miri doesn't support epoll
     async fn utp_read_partial() {
         let arena = Arena::new();
 
@@ -505,6 +507,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Miri doesn't support epoll
     async fn utp_read_async_read() {
         let arena = Arena::new();
 
@@ -549,6 +552,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Miri doesn't support epoll
     async fn utp_read_close_on_await() {
         let (sender, recv) = bounded(10);
         let (writer, _) = bounded(10);
