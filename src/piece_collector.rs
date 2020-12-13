@@ -29,6 +29,56 @@ impl PieceRanges {
         range.start == 0 && range.end == self.piece_length
     }
 
+    fn next_empty_range(&self, at: BlockIndex) -> Option<Range<u32>> {
+        let at: u32 = at.into();
+
+        if at >= self.piece_length {
+            return None;
+        }
+
+        match self.ranges.binary_search_by(|r| {
+            if r.contains(&at) {
+                Ordering::Equal
+            } else {
+                (r.start..r.end).cmp(at..at + 1)
+            }
+        }) {
+            Ok(index) => {
+                let current = self.ranges.get(index).unwrap();
+                match self.ranges.get(index + 1) {
+                    Some(next) => {
+                        return Some(current.end..next.start);
+                    }
+                    None => {
+                        if current.end != self.piece_length {
+                            return Some(current.end..self.piece_length);
+                        }
+                    }
+                }
+            }
+            Err(index) => {
+                if index == 0 {
+                    match self.ranges.get(0) {
+                        Some(next) => return Some(0..next.start),
+                        None => return Some(0..self.piece_length),
+                    }
+                }
+
+                let index = index.saturating_sub(1);
+
+                match (self.ranges.get(index), self.ranges.get(index + 1)) {
+                    (Some(before), Some(after)) => return Some(before.end..after.start),
+                    (Some(before), None) => {
+                        return Some(before.end..self.piece_length);
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
+
+        None
+    }
+
     fn insert<R: Into<Range<u32>>>(&mut self, block: R) {
         let range: Range<u32> = block.into();
 
@@ -106,7 +156,7 @@ impl PieceRanges {
 pub struct Block {
     pub piece_index: PieceIndex,
     pub index: BlockIndex,
-    block: Box<[u8]>,
+    pub block: Box<[u8]>,
 }
 
 impl<'b> From<(PieceIndex, BlockIndex, &'b [u8])> for Block {
@@ -178,8 +228,49 @@ impl PieceMetadata {
         }
     }
 
+    fn next_empty_range(&self, start_at: BlockIndex) -> Option<Range<u32>> {
+        self.blocks_completed.next_empty_range(start_at)
+    }
+
     fn take_piece(self) -> Box<[u8]> {
         self.piece
+    }
+}
+
+pub struct IterEmptyRanges<'c> {
+    start_at: BlockIndex,
+    block_size: u32,
+    piece_length: u32,
+    piece_metadata: Option<&'c PieceMetadata>,
+}
+
+impl Iterator for IterEmptyRanges<'_> {
+    type Item = Range<u32>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut next = match self.piece_metadata {
+            Some(m) => m.next_empty_range(self.start_at),
+            _ => {
+                if self.piece_length == u32::from(self.start_at) {
+                    None
+                } else {
+                    Some(self.start_at.into()..self.piece_length)
+                }
+            }
+        };
+
+        if let Some(next) = &mut next {
+            let start = next.start.max(self.start_at.into());
+            let end = next.end.min(start + self.block_size);
+
+            self.start_at = end.into();
+            next.start = start;
+            next.end = end;
+
+            assert!(end > start && end <= self.piece_length);
+        };
+
+        next
     }
 }
 
@@ -193,6 +284,22 @@ impl PieceCollector {
         Self {
             pieces: Map::default(),
             pieces_infos: Arc::clone(pieces_infos),
+        }
+    }
+
+    pub fn is_empty(&self, piece_index: PieceIndex) -> bool {
+        match self.pieces.get(&piece_index) {
+            Some(m) => m.blocks_completed.ranges.is_empty(),
+            _ => true,
+        }
+    }
+
+    pub fn iter_empty_ranges(&self, piece_index: PieceIndex) -> IterEmptyRanges {
+        IterEmptyRanges {
+            start_at: 0.into(),
+            block_size: self.pieces_infos.block_size,
+            piece_length: self.pieces_infos.piece_size_of(piece_index),
+            piece_metadata: self.pieces.get(&piece_index),
         }
     }
 
@@ -222,6 +329,46 @@ impl PieceCollector {
 #[cfg(test)]
 mod tests {
     use super::PieceRanges;
+
+    #[test]
+    fn range_empty() {
+        let mut range = PieceRanges::new(100);
+
+        println!("range={:?}", range);
+
+        range.insert(5..10);
+        range.insert(20..30);
+        println!("range={:?}", range);
+
+        assert_eq!(range.next_empty_range(15.into()), Some(10..20));
+
+        assert_eq!(range.next_empty_range(10.into()), Some(10..20));
+
+        assert_eq!(range.next_empty_range(40.into()), Some(30..100));
+
+        assert_eq!(range.next_empty_range(20.into()), Some(30..100));
+
+        assert_eq!(range.next_empty_range(30.into()), Some(30..100));
+
+        assert_eq!(range.next_empty_range(0.into()), Some(0..5));
+
+        assert_eq!(range.next_empty_range(4.into()), Some(0..5));
+
+        assert_eq!(range.next_empty_range(5.into()), Some(10..20));
+
+        assert_eq!(range.next_empty_range(100.into()), None);
+
+        range.insert(90..100);
+        println!("range={:?}", range);
+
+        assert_eq!(range.next_empty_range(91.into()), None);
+
+        let range = PieceRanges::new(100);
+
+        assert_eq!(range.next_empty_range(91.into()), Some(0..100));
+
+        assert_eq!(range.next_empty_range(100.into()), None);
+    }
 
     #[test]
     fn range() {

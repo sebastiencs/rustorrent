@@ -18,6 +18,7 @@ pub mod piece_picker;
 pub mod pieces;
 pub mod session;
 pub mod sha1;
+pub mod spsc;
 pub mod supervisors;
 pub mod time;
 pub mod udp_ext;

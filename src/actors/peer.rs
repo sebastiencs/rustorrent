@@ -42,6 +42,13 @@ impl std::fmt::Display for PeerId {
     }
 }
 
+#[cfg(test)]
+impl PeerId {
+    pub(crate) fn new(id: usize) -> Self {
+        Self(id)
+    }
+}
+
 #[derive(Debug)]
 pub(crate) enum MessagePeer<'a> {
     KeepAlive,

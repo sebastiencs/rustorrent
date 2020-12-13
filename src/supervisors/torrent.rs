@@ -15,8 +15,8 @@ use crate::{
     errors::TorrentError,
     metadata::Torrent,
     piece_collector::{Block, PieceCollector},
-    piece_picker::{BlockIndex, PiecePicker},
-    pieces::{BlockToDownload, Pieces},
+    piece_picker::PiecePicker,
+    pieces::Pieces,
     supervisors::tracker::TrackerSupervisor,
     utils::Map,
 };
@@ -27,6 +27,7 @@ struct PeerState {
     queue_tasks: PeerTask,
     addr: Sender<PeerCommand>,
     extern_id: Arc<PeerExternId>,
+    tasks_nbytes: usize,
 }
 
 /// Message sent to TorrentSupervisor
@@ -187,23 +188,34 @@ impl TorrentSupervisor {
                             continue;
                         }
 
-                        if let Some(piece_index) = self.piece_picker.pick_piece(id, &peer.bitfield)
-                        {
-                            let nblock_piece = self.pieces_infos.nblocks_piece;
-                            let block_size = self.pieces_infos.block_size;
+                        let tasks_nbytes = peer.tasks_nbytes;
 
-                            for i in 0..nblock_piece {
-                                peer.queue_tasks
-                                    .push(BlockToDownload::new(
-                                        piece_index,
-                                        BlockIndex::from(i as u32 * block_size),
-                                        block_size,
-                                    ))
-                                    .unwrap();
-                            }
+                        self.piece_picker.pick_piece(
+                            id,
+                            tasks_nbytes,
+                            &peer.bitfield,
+                            &self.collector,
+                        );
 
-                            peer.addr.send(PeerCommand::TasksAvailables).await.ok();
-                        }
+                        // TODO: Send to Peer
+
+                        // if let Some(piece_index) = self.piece_picker.pick_piece(id, &peer.bitfield)
+                        // {
+                        //     let nblock_piece = self.pieces_infos.nblocks_piece;
+                        //     let block_size = self.pieces_infos.block_size;
+
+                        //     for i in 0..nblock_piece {
+                        //         peer.queue_tasks
+                        //             .push(BlockToDownload::new(
+                        //                 piece_index,
+                        //                 BlockIndex::from(i as u32 * block_size),
+                        //                 block_size,
+                        //             ))
+                        //             .unwrap();
+                        //     }
+
+                        //     peer.addr.send(PeerCommand::TasksAvailables).await.ok();
+                        // }
                     };
                 }
                 RemovePeer { id } => {
@@ -232,6 +244,7 @@ impl TorrentSupervisor {
                                 addr,
                                 socket,
                                 extern_id,
+                                tasks_nbytes: self.pieces_infos.piece_length,
                             },
                         );
                     }
@@ -245,26 +258,37 @@ impl TorrentSupervisor {
                     }
 
                     if let Some(peer) = self.peers.get_mut(&id) {
-                        if peer.queue_tasks.len() <= 5 {
-                            if let Some(piece_index) =
-                                self.piece_picker.pick_piece(id, &peer.bitfield)
-                            {
-                                let nblock_piece = self.pieces_infos.nblocks_piece;
-                                let block_size = self.pieces_infos.block_size;
+                        let tasks_nbytes = peer.tasks_nbytes;
 
-                                for i in 0..nblock_piece {
-                                    peer.queue_tasks
-                                        .push(BlockToDownload::new(
-                                            piece_index,
-                                            BlockIndex::from(i as u32 * block_size),
-                                            block_size,
-                                        ))
-                                        .unwrap();
-                                }
+                        self.piece_picker.pick_piece(
+                            id,
+                            tasks_nbytes,
+                            &peer.bitfield,
+                            &self.collector,
+                        );
 
-                                peer.addr.send(PeerCommand::TasksAvailables).await.ok();
-                            }
-                        }
+                        // TODO: Send to Peer
+
+                        // if peer.queue_tasks.len() <= 5 {
+                        //     if let Some(piece_index) =
+                        //         self.piece_picker.pick_piece(id, &peer.bitfield)
+                        //     {
+                        //         let nblock_piece = self.pieces_infos.nblocks_piece;
+                        //         let block_size = self.pieces_infos.block_size;
+
+                        //         for i in 0..nblock_piece {
+                        //             peer.queue_tasks
+                        //                 .push(BlockToDownload::new(
+                        //                     piece_index,
+                        //                     BlockIndex::from(i as u32 * block_size),
+                        //                     block_size,
+                        //                 ))
+                        //                 .unwrap();
+                        //         }
+
+                        //         peer.addr.send(PeerCommand::TasksAvailables).await.ok();
+                        //     }
+                        // }
                     }
                 }
                 ResultChecksum { id: _, valid } => {
