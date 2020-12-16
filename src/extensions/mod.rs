@@ -109,7 +109,7 @@ impl<'a> Into<Vec<SocketAddr>> for PEXMessage<'a> {
 
 #[derive(Debug)]
 pub enum ExtendedMessage<'a> {
-    Handshake(ExtendedHandshake),
+    Handshake { handshake: Box<ExtendedHandshake> },
     Message { id: u8, buffer: &'a [u8] },
 }
 

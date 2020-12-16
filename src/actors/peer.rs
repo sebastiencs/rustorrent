@@ -153,7 +153,9 @@ impl<'a> TryFrom<&'a [u8]> for MessagePeer<'a> {
                 match id {
                     0 => {
                         let handshake = crate::bencode::de::from_bytes(&buffer[1..])?;
-                        MessagePeer::Extension(ExtendedMessage::Handshake(handshake))
+                        MessagePeer::Extension(ExtendedMessage::Handshake {
+                            handshake: Box::new(handshake),
+                        })
                     }
                     _ => MessagePeer::Extension(ExtendedMessage::Message {
                         id,
@@ -514,7 +516,7 @@ impl Peer {
             MessagePeer::KeepAlive => {
                 cursor.write_u32::<BigEndian>(0).unwrap();
             }
-            MessagePeer::Extension(ExtendedMessage::Handshake(handshake)) => {
+            MessagePeer::Extension(ExtendedMessage::Handshake { handshake }) => {
                 let bytes = crate::bencode::ser::to_bytes(&handshake).unwrap();
                 cursor
                     .write_u32::<BigEndian>(2 + bytes.len() as u32)
@@ -763,7 +765,7 @@ impl Peer {
             KeepAlive => {
                 info!("[{}] Keep alive", self.id);
             }
-            Extension(ExtendedMessage::Handshake(_handshake)) => {
+            Extension(ExtendedMessage::Handshake { handshake: _ }) => {
                 self.send_extended_handshake().await?;
                 //self.maybe_send_request().await;
                 //info!("[{}] EXTENDED HANDSHAKE SENT", self.id);
@@ -774,7 +776,9 @@ impl Peer {
                         let addrs: Vec<SocketAddr> = addrs.into();
                         info!("[{}] new peers from pex {:?}", self.id, addrs);
                         self.supervisor
-                            .send(TorrentNotification::PeerDiscovered { addrs })
+                            .send(TorrentNotification::PeerDiscovered {
+                                addrs: addrs.into_boxed_slice(),
+                            })
                             .await
                             .unwrap();
                     };
@@ -803,9 +807,9 @@ impl Peer {
             p: Some(6801),
             ..Default::default()
         };
-        self.send_message(MessagePeer::Extension(ExtendedMessage::Handshake(
-            handshake,
-        )))
+        self.send_message(MessagePeer::Extension(ExtendedMessage::Handshake {
+            handshake: Box::new(handshake),
+        }))
         .await
     }
 
@@ -848,5 +852,14 @@ impl Peer {
         self.reader.consume();
 
         Ok(Arc::new(peer_id))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MessagePeer;
+
+    fn assert_message_size() {
+        assert_eq!(std::mem::size_of::<MessagePeer>(), 24);
     }
 }

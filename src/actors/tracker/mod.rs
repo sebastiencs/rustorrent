@@ -125,7 +125,9 @@ impl Tracker {
         self.send_to_supervisor(FoundPeers(addrs.len())).await;
         self.data
             .supervisor
-            .send(PeerDiscovered { addrs })
+            .send(PeerDiscovered {
+                addrs: addrs.into_boxed_slice(),
+            })
             .await
             .unwrap();
     }

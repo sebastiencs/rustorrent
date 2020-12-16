@@ -8,7 +8,7 @@ use std::sync::{
     Arc,
 };
 // use log::info;
-use kv_log_macro::{debug, error, info, warn};
+use kv_log_macro::{debug, info, warn};
 
 use std::net::SocketAddr;
 
@@ -37,6 +37,12 @@ impl Shared {
         Shared {
             nbytes_on_tasks: AtomicUsize::new(0),
         }
+    }
+}
+
+impl Default for Shared {
+    fn default() -> Self {
+        Shared::new()
     }
 }
 
@@ -91,7 +97,7 @@ pub enum TorrentNotification {
     },
     /// When a tracker discover peers, it send this message
     PeerDiscovered {
-        addrs: Vec<SocketAddr>,
+        addrs: Box<[SocketAddr]>,
     },
 }
 
@@ -246,26 +252,6 @@ impl TorrentSupervisor {
                         }
 
                         peer.addr.send(PeerCommand::TasksAvailables).await.ok();
-
-                        // TODO: Send to Peer
-
-                        // if let Some(piece_index) = self.piece_picker.pick_piece(id, &peer.bitfield)
-                        // {
-                        //     let nblock_piece = self.pieces_infos.nblocks_piece;
-                        //     let block_size = self.pieces_infos.block_size;
-
-                        //     for i in 0..nblock_piece {
-                        //         peer.queue_tasks
-                        //             .push(BlockToDownload::new(
-                        //                 piece_index,
-                        //                 BlockIndex::from(i as u32 * block_size),
-                        //                 block_size,
-                        //             ))
-                        //             .unwrap();
-                        //     }
-
-                        //     peer.addr.send(PeerCommand::TasksAvailables).await.ok();
-                        // }
                     };
                 }
                 RemovePeer { id } => {
@@ -328,46 +314,13 @@ impl TorrentSupervisor {
                                 &peer.bitfield,
                                 &self.collector,
                             ) {
-                                // TODO: For fast peer, adding more than 1 piece when avaible is 1
                                 info!("[{}] Adding {} tasks {:?}", id, tasks.len(), tasks);
                                 peer.shared.nbytes_on_tasks.fetch_add(nbytes, Relaxed);
-                                peer.queue_tasks.push_slice(tasks).unwrap_or_else(|e| {
-                                    error!(
-                                        "[{}] available={} slice_length={} error={:?}",
-                                        id,
-                                        available,
-                                        tasks.len(),
-                                        e
-                                    );
-                                    panic!();
-                                });
+                                peer.queue_tasks.push_slice(tasks).unwrap();
 
                                 peer.addr.send(PeerCommand::TasksAvailables).await.ok();
                             }
                         }
-
-                        // TODO: Send to Peer
-
-                        // if peer.queue_tasks.len() <= 5 {
-                        //     if let Some(piece_index) =
-                        //         self.piece_picker.pick_piece(id, &peer.bitfield)
-                        //     {
-                        //         let nblock_piece = self.pieces_infos.nblocks_piece;
-                        //         let block_size = self.pieces_infos.block_size;
-
-                        //         for i in 0..nblock_piece {
-                        //             peer.queue_tasks
-                        //                 .push(BlockToDownload::new(
-                        //                     piece_index,
-                        //                     BlockIndex::from(i as u32 * block_size),
-                        //                     block_size,
-                        //                 ))
-                        //                 .unwrap();
-                        //         }
-
-                        //         peer.addr.send(PeerCommand::TasksAvailables).await.ok();
-                        //     }
-                        // }
                     }
                 }
                 ResultChecksum { id: _, valid } => {
@@ -377,7 +330,7 @@ impl TorrentSupervisor {
                     debug!("Piece checked from the pool: {}", valid);
                 }
                 PeerDiscovered { addrs } => {
-                    for addr in &addrs {
+                    for addr in &*addrs {
                         let mut peers = self.peers.values();
                         if !peers.any(|p| &p.socket == addr) {
                             self.connect_to_peers(addr);
@@ -385,24 +338,7 @@ impl TorrentSupervisor {
                             warn!("Already connected to {:?}, ignoring", addr);
                         }
                     }
-                } // AddPiece { id, piece } => {
-                  //     let index = piece.piece_index;
-                  //     if let Some(sum_metadata) =
-                  //         self.pieces_infos.sha1_pieces.get(index).map(Arc::clone)
-                  //     {
-                  //         let piece_buffer = Arc::new(piece);
-                  //         let addr = self.my_addr.clone();
-                  //         let id = self.pending_pieces.insert(Arc::clone(&piece_buffer));
-                  //         self.sha1_workers
-                  //             .send(Sha1Task::CheckSum {
-                  //                 piece_buffer,
-                  //                 sum_metadata,
-                  //                 id,
-                  //                 addr,
-                  //             })
-                  //             .unwrap();
-                  //     }
-                  // }
+                }
             }
         }
     }

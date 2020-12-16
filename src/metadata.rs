@@ -31,7 +31,7 @@ pub enum InfoFile {
     },
     Multiple {
         name: String,
-        files: StackVec<MetaFile>,
+        files: Vec<MetaFile>,
     },
 }
 

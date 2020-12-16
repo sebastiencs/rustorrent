@@ -1,8 +1,7 @@
 #![allow(
     dead_code,
-    clippy::new_without_default,
-    clippy::single_match,
-    clippy::large_enum_variant
+    // clippy::new_without_default,
+    // clippy::single_match,
 )]
 
 pub mod actors;

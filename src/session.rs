@@ -60,6 +60,12 @@ pub struct Session {
     runtime: Arc<Runtime>,
 }
 
+impl Default for Session {
+    fn default() -> Self {
+        Session::new()
+    }
+}
+
 impl Session {
     pub fn new() -> Session {
         logger::start();
