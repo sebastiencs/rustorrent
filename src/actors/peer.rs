@@ -1,7 +1,6 @@
 use async_channel::{bounded, Sender};
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use coarsetime::Instant;
-use concurrent_queue::ConcurrentQueue;
 use futures::{ready, StreamExt};
 use kv_log_macro::{error, info};
 use tokio::{
@@ -27,8 +26,9 @@ use crate::{
     extensions::{ExtendedHandshake, ExtendedMessage, PEXMessage},
     piece_collector::Block,
     piece_picker::{BlockIndex, PieceIndex},
-    pieces::{BlockToDownload, Pieces},
-    supervisors::torrent::{Result, TorrentNotification},
+    pieces::{BlockToDownload, IterTaskDownload, Pieces, TaskDownload},
+    spsc::{Consumer, Producer},
+    supervisors::torrent::{Result, Shared, TorrentNotification},
 };
 
 static PEER_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -172,12 +172,11 @@ enum Choke {
     Choked,
 }
 
-pub type PeerTask = Arc<ConcurrentQueue<BlockToDownload>>;
-
 #[derive(Debug)]
 pub enum PeerCommand {
     TasksAvailables,
     Die,
+    TasksIncreased,
 }
 
 use hashbrown::HashMap;
@@ -357,7 +356,8 @@ pub struct Peer {
     /// Are we choked from the peer
     choked: Choke,
     /// List of pieces to download
-    tasks: PeerTask,
+    tasks: Consumer<TaskDownload>,
+    local_tasks: Option<IterTaskDownload>,
 
     pieces_infos: Arc<Pieces>,
 
@@ -367,6 +367,12 @@ pub struct Peer {
     peer_detail: PeerDetail,
 
     extern_id: Arc<PeerExternId>,
+
+    shared: Arc<Shared>,
+
+    nrequested: usize,
+
+    increase_requested: bool,
 }
 
 impl Peer {
@@ -375,11 +381,21 @@ impl Peer {
         pieces_infos: Arc<Pieces>,
         supervisor: Sender<TorrentNotification>,
         extern_id: Arc<PeerExternId>,
+        consumer: Consumer<TaskDownload>,
     ) -> Result<Peer> {
+        // TODO [2001:df0:a280:1001::3:1]:59632
+        //      [2001:df0:a280:1001::3:1]:59632
+
+        // if addr != "[2001:df0:a280:1001::3:1]:59632".parse::<SocketAddr>().unwrap() {
+        //     return Err(TorrentError::InvalidInput);
+        // }
+
         let stream = TcpStream::connect(&addr).await?;
         let piece_length = pieces_infos.piece_length;
 
         let id = PEER_COUNTER.fetch_add(1, Ordering::SeqCst);
+
+        let shared = Arc::new(Shared::new());
 
         info!("[{}] Connected", id, { addr: addr.to_string(), piece_length: piece_length });
 
@@ -389,13 +405,17 @@ impl Peer {
             pieces_infos,
             id: PeerId(id),
             extern_id,
-            tasks: Arc::new(ConcurrentQueue::bounded(200)),
+            tasks: consumer,
+            local_tasks: None,
             reader: PeerReadBuffer::new(stream, piece_length + 1024),
             buffer: Vec::with_capacity(32 * 1024),
             choked: Choke::Choked,
             nblocks: 0,
             start: None,
             peer_detail: Default::default(),
+            shared,
+            nrequested: 0,
+            increase_requested: false,
         })
     }
 
@@ -515,7 +535,7 @@ impl Peer {
         self.reader.get_mut()
     }
 
-    pub async fn start(&mut self) -> Result<()> {
+    pub async fn start(&mut self, producer: Producer<TaskDownload>) -> Result<()> {
         let (addr, cmds) = bounded(1000);
         let mut cmds = Box::pin(cmds);
 
@@ -524,10 +544,11 @@ impl Peer {
         self.supervisor
             .send(TorrentNotification::AddPeer {
                 id: self.id,
-                queue: self.tasks.clone(),
+                queue: producer,
                 addr,
                 socket: self.addr,
                 extern_id,
+                shared: Arc::clone(&self.shared),
             })
             .await
             .unwrap();
@@ -547,6 +568,9 @@ impl Peer {
                         Some(TasksAvailables) => {
                             self.maybe_request_block("task_available").await?;
                         }
+                        Some(TasksIncreased) => {
+                            self.increase_requested = false;
+                        }
                         Some(Die) => {
                             return Ok(());
                         }
@@ -559,23 +583,56 @@ impl Peer {
         }
     }
 
+    fn pop_task(&mut self) -> Option<BlockToDownload> {
+        loop {
+            if let Some(task) = self.local_tasks.as_mut().and_then(|t| t.next()) {
+                return Some(task);
+            };
+
+            let task = self.tasks.pop().ok()?;
+
+            let local = task.iter_by_block(&self.pieces_infos);
+            self.local_tasks.replace(local);
+        }
+    }
+
     async fn maybe_request_block(&mut self, caller: &'static str) -> Result<()> {
         if self.am_choked() {
             info!("[{}] Send interested", self.id);
             return self.send_message(MessagePeer::Interested).await;
         }
 
-        if let Ok(task) = self.tasks.pop() {
-            return self.send_message(task).await;
-        }
+        // TODO [2001:df0:a280:1001::3:1]:59632
 
-        info!(
-            "[{}] No More Task ! {} downloaded in {:?}s caller={:?}",
-            self.id,
-            self.nblocks,
-            self.start.map(|s| s.elapsed().as_secs()),
-            caller,
-        );
+        // while self.nrequested < 5 {
+        match self.pop_task() {
+            Some(task) => {
+                // info!("[{}] Task={:?}", self.id, task);
+                self.send_message(task).await?;
+            }
+            _ => {
+                if !self.increase_requested {
+                    self.supervisor
+                        .send(TorrentNotification::IncreaseTasksPeer { id: self.id })
+                        .await
+                        .unwrap();
+
+                    self.increase_requested = true;
+                }
+
+                info!(
+                    "[{}] No More Task ! {} downloaded in {:?}s caller={:?}",
+                    self.id,
+                    self.nblocks,
+                    self.start.map(|s| s.elapsed().as_secs()),
+                    caller,
+                );
+                // break;
+            }
+        }
+        //     self.nrequested += 1;
+        // }
+
         Ok(())
     }
 
@@ -670,11 +727,17 @@ impl Peer {
                 // Send Request
                 // info!("[{}] Block index={:?} begin={:?} length{}", self.id, index, begin, block.len());
 
+                // self.nrequested -= 1;
+
                 if self.start.is_none() {
                     self.start.replace(Instant::now());
                 }
 
                 self.nblocks += block.len();
+
+                self.shared
+                    .nbytes_on_tasks
+                    .fetch_sub(block.len(), Ordering::Release);
 
                 self.supervisor
                     .send(TorrentNotification::AddBlock {

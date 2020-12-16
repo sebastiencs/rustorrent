@@ -89,32 +89,14 @@ impl From<&Torrent> for Pieces {
 
 impl Pieces {
     pub fn block_length_of(&self, piece_index: PieceIndex, block_index: BlockIndex) -> u32 {
-        let block_index: usize = block_index.into();
+        let block_index: u32 = block_index.into();
+        let piece_length = self.piece_size_of(piece_index);
 
-        assert!(block_index < self.nblocks_piece);
+        assert!(block_index <= piece_length);
 
-        if self.is_last_piece(piece_index) {
-            assert!(block_index < self.nblocks_last_piece);
+        let next_block = (block_index + self.block_size).min(piece_length);
 
-            if block_index == self.nblocks_last_piece - 1 {
-                let block_size = self.last_piece_length as u32 % self.block_size;
-                if block_size == 0 {
-                    self.block_size
-                } else {
-                    block_size
-                }
-            } else {
-                self.block_size
-            }
-        } else {
-            let block_size = self.block_size;
-
-            if block_index == self.nblocks_piece - 1 {
-                self.last_block_size
-            } else {
-                block_size
-            }
-        }
+        next_block - block_index
     }
 
     pub fn nblock_in_piece(&self, piece_index: PieceIndex) -> usize {
@@ -141,7 +123,7 @@ impl Pieces {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 pub enum TaskDownload {
     /// 1 piece
     Piece { piece_index: PieceIndex },
@@ -157,6 +139,129 @@ pub enum TaskDownload {
     },
 }
 
+impl Debug for TaskDownload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TaskDownload::Piece { piece_index } => {
+                write!(f, "TaskDownload::Piece {{ {:?} }}", piece_index)
+            }
+            TaskDownload::PiecesRange { start, end } => {
+                write!(f, "TaskDownload::PiecesRange {{ {:?} {:?} }}", start, end)
+            }
+            TaskDownload::BlockRange {
+                piece_index,
+                start,
+                end,
+            } => {
+                write!(
+                    f,
+                    "TaskDownload::BlockRange {{ {:?} {:?} {:?} }}",
+                    piece_index, start, end
+                )
+            }
+        }
+    }
+}
+
+pub struct IterTaskDownload {
+    task: TaskDownload,
+    current_piece: PieceIndex,
+    current_block: BlockIndex,
+    pieces_info: Arc<Pieces>,
+}
+
+impl TaskDownload {
+    pub fn iter_by_block(self, pieces_info: &Arc<Pieces>) -> IterTaskDownload {
+        let (piece, block) = match self {
+            TaskDownload::Piece { piece_index } => (piece_index, 0.into()),
+            TaskDownload::PiecesRange { start, end: _ } => (start, 0.into()),
+            TaskDownload::BlockRange {
+                piece_index,
+                start,
+                end: _,
+            } => (piece_index, start),
+        };
+
+        IterTaskDownload {
+            task: self,
+            current_piece: piece,
+            current_block: block,
+            pieces_info: Arc::clone(pieces_info),
+        }
+    }
+}
+
+impl Iterator for IterTaskDownload {
+    type Item = BlockToDownload;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.task {
+            TaskDownload::Piece { piece_index: piece } => {
+                let start = self.current_block;
+                let length = self.pieces_info.block_length_of(piece, start);
+                self.current_block = (u32::from(start) + length).into();
+
+                if length == 0 {
+                    None
+                } else {
+                    Some(BlockToDownload {
+                        piece,
+                        start,
+                        length,
+                    })
+                }
+            }
+            TaskDownload::PiecesRange { start: _, end } => loop {
+                let mut piece = self.current_piece;
+                let start = self.current_block;
+                let length = self.pieces_info.block_length_of(piece, start);
+                self.current_block = (u32::from(start) + length).into();
+
+                if length != 0 {
+                    return Some(BlockToDownload {
+                        piece,
+                        start,
+                        length,
+                    });
+                }
+
+                piece = piece.next_piece();
+
+                if piece == end {
+                    return None;
+                }
+
+                self.current_piece = piece;
+                self.current_block = 0.into();
+            },
+            TaskDownload::BlockRange {
+                piece_index,
+                start: _,
+                end,
+            } => {
+                let end: u32 = end.into();
+
+                let start = self.current_block;
+                let length = self.pieces_info.block_length_of(piece_index, start);
+                let end = (u32::from(start) + length).min(end);
+
+                self.current_block = end.into();
+
+                if start == end.into() {
+                    None
+                } else {
+                    Some(BlockToDownload {
+                        piece: piece_index,
+                        start,
+                        length: end - u32::from(start),
+                    })
+                }
+            }
+        }
+    }
+}
+
+#[derive(Eq, PartialEq)]
 pub struct BlockToDownload {
     pub piece: PieceIndex,
     pub start: BlockIndex,
@@ -197,7 +302,333 @@ impl<'a> Into<MessagePeer<'a>> for BlockToDownload {
 mod tests {
     use std::sync::Arc;
 
-    use super::{Pieces, TaskDownload};
+    use super::{BlockToDownload, Pieces, TaskDownload};
+
+    #[test]
+    fn iter_task() {
+        let pieces_info = Arc::new(Pieces {
+            info_hash: Arc::new([]),
+            num_pieces: 9,
+            sha1_pieces: Arc::new(Vec::new()),
+            block_size: 100,
+            last_block_size: 50,
+            nblocks_piece: 13,
+            nblocks_last_piece: 8,
+            piece_length: 1250,
+            last_piece_length: 788,
+            files_size: 0,
+        });
+
+        let task = TaskDownload::Piece {
+            piece_index: 0.into(),
+        };
+        let iter = task.iter_by_block(&pieces_info);
+        assert_eq!(
+            iter.collect::<Vec<_>>(),
+            &[
+                BlockToDownload {
+                    piece: 0.into(),
+                    start: 0.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 0.into(),
+                    start: 100.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 0.into(),
+                    start: 200.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 0.into(),
+                    start: 300.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 0.into(),
+                    start: 400.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 0.into(),
+                    start: 500.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 0.into(),
+                    start: 600.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 0.into(),
+                    start: 700.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 0.into(),
+                    start: 800.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 0.into(),
+                    start: 900.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 0.into(),
+                    start: 1000.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 0.into(),
+                    start: 1100.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 0.into(),
+                    start: 1200.into(),
+                    length: 50
+                }
+            ]
+        );
+
+        let task = TaskDownload::Piece {
+            piece_index: 8.into(),
+        };
+        let iter = task.iter_by_block(&pieces_info);
+        assert_eq!(
+            iter.collect::<Vec<_>>(),
+            &[
+                BlockToDownload {
+                    piece: 8.into(),
+                    start: 0.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 8.into(),
+                    start: 100.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 8.into(),
+                    start: 200.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 8.into(),
+                    start: 300.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 8.into(),
+                    start: 400.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 8.into(),
+                    start: 500.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 8.into(),
+                    start: 600.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 8.into(),
+                    start: 700.into(),
+                    length: 88
+                },
+            ]
+        );
+
+        let task = TaskDownload::BlockRange {
+            piece_index: 0.into(),
+            start: 101.into(),
+            end: 653.into(),
+        };
+        let iter = task.iter_by_block(&pieces_info);
+        assert_eq!(
+            iter.collect::<Vec<_>>(),
+            &[
+                BlockToDownload {
+                    piece: 0.into(),
+                    start: 101.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 0.into(),
+                    start: 201.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 0.into(),
+                    start: 301.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 0.into(),
+                    start: 401.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 0.into(),
+                    start: 501.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 0.into(),
+                    start: 601.into(),
+                    length: 52
+                },
+            ]
+        );
+
+        let task = TaskDownload::BlockRange {
+            piece_index: 8.into(),
+            start: 567.into(),
+            end: 788.into(),
+        };
+        let iter = task.iter_by_block(&pieces_info);
+        assert_eq!(
+            iter.collect::<Vec<_>>(),
+            &[
+                BlockToDownload {
+                    piece: 8.into(),
+                    start: 567.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 8.into(),
+                    start: 667.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 8.into(),
+                    start: 767.into(),
+                    length: 21
+                },
+            ]
+        );
+
+        let task = TaskDownload::PiecesRange {
+            start: 7.into(),
+            end: 9.into(),
+        };
+        let iter = task.iter_by_block(&pieces_info);
+        assert_eq!(
+            iter.collect::<Vec<_>>(),
+            &[
+                BlockToDownload {
+                    piece: 7.into(),
+                    start: 0.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 7.into(),
+                    start: 100.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 7.into(),
+                    start: 200.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 7.into(),
+                    start: 300.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 7.into(),
+                    start: 400.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 7.into(),
+                    start: 500.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 7.into(),
+                    start: 600.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 7.into(),
+                    start: 700.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 7.into(),
+                    start: 800.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 7.into(),
+                    start: 900.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 7.into(),
+                    start: 1000.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 7.into(),
+                    start: 1100.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 7.into(),
+                    start: 1200.into(),
+                    length: 50
+                },
+                BlockToDownload {
+                    piece: 8.into(),
+                    start: 0.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 8.into(),
+                    start: 100.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 8.into(),
+                    start: 200.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 8.into(),
+                    start: 300.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 8.into(),
+                    start: 400.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 8.into(),
+                    start: 500.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 8.into(),
+                    start: 600.into(),
+                    length: 100
+                },
+                BlockToDownload {
+                    piece: 8.into(),
+                    start: 700.into(),
+                    length: 88
+                },
+            ]
+        );
+    }
 
     #[test]
     fn block_length() {
@@ -215,12 +646,12 @@ mod tests {
         };
 
         assert_eq!(pieces_info.block_length_of(0.into(), 0.into()), 100);
-        assert_eq!(pieces_info.block_length_of(0.into(), 11.into()), 100);
-        assert_eq!(pieces_info.block_length_of(0.into(), 12.into()), 50);
+        assert_eq!(pieces_info.block_length_of(0.into(), 1100.into()), 100);
+        assert_eq!(pieces_info.block_length_of(0.into(), 1200.into()), 50);
 
         assert_eq!(pieces_info.block_length_of(8.into(), 0.into()), 100);
-        assert_eq!(pieces_info.block_length_of(8.into(), 6.into()), 100);
-        assert_eq!(pieces_info.block_length_of(8.into(), 7.into()), 88);
+        assert_eq!(pieces_info.block_length_of(8.into(), 600.into()), 100);
+        assert_eq!(pieces_info.block_length_of(8.into(), 700.into()), 88);
     }
 
     #[test]
@@ -239,12 +670,31 @@ mod tests {
         };
 
         assert_eq!(pieces_info.block_length_of(0.into(), 0.into()), 100);
-        assert_eq!(pieces_info.block_length_of(0.into(), 11.into()), 100);
-        assert_eq!(pieces_info.block_length_of(0.into(), 12.into()), 100);
+        assert_eq!(pieces_info.block_length_of(0.into(), 1100.into()), 100);
+        assert_eq!(pieces_info.block_length_of(0.into(), 1200.into()), 100);
 
         assert_eq!(pieces_info.block_length_of(8.into(), 0.into()), 100);
-        assert_eq!(pieces_info.block_length_of(8.into(), 6.into()), 100);
-        assert_eq!(pieces_info.block_length_of(8.into(), 7.into()), 100);
+        assert_eq!(pieces_info.block_length_of(8.into(), 600.into()), 100);
+        assert_eq!(pieces_info.block_length_of(8.into(), 700.into()), 100);
+    }
+
+    #[test]
+    #[should_panic]
+    fn block_length_wrong_block_index() {
+        let pieces_info = Pieces {
+            info_hash: Arc::new([]),
+            num_pieces: 9,
+            sha1_pieces: Arc::new(Vec::new()),
+            block_size: 100,
+            last_block_size: 100,
+            nblocks_piece: 13,
+            nblocks_last_piece: 8,
+            piece_length: 1300,
+            last_piece_length: 800,
+            files_size: 0,
+        };
+
+        pieces_info.block_length_of(8.into(), 801.into());
     }
 
     #[test]
@@ -264,7 +714,7 @@ mod tests {
         };
 
         // Invalid index
-        assert_eq!(pieces_info.block_length_of(8.into(), 8.into()), 88);
+        assert_eq!(pieces_info.block_length_of(8.into(), 800.into()), 88);
     }
 
     #[test]

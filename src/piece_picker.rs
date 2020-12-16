@@ -1,6 +1,7 @@
 use std::{fmt::Debug, sync::Arc};
 
 use fastrand::Rng;
+// use kv_log_macro::info;
 //use kv_log_macro::info;
 
 use crate::{
@@ -55,7 +56,7 @@ impl From<u32> for PieceIndex {
 }
 
 impl PieceIndex {
-    fn next_piece(self) -> PieceIndex {
+    pub fn next_piece(self) -> PieceIndex {
         (self.0 + 1).into()
     }
 }
@@ -88,13 +89,19 @@ impl Eq for PeersPerPiece {}
 
 impl PartialOrd for PeersPerPiece {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.npeers.cmp(&other.npeers))
+        Some(match self.npeers.cmp(&other.npeers) {
+            std::cmp::Ordering::Equal => self.index.cmp(&other.index),
+            ord => ord,
+        })
     }
 }
 
 impl Ord for PeersPerPiece {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.npeers.cmp(&other.npeers)
+        match self.npeers.cmp(&other.npeers) {
+            std::cmp::Ordering::Equal => self.index.cmp(&other.index),
+            ord => ord,
+        }
     }
 }
 
@@ -153,6 +160,12 @@ enum Picked {
     Partial(PieceIndex),
 }
 
+#[derive(Debug, Eq, PartialEq, Copy, Clone)]
+enum PickMode {
+    Continue,
+    Stop,
+}
+
 impl PiecePicker {
     pub fn new(pieces_info: &Arc<Pieces>) -> PiecePicker {
         let num_pieces = pieces_info.num_pieces;
@@ -184,7 +197,7 @@ impl PiecePicker {
         self.sort_indexed();
     }
 
-    fn add_piece_to_download(&mut self, piece_index: PieceIndex) {
+    fn add_piece_to_download(&mut self, piece_index: PieceIndex, no_push: bool) -> bool {
         // We're only interested with the last added piece, because
         // previous pieces could have a higher priority
         if let Some(to_download) = self.to_download.last_mut() {
@@ -194,16 +207,21 @@ impl PiecePicker {
                         start: *p,
                         end: piece_index.next_piece(),
                     };
-                    return;
+                    return false;
                 }
                 TaskDownload::PiecesRange { start: _, end } if *end == piece_index => {
                     *end = piece_index.next_piece();
-                    return;
+                    return false;
                 }
                 _ => {}
             }
         };
-        self.to_download.push(TaskDownload::Piece { piece_index });
+
+        if !no_push {
+            self.to_download.push(TaskDownload::Piece { piece_index });
+        }
+
+        true
     }
 
     /// TODO: This might use generator once it's stable
@@ -212,10 +230,14 @@ impl PiecePicker {
         peer_id: PeerId,
         bitfield: &BitField,
         collector: &PieceCollector,
-        mut fun: impl FnMut(&mut PiecePicker, Picked) -> bool,
+        mut fun: impl FnMut(&mut PiecePicker, Picked) -> PickMode,
     ) {
-        let mut npeers_current = self.sorted_index[self.start_at].npeers;
+        if self.start_at == self.sorted_index.len() {
+            return;
+        }
+
         let mut start_at = self.start_at;
+        let mut npeers_current = self.sorted_index[self.start_at].npeers;
 
         // while let Some(peers_per_piece) = iter.next() {
         // for peers_per_piece in &self.sorted_index[self.start_at..] {
@@ -246,20 +268,18 @@ impl PiecePicker {
                     for index in 0..self.haves.len() {
                         let piece_index = self.haves[index];
 
-                        let cont = if collector.is_empty(piece_index) {
+                        let mode = if collector.is_empty(piece_index) {
                             fun(self, Picked::Full(piece_index))
                         } else {
                             fun(self, Picked::Partial(piece_index))
                         };
 
-                        if !cont {
+                        if let PickMode::Stop = mode {
                             return;
-                        }
+                        };
                     }
 
                     self.haves.clear();
-
-                    // break;
                 }
                 npeers_current = npeers;
             }
@@ -267,15 +287,20 @@ impl PiecePicker {
             let have = bitfield.get_bit(piece_index);
 
             if have && is_empty {
-                if !fun(self, Picked::Full(piece_index)) {
+                let mode = if collector.is_empty(piece_index) {
+                    fun(self, Picked::Full(piece_index))
+                } else {
+                    fun(self, Picked::Partial(piece_index))
+                };
+
+                if let PickMode::Stop = mode {
                     return;
                 }
+
                 continue;
-                // return Some(Picked::Full(peers_per_piece.index));
             }
 
             if have {
-                println!("HAVE {:?} self.haves={:?}", piece_index, self.haves);
                 self.haves.push(piece_index);
             }
         }
@@ -288,15 +313,15 @@ impl PiecePicker {
             for index in 0..self.haves.len() {
                 let piece_index = self.haves[index];
 
-                let cont = if collector.is_empty(piece_index) {
+                let mode = if collector.is_empty(piece_index) {
                     fun(self, Picked::Full(piece_index))
                 } else {
                     fun(self, Picked::Partial(piece_index))
                 };
 
-                if !cont {
+                if let PickMode::Stop = mode {
                     return;
-                }
+                };
             }
         }
     }
@@ -305,13 +330,19 @@ impl PiecePicker {
         &mut self,
         peer_id: PeerId,
         tasks_nbytes: usize,
+        available: usize,
         bitfield: &BitField,
         collector: &PieceCollector,
-    ) -> Option<&[TaskDownload]> {
-        let mut tasks_nbytes = tasks_nbytes;
+    ) -> Option<(usize, &[TaskDownload])> {
+        let tasks_nbytes = tasks_nbytes;
+        let mut nbytes = 0;
 
         self.to_download.clear();
         self.haves.clear();
+
+        if available == 0 {
+            return None;
+        }
 
         self.pick_piece_inner(peer_id, bitfield, collector, |picker, piece_index| {
             match piece_index {
@@ -322,24 +353,35 @@ impl PiecePicker {
 
                     let piece_length = picker.pieces_infos.piece_size_of(piece_index);
 
-                    tasks_nbytes = tasks_nbytes.saturating_sub(piece_length as usize);
+                    nbytes += piece_length as usize;
 
-                    picker.add_piece_to_download(piece_index);
+                    let no_push = picker.to_download.len() == available;
+                    let has_pushed = picker.add_piece_to_download(piece_index, no_push);
+
+                    if no_push && has_pushed {
+                        return PickMode::Stop;
+                    }
                 }
                 Picked::Partial(piece_index) => {
                     let mut found = false;
 
+                    if picker.to_download.len() == available {
+                        return PickMode::Stop;
+                    }
+
                     for next_empty in collector.iter_empty_ranges(piece_index) {
                         found = true;
-
-                        tasks_nbytes = tasks_nbytes
-                            .saturating_sub((next_empty.end - next_empty.start) as usize);
+                        nbytes += (next_empty.end - next_empty.start) as usize;
 
                         picker.to_download.push(TaskDownload::BlockRange {
                             piece_index,
                             start: next_empty.start.into(),
                             end: next_empty.end.into(),
                         });
+
+                        if picker.to_download.len() == available {
+                            break;
+                        }
                     }
 
                     if found {
@@ -347,16 +389,33 @@ impl PiecePicker {
                             .workers
                             .insert(peer_id);
                     }
+
+                    if picker.to_download.len() == available {
+                        return PickMode::Stop;
+                    }
                 }
             }
 
-            tasks_nbytes > 0
+            if tasks_nbytes.saturating_sub(nbytes) > 0 {
+                PickMode::Continue
+            } else {
+                PickMode::Stop
+            }
         });
+
+        if self.to_download.len() > available {
+            panic!(
+                "WRONG to_download_len={:?} orig={:?} to_download={:#?}",
+                self.to_download.len(),
+                available,
+                self.to_download
+            );
+        }
 
         if self.to_download.is_empty() {
             None
         } else {
-            Some(&self.to_download)
+            Some((nbytes, &self.to_download))
         }
     }
 
@@ -410,7 +469,6 @@ mod tests {
     use crate::{
         actors::peer::PeerId,
         bitfield::{BitField, BitFieldUpdate},
-        logger,
         piece_collector::{Block, PieceCollector},
         pieces::{BlockToDownload, Pieces, TaskDownload},
     };
@@ -462,7 +520,7 @@ mod tests {
 
         let mut picker = PiecePicker::new(&pieces_info);
 
-        picker.add_piece_to_download(1.into());
+        picker.add_piece_to_download(1.into(), false);
         assert_eq!(
             &picker.to_download,
             &[TaskDownload::Piece {
@@ -470,7 +528,7 @@ mod tests {
             }]
         );
 
-        picker.add_piece_to_download(2.into());
+        picker.add_piece_to_download(2.into(), false);
         assert_eq!(
             &picker.to_download,
             &[TaskDownload::PiecesRange {
@@ -479,7 +537,7 @@ mod tests {
             }]
         );
 
-        picker.add_piece_to_download(3.into());
+        picker.add_piece_to_download(3.into(), false);
         assert_eq!(
             &picker.to_download,
             &[TaskDownload::PiecesRange {
@@ -488,7 +546,7 @@ mod tests {
             }]
         );
 
-        picker.add_piece_to_download(5.into());
+        picker.add_piece_to_download(5.into(), false);
         assert_eq!(
             &picker.to_download,
             &[
@@ -502,7 +560,7 @@ mod tests {
             ]
         );
 
-        picker.add_piece_to_download(0.into());
+        picker.add_piece_to_download(0.into(), false);
         assert_eq!(
             &picker.to_download,
             &[
@@ -521,9 +579,224 @@ mod tests {
     }
 
     #[test]
-    fn picker() {
-        logger::start();
+    fn picker_next_pieces() {
+        let pieces_info = Arc::new(Pieces {
+            info_hash: Arc::new([]),
+            num_pieces: 9,
+            sha1_pieces: Arc::new(Vec::new()),
+            block_size: 100,
+            last_block_size: 50,
+            nblocks_piece: 13,
+            nblocks_last_piece: 8,
+            piece_length: 1250,
+            last_piece_length: 791,
+            files_size: 0,
+        });
 
+        let piece_length = pieces_info.piece_length;
+
+        let mut picker = PiecePicker::new(&pieces_info);
+        let collector = PieceCollector::new(&pieces_info);
+
+        picker.update(&BitFieldUpdate::Piece(4.into()));
+        picker.update(&BitFieldUpdate::Piece(5.into()));
+        picker.update(&BitFieldUpdate::Piece(6.into()));
+        picker.update(&BitFieldUpdate::Piece(7.into()));
+        picker.update(&BitFieldUpdate::Piece(8.into()));
+
+        let bitfield = BitField::from(&[0b11111111, 0b11111111], 9).unwrap();
+
+        let peer1 = PeerId::new(1);
+        let to_download = picker.pick_piece(peer1, piece_length * 4, 1, &bitfield, &collector);
+
+        assert_eq!(
+            to_download.unwrap().1,
+            &[TaskDownload::PiecesRange {
+                start: 0.into(),
+                end: 4.into(),
+            },]
+        );
+    }
+
+    #[test]
+    fn peers_per_piece_order() {
+        let ordered = [
+            PeersPerPiece {
+                npeers: 0,
+                index: 0.into(),
+            },
+            PeersPerPiece {
+                npeers: 0,
+                index: 1.into(),
+            },
+            PeersPerPiece {
+                npeers: 0,
+                index: 2.into(),
+            },
+            PeersPerPiece {
+                npeers: 1,
+                index: 0.into(),
+            },
+            PeersPerPiece {
+                npeers: 1,
+                index: 1.into(),
+            },
+            PeersPerPiece {
+                npeers: 1,
+                index: 3.into(),
+            },
+            PeersPerPiece {
+                npeers: 2,
+                index: 0.into(),
+            },
+            PeersPerPiece {
+                npeers: 2,
+                index: 1.into(),
+            },
+            PeersPerPiece {
+                npeers: 2,
+                index: 2.into(),
+            },
+        ];
+
+        let mut unordered = [
+            PeersPerPiece {
+                npeers: 1,
+                index: 3.into(),
+            },
+            PeersPerPiece {
+                npeers: 2,
+                index: 2.into(),
+            },
+            PeersPerPiece {
+                npeers: 0,
+                index: 0.into(),
+            },
+            PeersPerPiece {
+                npeers: 2,
+                index: 1.into(),
+            },
+            PeersPerPiece {
+                npeers: 1,
+                index: 1.into(),
+            },
+            PeersPerPiece {
+                npeers: 0,
+                index: 1.into(),
+            },
+            PeersPerPiece {
+                npeers: 1,
+                index: 0.into(),
+            },
+            PeersPerPiece {
+                npeers: 0,
+                index: 2.into(),
+            },
+            PeersPerPiece {
+                npeers: 2,
+                index: 0.into(),
+            },
+        ];
+
+        for _ in 0..100 {
+            unordered.sort_unstable();
+            assert_eq!(ordered, unordered);
+            fastrand::shuffle(&mut unordered);
+        }
+    }
+
+    #[test]
+    fn picker_next_pieces_with_empty() {
+        let pieces_info = Arc::new(Pieces {
+            info_hash: Arc::new([]),
+            num_pieces: 9,
+            sha1_pieces: Arc::new(Vec::new()),
+            block_size: 100,
+            last_block_size: 50,
+            nblocks_piece: 13,
+            nblocks_last_piece: 8,
+            piece_length: 1250,
+            last_piece_length: 791,
+            files_size: 0,
+        });
+
+        let piece_length = pieces_info.piece_length;
+
+        let mut picker = PiecePicker::new(&pieces_info);
+        let mut collector = PieceCollector::new(&pieces_info);
+
+        picker.update(&BitFieldUpdate::Piece(4.into()));
+        picker.update(&BitFieldUpdate::Piece(5.into()));
+        picker.update(&BitFieldUpdate::Piece(6.into()));
+        picker.update(&BitFieldUpdate::Piece(7.into()));
+        picker.update(&BitFieldUpdate::Piece(8.into()));
+
+        collector.add_block(&Block {
+            piece_index: 2.into(),
+            index: 0.into(),
+            block: vec![0; 10].into_boxed_slice(),
+        });
+
+        let bitfield = BitField::from(&[0b11111111, 0b11111111], 9).unwrap();
+
+        let peer1 = PeerId::new(1);
+        let to_download = picker.pick_piece(peer1, piece_length * 4, 1, &bitfield, &collector);
+
+        assert_eq!(
+            to_download.unwrap().1,
+            &[TaskDownload::PiecesRange {
+                start: 0.into(),
+                end: 2.into(),
+            },]
+        );
+
+        println!("picker {:#?}", picker);
+    }
+
+    #[test]
+    fn picker_next_pieces_only_no_jump() {
+        let pieces_info = Arc::new(Pieces {
+            info_hash: Arc::new([]),
+            num_pieces: 9,
+            sha1_pieces: Arc::new(Vec::new()),
+            block_size: 100,
+            last_block_size: 50,
+            nblocks_piece: 13,
+            nblocks_last_piece: 8,
+            piece_length: 1250,
+            last_piece_length: 791,
+            files_size: 0,
+        });
+
+        let piece_length = pieces_info.piece_length;
+
+        let mut picker = PiecePicker::new(&pieces_info);
+        let collector = PieceCollector::new(&pieces_info);
+
+        picker.update(&BitFieldUpdate::Piece(3.into()));
+        picker.update(&BitFieldUpdate::Piece(5.into()));
+        picker.update(&BitFieldUpdate::Piece(6.into()));
+        picker.update(&BitFieldUpdate::Piece(7.into()));
+        picker.update(&BitFieldUpdate::Piece(8.into()));
+
+        let bitfield = BitField::from(&[0b11111111, 0b11111111], 9).unwrap();
+
+        let peer1 = PeerId::new(1);
+        let to_download = picker.pick_piece(peer1, piece_length * 6, 1, &bitfield, &collector);
+
+        assert_eq!(
+            to_download.unwrap().1,
+            &[TaskDownload::PiecesRange {
+                start: 0.into(),
+                end: 3.into(),
+            },]
+        );
+
+        println!("picker {:#?}", picker);
+    }
+
+    #[test]
+    fn picker() {
         println!(
             "BlockToDownload {:?}",
             std::mem::size_of::<BlockToDownload>()
@@ -572,22 +845,22 @@ mod tests {
                 (0, 0.into()),
                 (0, 2.into()),
                 (0, 6.into()),
-                (1, 8.into()),
-                (1, 4.into()),
-                (1, 3.into()),
                 (1, 1.into()),
-                (2, 7.into()),
+                (1, 3.into()),
+                (1, 4.into()),
+                (1, 8.into()),
                 (2, 5.into()),
+                (2, 7.into()),
             ],
         );
 
         let bitfield = BitField::from(&[0b11111111, 0b11111111], 9).unwrap();
 
         let peer1 = PeerId::new(1);
-        let to_download = picker.pick_piece(peer1, piece_length * 2, &bitfield, &collector);
+        let to_download = picker.pick_piece(peer1, piece_length * 2, 10, &bitfield, &collector);
 
         assert_eq!(
-            to_download.unwrap(),
+            to_download.unwrap().1,
             &[
                 TaskDownload::Piece {
                     piece_index: 0.into()
@@ -599,10 +872,10 @@ mod tests {
         );
 
         let to_download =
-            picker.pick_piece(PeerId::new(2), piece_length + 21, &bitfield, &collector);
+            picker.pick_piece(PeerId::new(2), piece_length + 21, 10, &bitfield, &collector);
 
         assert_eq!(
-            to_download.unwrap(),
+            to_download.unwrap().1,
             &[
                 TaskDownload::Piece {
                     piece_index: 6.into()
@@ -635,10 +908,10 @@ mod tests {
         });
 
         let to_download =
-            picker.pick_piece(PeerId::new(3), piece_length * 3, &bitfield, &collector);
+            picker.pick_piece(PeerId::new(3), piece_length * 3, 10, &bitfield, &collector);
 
         assert_eq!(
-            to_download.unwrap(),
+            to_download.unwrap().1,
             &[
                 TaskDownload::Piece {
                     piece_index: PieceIndex(0)
@@ -672,11 +945,11 @@ mod tests {
                     piece_index: PieceIndex(6)
                 },
                 TaskDownload::Piece {
-                    piece_index: PieceIndex(8)
+                    piece_index: PieceIndex(1)
                 },
-                TaskDownload::Piece {
-                    piece_index: PieceIndex(4)
-                },
+                // TaskDownload::Piece {
+                //     piece_index: PieceIndex(4)
+                // },
             ]
         );
 
@@ -684,14 +957,14 @@ mod tests {
             &picker.states,
             &[
                 (false, &[PeerId::new(1), PeerId::new(2), PeerId::new(3)]),
-                (false, &[]),
+                (false, &[PeerId::new(3)]),
                 (false, &[PeerId::new(1), PeerId::new(3)]),
                 (false, &[]),
-                (false, &[PeerId::new(3)]),
+                (false, &[]),
                 (false, &[]),
                 (false, &[PeerId::new(2), PeerId::new(3)]),
                 (false, &[]),
-                (false, &[PeerId::new(3)]),
+                (false, &[]),
             ],
         );
 
@@ -699,10 +972,10 @@ mod tests {
         picker.set_as_downloaded(2.into());
 
         let to_download =
-            picker.pick_piece(PeerId::new(4), piece_length * 2, &bitfield, &collector);
+            picker.pick_piece(PeerId::new(4), piece_length * 2, 10, &bitfield, &collector);
 
         assert_eq!(
-            to_download.unwrap(),
+            to_download.unwrap().1,
             &[
                 TaskDownload::Piece {
                     piece_index: PieceIndex(0)
@@ -725,37 +998,37 @@ mod tests {
                         PeerId::new(4),
                     ],
                 ),
-                (false, &[]),
+                (false, &[PeerId::new(3)]),
                 (true, &[PeerId::new(1), PeerId::new(3)]),
                 (false, &[PeerId::new(4)]),
-                (false, &[PeerId::new(3)]),
+                (false, &[]),
                 (false, &[]),
                 (true, &[PeerId::new(2), PeerId::new(3)]),
                 (false, &[]),
-                (false, &[PeerId::new(3)]),
+                (false, &[]),
             ],
         );
 
         let to_download =
-            picker.pick_piece(PeerId::new(4), piece_length * 8, &bitfield, &collector);
+            picker.pick_piece(PeerId::new(4), piece_length * 8, 10, &bitfield, &collector);
 
         assert_eq!(
-            to_download.unwrap(),
+            to_download.unwrap().1,
             &[
                 TaskDownload::Piece {
-                    piece_index: PieceIndex(1)
+                    piece_index: PieceIndex(4)
                 },
                 TaskDownload::Piece {
                     piece_index: PieceIndex(8)
                 },
                 TaskDownload::Piece {
-                    piece_index: PieceIndex(4)
-                },
-                TaskDownload::Piece {
-                    piece_index: PieceIndex(7)
+                    piece_index: PieceIndex(1)
                 },
                 TaskDownload::Piece {
                     piece_index: PieceIndex(5)
+                },
+                TaskDownload::Piece {
+                    piece_index: PieceIndex(7)
                 },
             ]
         );
@@ -772,14 +1045,14 @@ mod tests {
                         PeerId::new(4),
                     ],
                 ),
-                (false, &[PeerId::new(4)]),
+                (false, &[PeerId::new(4), PeerId::new(3)]),
                 (true, &[PeerId::new(1), PeerId::new(3)]),
                 (false, &[PeerId::new(4)]),
-                (false, &[PeerId::new(3), PeerId::new(4)]),
+                (false, &[PeerId::new(4)]),
                 (false, &[PeerId::new(4)]),
                 (true, &[PeerId::new(2), PeerId::new(3)]),
                 (false, &[PeerId::new(4)]),
-                (false, &[PeerId::new(3), PeerId::new(4)]),
+                (false, &[PeerId::new(4)]),
             ],
         );
 
@@ -789,10 +1062,10 @@ mod tests {
         bitfield2.set_bit(8usize);
 
         let to_download =
-            picker.pick_piece(PeerId::new(5), piece_length * 8, &bitfield2, &collector);
+            picker.pick_piece(PeerId::new(5), piece_length * 8, 10, &bitfield2, &collector);
 
         assert_eq!(
-            to_download.unwrap(),
+            to_download.unwrap().1,
             &[
                 TaskDownload::Piece {
                     piece_index: PieceIndex(0)
@@ -805,6 +1078,8 @@ mod tests {
                 },
             ]
         );
+
+        println!("AAAAA");
 
         assert_eq_states(
             &picker.states,
@@ -819,16 +1094,18 @@ mod tests {
                         PeerId::new(5),
                     ],
                 ),
-                (false, &[PeerId::new(4)]),
+                (false, &[PeerId::new(4), PeerId::new(3)]),
                 (true, &[PeerId::new(1), PeerId::new(3)]),
                 (false, &[PeerId::new(4)]),
-                (false, &[PeerId::new(3), PeerId::new(4)]),
+                (false, &[PeerId::new(4)]),
                 (false, &[PeerId::new(4)]),
                 (true, &[PeerId::new(2), PeerId::new(3)]),
                 (false, &[PeerId::new(4), PeerId::new(5)]),
-                (false, &[PeerId::new(3), PeerId::new(4), PeerId::new(5)]),
+                (false, &[PeerId::new(4), PeerId::new(5)]),
             ],
         );
+
+        println!("BBBBBB");
 
         picker.remove_peer(PeerId::new(5));
 
@@ -844,21 +1121,26 @@ mod tests {
                         PeerId::new(4),
                     ],
                 ),
-                (false, &[PeerId::new(4)]),
+                (false, &[PeerId::new(4), PeerId::new(3)]),
                 (true, &[PeerId::new(1), PeerId::new(3)]),
                 (false, &[PeerId::new(4)]),
-                (false, &[PeerId::new(3), PeerId::new(4)]),
+                (false, &[PeerId::new(4)]),
                 (false, &[PeerId::new(4)]),
                 (true, &[PeerId::new(2), PeerId::new(3)]),
                 (false, &[PeerId::new(4)]),
-                (false, &[PeerId::new(3), PeerId::new(4)]),
+                (false, &[PeerId::new(4)]),
             ],
         );
 
         let bitfield3 = BitField::from(&[0, 0], 9).unwrap();
 
-        let to_download =
-            picker.pick_piece(PeerId::new(9191), piece_length * 8, &bitfield3, &collector);
+        let to_download = picker.pick_piece(
+            PeerId::new(9191),
+            piece_length * 8,
+            10,
+            &bitfield3,
+            &collector,
+        );
 
         assert!(to_download.is_none());
 
@@ -869,10 +1151,10 @@ mod tests {
         });
 
         let to_download =
-            picker.pick_piece(PeerId::new(6), piece_length * 8, &bitfield2, &collector);
+            picker.pick_piece(PeerId::new(6), piece_length * 8, 10, &bitfield2, &collector);
 
         assert_eq!(
-            to_download.unwrap(),
+            to_download.unwrap().1,
             &[
                 TaskDownload::Piece {
                     piece_index: PieceIndex(0)
@@ -911,14 +1193,14 @@ mod tests {
                         PeerId::new(6),
                     ],
                 ),
-                (false, &[PeerId::new(4)]),
+                (false, &[PeerId::new(4), PeerId::new(3)]),
                 (true, &[PeerId::new(1), PeerId::new(3)]),
                 (false, &[PeerId::new(4)]),
-                (false, &[PeerId::new(3), PeerId::new(4)]),
+                (false, &[PeerId::new(4)]),
                 (false, &[PeerId::new(4)]),
                 (true, &[PeerId::new(2), PeerId::new(3)]),
                 (false, &[PeerId::new(4), PeerId::new(6)]),
-                (false, &[PeerId::new(3), PeerId::new(4), PeerId::new(6)]),
+                (false, &[PeerId::new(4), PeerId::new(6)]),
             ],
         );
 

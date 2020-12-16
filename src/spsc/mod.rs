@@ -41,12 +41,12 @@ impl<T> Debug for PushError<T> {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-enum PopError {
+pub enum PopError {
     Empty,
     Closed,
 }
 
-struct Queue<T> {
+pub struct Queue<T> {
     /// pop modify the head
     head: AtomicUsize,
     /// push modify the tail
@@ -56,42 +56,62 @@ struct Queue<T> {
     mask_bit: usize,
 }
 
-struct Receiver<T> {
+pub struct Consumer<T> {
     queue: Arc<Queue<T>>,
 }
 
-impl<T> Receiver<T> {
+impl<T> Consumer<T> {
     pub fn pop(&mut self) -> Result<T, PopError> {
         self.queue.pop()
     }
-}
 
-struct Sender<T> {
-    queue: Arc<Queue<T>>,
-}
+    pub fn len(&self) -> usize {
+        self.queue.len()
+    }
 
-impl<T> Sender<T> {
-    pub fn push(&mut self, value: T) -> Result<(), PushError<T>> {
-        self.queue.push(value)
+    pub fn is_empty(&self) -> bool {
+        self.queue.is_empty()
     }
 }
 
-impl<T: Copy> Sender<T> {
+pub struct Producer<T> {
+    queue: Arc<Queue<T>>,
+}
+
+impl<T> Producer<T> {
+    pub fn push(&mut self, value: T) -> Result<(), PushError<T>> {
+        self.queue.push(value)
+    }
+
+    pub fn len(&self) -> usize {
+        self.queue.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.queue.is_empty()
+    }
+
+    pub fn available(&self) -> usize {
+        self.queue.available()
+    }
+}
+
+impl<T: Copy> Producer<T> {
     pub fn push_slice(&self, slice: &[T]) -> Result<(), PushError<()>> {
         self.queue.push_slice(slice)
     }
 }
 
-unsafe impl<T> Send for Sender<T> {}
-unsafe impl<T> Send for Receiver<T> {}
+unsafe impl<T> Send for Producer<T> {}
+unsafe impl<T> Send for Consumer<T> {}
 
-impl<T> Drop for Sender<T> {
+impl<T> Drop for Producer<T> {
     fn drop(&mut self) {
         self.queue.set_closed();
     }
 }
 
-impl<T> Drop for Receiver<T> {
+impl<T> Drop for Consumer<T> {
     fn drop(&mut self) {
         self.queue.set_closed();
     }
@@ -104,6 +124,10 @@ impl<T> Drop for Queue<T> {
             drop(value)
         }
     }
+}
+
+pub fn bounded<T>(capacity: usize) -> (Producer<T>, Consumer<T>) {
+    Queue::new(capacity)
 }
 
 impl<T> Queue<T> {
@@ -124,14 +148,14 @@ impl<T> Queue<T> {
     }
 
     #[allow(clippy::new_ret_no_self)]
-    pub fn new(capacity: usize) -> (Sender<T>, Receiver<T>) {
+    fn new(capacity: usize) -> (Producer<T>, Consumer<T>) {
         let queue = Arc::new(Self::new_queue(capacity));
 
         (
-            Sender {
+            Producer {
                 queue: Arc::clone(&queue),
             },
-            Receiver { queue },
+            Consumer { queue },
         )
     }
 
@@ -141,20 +165,26 @@ impl<T> Queue<T> {
             .unwrap();
     }
 
-    pub fn len(&self) -> usize {
-        let tail = self.tail.load(Acquire);
-        tail - self.head.load(Acquire)
+    fn len(&self) -> usize {
+        let tail = self.tail.load(Acquire) & (self.mask_bit - 1);
+        let head = self.head.load(Acquire) & (self.mask_bit - 1);
+
+        if tail < head {
+            (tail + self.buffer.len()) - head
+        } else {
+            tail - head
+        }
     }
 
-    pub fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    pub fn available(&self) -> usize {
+    fn available(&self) -> usize {
         self.buffer.len() - self.len()
     }
 
-    pub fn push(&self, elem: T) -> Result<(), PushError<T>> {
+    fn push(&self, elem: T) -> Result<(), PushError<T>> {
         let tail = self.tail.load(Relaxed);
         let head = self.head.load(Acquire);
 
@@ -182,7 +212,7 @@ impl<T> Queue<T> {
         }
     }
 
-    pub fn pop(&self) -> Result<T, PopError> {
+    fn pop(&self) -> Result<T, PopError> {
         let head = self.head.load(Relaxed);
         let tail = self.tail.load(Acquire);
 
@@ -212,7 +242,7 @@ impl<T> Queue<T> {
 }
 
 impl<T: Copy> Queue<T> {
-    pub fn push_slice(&self, slice: &[T]) -> Result<(), PushError<()>> {
+    fn push_slice(&self, slice: &[T]) -> Result<(), PushError<()>> {
         let tail = self.tail.load(Relaxed);
         let head = self.head.load(Acquire);
 

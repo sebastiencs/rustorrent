@@ -1,14 +1,20 @@
 use async_channel::{bounded, Receiver, Sender};
 use crossbeam_channel::Sender as SyncSender;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{
+        AtomicUsize,
+        Ordering::{Acquire, Relaxed},
+    },
+    Arc,
+};
 // use log::info;
-use kv_log_macro::{debug, info, warn};
+use kv_log_macro::{debug, error, info, warn};
 
 use std::net::SocketAddr;
 
 use crate::{
     actors::{
-        peer::{Peer, PeerCommand, PeerExternId, PeerId, PeerTask},
+        peer::{Peer, PeerCommand, PeerExternId, PeerId},
         sha1::Sha1Task,
     },
     bitfield::{BitField, BitFieldUpdate},
@@ -16,18 +22,32 @@ use crate::{
     metadata::Torrent,
     piece_collector::{Block, PieceCollector},
     piece_picker::PiecePicker,
-    pieces::Pieces,
+    pieces::{Pieces, TaskDownload},
+    spsc::{self, Producer},
     supervisors::tracker::TrackerSupervisor,
     utils::Map,
 };
 
+pub struct Shared {
+    pub nbytes_on_tasks: AtomicUsize,
+}
+
+impl Shared {
+    pub fn new() -> Self {
+        Shared {
+            nbytes_on_tasks: AtomicUsize::new(0),
+        }
+    }
+}
+
 struct PeerState {
     socket: SocketAddr,
     bitfield: BitField,
-    queue_tasks: PeerTask,
+    queue_tasks: Producer<TaskDownload>,
     addr: Sender<PeerCommand>,
     extern_id: Arc<PeerExternId>,
     tasks_nbytes: usize,
+    shared: Arc<Shared>,
 }
 
 /// Message sent to TorrentSupervisor
@@ -36,21 +56,33 @@ pub enum TorrentNotification {
     /// to the list of peers
     AddPeer {
         id: PeerId,
-        queue: PeerTask,
+        queue: Producer<TaskDownload>,
         addr: Sender<PeerCommand>,
         socket: SocketAddr,
         extern_id: Arc<PeerExternId>,
+        shared: Arc<Shared>,
     },
     /// Message sent when a peer is destroyed (deconnected, ..)
     /// The peer is then removed to the list of peers
-    RemovePeer { id: PeerId },
+    RemovePeer {
+        id: PeerId,
+    },
+    IncreaseTasksPeer {
+        id: PeerId,
+    },
     // /// Message sent when a Peer downloaded a full piece
     // AddPiece { id: PeerId, piece: PieceBuffer },
     /// Message sent when a Peer downloaded a block
-    AddBlock { id: PeerId, block: Block },
+    AddBlock {
+        id: PeerId,
+        block: Block,
+    },
     /// Update the bitfield of a Peer.
     /// It is sent when the Peer received a BITFIELD or HAVE message
-    UpdateBitfield { id: PeerId, update: BitFieldUpdate },
+    UpdateBitfield {
+        id: PeerId,
+        update: BitFieldUpdate,
+    },
     /// Whether or not the piece match its sha1 sum
     ResultChecksum {
         /// This id is a slab id
@@ -58,7 +90,9 @@ pub enum TorrentNotification {
         valid: bool,
     },
     /// When a tracker discover peers, it send this message
-    PeerDiscovered { addrs: Vec<SocketAddr> },
+    PeerDiscovered {
+        addrs: Vec<SocketAddr>,
+    },
 }
 
 impl std::fmt::Debug for TorrentNotification {
@@ -72,6 +106,10 @@ impl std::fmt::Debug for TorrentNotification {
             RemovePeer { id } => f
                 .debug_struct("TorrentNotification")
                 .field("RemovePeer", &id)
+                .finish(),
+            IncreaseTasksPeer { id } => f
+                .debug_struct("TorrentNotification")
+                .field("IncreaseTasksPeer", &id)
                 .finish(),
             AddBlock { id: _, block } => f
                 .debug_struct("TorrentNotification")
@@ -118,7 +156,7 @@ pub type Result<T> = std::result::Result<T, TorrentError>;
 
 impl TorrentSupervisor {
     pub fn new(torrent: Torrent, sha1_workers: SyncSender<Sha1Task>) -> TorrentSupervisor {
-        let (my_addr, receiver) = bounded(100);
+        let (my_addr, receiver) = bounded(10000);
         let pieces_infos = Arc::new(Pieces::from(&torrent));
 
         let extern_id = Arc::new(PeerExternId::generate());
@@ -162,14 +200,16 @@ impl TorrentSupervisor {
         let extern_id = self.extern_id.clone();
 
         tokio::spawn(async move {
-            let mut peer = match Peer::new(addr, pieces_infos, my_addr, extern_id).await {
+            let (producer, consumer) = spsc::bounded(256);
+
+            let mut peer = match Peer::new(addr, pieces_infos, my_addr, extern_id, consumer).await {
                 Ok(peer) => peer,
                 Err(e) => {
                     warn!("Peer error {:?}", e, { addr: addr.to_string() });
                     return;
                 }
             };
-            let result = peer.start().await;
+            let result = peer.start(producer).await;
             warn!("[{}] Peer terminated: {:?}", peer.internal_id(), result, { addr: addr.to_string() });
         });
     }
@@ -189,13 +229,23 @@ impl TorrentSupervisor {
                         }
 
                         let tasks_nbytes = peer.tasks_nbytes;
+                        let available = peer.queue_tasks.available();
 
-                        self.piece_picker.pick_piece(
+                        if let Some((nbytes, tasks)) = self.piece_picker.pick_piece(
                             id,
                             tasks_nbytes,
+                            available,
                             &peer.bitfield,
                             &self.collector,
-                        );
+                        ) {
+                            warn!("[{}] Tasks found {:?}", id, tasks);
+                            peer.shared.nbytes_on_tasks.fetch_add(nbytes, Relaxed);
+                            peer.queue_tasks.push_slice(tasks).unwrap();
+                        } else {
+                            warn!("[{}] Tasks not found", id);
+                        }
+
+                        peer.addr.send(PeerCommand::TasksAvailables).await.ok();
 
                         // TODO: Send to Peer
 
@@ -220,8 +270,14 @@ impl TorrentSupervisor {
                 }
                 RemovePeer { id } => {
                     self.peers.remove(&id);
-
                     self.piece_picker.remove_peer(id);
+                }
+                IncreaseTasksPeer { id } => {
+                    if let Some(peer) = self.peers.get_mut(&id) {
+                        info!("[{}] Multiply tasks {:?}", id, peer.tasks_nbytes * 3);
+                        peer.tasks_nbytes *= 3;
+                        peer.addr.send(PeerCommand::TasksIncreased).await.ok();
+                    }
                 }
                 AddPeer {
                     id,
@@ -229,6 +285,7 @@ impl TorrentSupervisor {
                     addr,
                     socket,
                     extern_id,
+                    shared,
                 } => {
                     if self.is_duplicate_peer(&extern_id) {
                         // We are already connected to this peer, disconnect.
@@ -244,6 +301,7 @@ impl TorrentSupervisor {
                                 addr,
                                 socket,
                                 extern_id,
+                                shared,
                                 tasks_nbytes: self.pieces_infos.piece_length,
                             },
                         );
@@ -260,12 +318,33 @@ impl TorrentSupervisor {
                     if let Some(peer) = self.peers.get_mut(&id) {
                         let tasks_nbytes = peer.tasks_nbytes;
 
-                        self.piece_picker.pick_piece(
-                            id,
-                            tasks_nbytes,
-                            &peer.bitfield,
-                            &self.collector,
-                        );
+                        if peer.shared.nbytes_on_tasks.load(Acquire) < tasks_nbytes / 2 {
+                            let available = peer.queue_tasks.available().saturating_sub(1);
+
+                            if let Some((nbytes, tasks)) = self.piece_picker.pick_piece(
+                                id,
+                                tasks_nbytes,
+                                available,
+                                &peer.bitfield,
+                                &self.collector,
+                            ) {
+                                // TODO: For fast peer, adding more than 1 piece when avaible is 1
+                                info!("[{}] Adding {} tasks {:?}", id, tasks.len(), tasks);
+                                peer.shared.nbytes_on_tasks.fetch_add(nbytes, Relaxed);
+                                peer.queue_tasks.push_slice(tasks).unwrap_or_else(|e| {
+                                    error!(
+                                        "[{}] available={} slice_length={} error={:?}",
+                                        id,
+                                        available,
+                                        tasks.len(),
+                                        e
+                                    );
+                                    panic!();
+                                });
+
+                                peer.addr.send(PeerCommand::TasksAvailables).await.ok();
+                            }
+                        }
 
                         // TODO: Send to Peer
 

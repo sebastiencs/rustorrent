@@ -305,7 +305,7 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn read_torrent_file() {
         let file = env!("CARGO_MANIFEST_DIR").to_owned()
-            + "/scripts/Fedora-Workstation-Live-x86_64-33_Beta.torrent";
+            + "/scripts/Fedora-Workstation-Live-x86_64-33.torrent";
         let buffer = std::fs::read(file).unwrap();
 
         let torrent = de::read_meta(&buffer).unwrap();
