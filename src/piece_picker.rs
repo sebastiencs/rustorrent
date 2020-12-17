@@ -432,6 +432,23 @@ impl PiecePicker {
         }
     }
 
+    pub fn would_pick_piece(
+        &mut self,
+        peer_id: PeerId,
+        bitfield: &BitField,
+        collector: &PieceCollector,
+    ) -> bool {
+        let mut found = false;
+
+        self.haves.clear();
+        self.pick_piece_inner(peer_id, bitfield, collector, |_, _| {
+            found = true;
+            PickMode::Stop
+        });
+
+        found
+    }
+
     pub fn remove_peer(&mut self, peer_id: PeerId) {
         for state in &mut *self.states {
             state.workers.remove(&peer_id);

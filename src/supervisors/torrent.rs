@@ -260,9 +260,17 @@ impl TorrentSupervisor {
                 }
                 IncreaseTasksPeer { id } => {
                     if let Some(peer) = self.peers.get_mut(&id) {
-                        info!("[{}] Multiply tasks {:?}", id, peer.tasks_nbytes * 3);
-                        peer.tasks_nbytes *= 3;
-                        peer.addr.send(PeerCommand::TasksIncreased).await.ok();
+                        if self
+                            .piece_picker
+                            .would_pick_piece(id, &peer.bitfield, &self.collector)
+                        {
+                            info!("[{}] Multiply tasks {:?}", id, peer.tasks_nbytes * 3);
+
+                            peer.tasks_nbytes = peer.tasks_nbytes.saturating_mul(3);
+                            peer.addr.send(PeerCommand::TasksIncreased).await.ok();
+                        } else {
+                            info!("[{}] No more piece available for this peer", id);
+                        }
                     }
                 }
                 AddPeer {
