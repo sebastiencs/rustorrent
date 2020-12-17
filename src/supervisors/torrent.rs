@@ -56,17 +56,19 @@ struct PeerState {
     shared: Arc<Shared>,
 }
 
+pub struct NewPeer {
+    pub id: PeerId,
+    pub queue: Producer<TaskDownload>,
+    pub addr: Sender<PeerCommand>,
+    pub socket: SocketAddr,
+    pub extern_id: Arc<PeerExternId>,
+    pub shared: Arc<Shared>,
+}
+
 /// Message sent to TorrentSupervisor
 pub enum TorrentNotification {
-    /// When a Peer is connected, it send this message to be added
-    /// to the list of peers
     AddPeer {
-        id: PeerId,
-        queue: Producer<TaskDownload>,
-        addr: Sender<PeerCommand>,
-        socket: SocketAddr,
-        extern_id: Arc<PeerExternId>,
-        shared: Arc<Shared>,
+        peer: Box<NewPeer>,
     },
     /// Message sent when a peer is destroyed (deconnected, ..)
     /// The peer is then removed to the list of peers
@@ -87,7 +89,7 @@ pub enum TorrentNotification {
     /// It is sent when the Peer received a BITFIELD or HAVE message
     UpdateBitfield {
         id: PeerId,
-        update: BitFieldUpdate,
+        update: Box<BitFieldUpdate>,
     },
     /// Whether or not the piece match its sha1 sum
     ResultChecksum {
@@ -105,9 +107,9 @@ impl std::fmt::Debug for TorrentNotification {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         use TorrentNotification::*;
         match self {
-            AddPeer { id, .. } => f
+            AddPeer { peer } => f
                 .debug_struct("TorrentNotification")
-                .field("AddPeer", &id)
+                .field("AddPeer", &peer.id)
                 .finish(),
             RemovePeer { id } => f
                 .debug_struct("TorrentNotification")
@@ -228,7 +230,7 @@ impl TorrentSupervisor {
                 UpdateBitfield { id, update } => {
                     if let Some(peer) = self.peers.get_mut(&id) {
                         self.piece_picker.update(&update);
-                        peer.bitfield.update(update);
+                        peer.bitfield.update(*update);
 
                         if !peer.queue_tasks.is_empty() {
                             continue;
@@ -273,29 +275,22 @@ impl TorrentSupervisor {
                         }
                     }
                 }
-                AddPeer {
-                    id,
-                    queue,
-                    addr,
-                    socket,
-                    extern_id,
-                    shared,
-                } => {
-                    if self.is_duplicate_peer(&extern_id) {
+                AddPeer { peer } => {
+                    if self.is_duplicate_peer(&peer.extern_id) {
                         // We are already connected to this peer, disconnect.
                         // This happens when we are connected to its ipv4 and ipv6 addresses
 
-                        addr.send(PeerCommand::Die).await.unwrap();
+                        peer.addr.send(PeerCommand::Die).await.unwrap();
                     } else {
                         self.peers.insert(
-                            id,
+                            peer.id,
                             PeerState {
                                 bitfield: BitField::new(self.pieces_infos.num_pieces),
-                                queue_tasks: queue,
-                                addr,
-                                socket,
-                                extern_id,
-                                shared,
+                                queue_tasks: peer.queue,
+                                addr: peer.addr,
+                                socket: peer.socket,
+                                extern_id: peer.extern_id,
+                                shared: peer.shared,
                                 tasks_nbytes: self.pieces_infos.piece_length,
                             },
                         );
@@ -354,5 +349,15 @@ impl TorrentSupervisor {
     /// Check if the peer extern id is already in our state
     fn is_duplicate_peer(&self, id: &PeerExternId) -> bool {
         self.peers.values().any(|p| &*p.extern_id == id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TorrentNotification;
+
+    #[test]
+    fn assert_message_size() {
+        assert_eq!(std::mem::size_of::<TorrentNotification>(), 40);
     }
 }

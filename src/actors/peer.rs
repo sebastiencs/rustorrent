@@ -28,7 +28,7 @@ use crate::{
     piece_picker::{BlockIndex, PieceIndex},
     pieces::{BlockToDownload, IterTaskDownload, Pieces, TaskDownload},
     spsc::{Consumer, Producer},
-    supervisors::torrent::{Result, Shared, TorrentNotification},
+    supervisors::torrent::{NewPeer, Result, Shared, TorrentNotification},
 };
 
 static PEER_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -545,12 +545,14 @@ impl Peer {
 
         self.supervisor
             .send(TorrentNotification::AddPeer {
-                id: self.id,
-                queue: producer,
-                addr,
-                socket: self.addr,
-                extern_id,
-                shared: Arc::clone(&self.shared),
+                peer: Box::new(NewPeer {
+                    id: self.id,
+                    queue: producer,
+                    addr,
+                    socket: self.addr,
+                    extern_id,
+                    shared: Arc::clone(&self.shared),
+                }),
             })
             .await
             .unwrap();
@@ -684,7 +686,7 @@ impl Peer {
                 self.supervisor
                     .send(UpdateBitfield {
                         id: self.id,
-                        update,
+                        update: Box::new(update),
                     })
                     .await
                     .unwrap();
@@ -703,7 +705,7 @@ impl Peer {
                 self.supervisor
                     .send(UpdateBitfield {
                         id: self.id,
-                        update,
+                        update: Box::new(update),
                     })
                     .await
                     .unwrap();
