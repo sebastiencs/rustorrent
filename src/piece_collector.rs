@@ -239,7 +239,6 @@ impl PieceMetadata {
 
 pub struct IterEmptyRanges<'c> {
     start_at: BlockIndex,
-    block_size: u32,
     piece_length: u32,
     piece_metadata: Option<&'c PieceMetadata>,
 }
@@ -248,7 +247,7 @@ impl Iterator for IterEmptyRanges<'_> {
     type Item = Range<u32>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut next = match self.piece_metadata {
+        let next = match self.piece_metadata {
             Some(m) => m.next_empty_range(self.start_at),
             _ => {
                 if self.piece_length == u32::from(self.start_at) {
@@ -259,15 +258,8 @@ impl Iterator for IterEmptyRanges<'_> {
             }
         };
 
-        if let Some(next) = &mut next {
-            let start = next.start.max(self.start_at.into());
-            let end = next.end.min(start + self.block_size);
-
-            self.start_at = end.into();
-            next.start = start;
-            next.end = end;
-
-            assert!(end > start && end <= self.piece_length);
+        if let Some(ref next) = next {
+            self.start_at = next.end.into()
         };
 
         next
@@ -299,7 +291,6 @@ impl PieceCollector {
 
         IterEmptyRanges {
             start_at: 0.into(),
-            block_size: self.pieces_infos.block_size,
             piece_length: self.pieces_infos.piece_size_of(piece_index),
             piece_metadata: self.pieces.get(&piece_index),
         }
@@ -355,21 +346,7 @@ mod tests {
 
         let iter = collector.iter_empty_ranges(1.into());
 
-        for (empty, cmp) in iter.zip(&[
-            (0, 100),
-            (100, 100),
-            (200, 100),
-            (300, 100),
-            (400, 100),
-            (500, 100),
-            (600, 100),
-            (700, 100),
-            (800, 100),
-            (900, 100),
-            (1000, 100),
-            (1100, 100),
-            (1200, 50),
-        ]) {
+        for (empty, cmp) in iter.zip(&[(0, 1250)]) {
             assert_eq!(empty.start, cmp.0);
             assert_eq!(empty.end, empty.start + cmp.1);
         }
@@ -386,20 +363,11 @@ mod tests {
             block: vec![0; 101].into_boxed_slice(),
         });
 
-        for (empty, cmp) in collector.iter_empty_ranges(2.into()).zip(&[
-            (0, 100),
-            (100, 100),
-            (200, 20),
-            (299, 100),
-            (399, 81),
-            (581, 100),
-            (681, 100),
-            (781, 100),
-            (881, 100),
-            (981, 100),
-            (1081, 100),
-            (1181, 69),
-        ]) {
+        for (empty, cmp) in
+            collector
+                .iter_empty_ranges(2.into())
+                .zip(&[(0, 220), (299, 181), (581, 669)])
+        {
             assert_eq!(empty.start, cmp.0);
             assert_eq!(empty.end, cmp.0 + cmp.1);
         }
@@ -416,13 +384,7 @@ mod tests {
             block: vec![0; 770].into_boxed_slice(),
         });
 
-        for (empty, cmp) in collector.iter_empty_ranges(3.into()).zip(&[
-            (79, 100),
-            (179, 100),
-            (279, 100),
-            (379, 100),
-            (479, 1),
-        ]) {
+        for (empty, cmp) in collector.iter_empty_ranges(3.into()).zip(&[(79, 401)]) {
             assert_eq!(empty.start, cmp.0);
             assert_eq!(empty.end, cmp.0 + cmp.1);
         }
@@ -439,16 +401,10 @@ mod tests {
             block: vec![0; 30].into_boxed_slice(),
         });
 
-        for (empty, cmp) in collector.iter_empty_ranges(8.into()).zip(&[
-            (79, 100),
-            (179, 100),
-            (279, 100),
-            (379, 100),
-            (479, 1),
-            (510, 100),
-            (610, 100),
-            (710, 81),
-        ]) {
+        for (empty, cmp) in collector
+            .iter_empty_ranges(8.into())
+            .zip(&[(79, 401), (510, 281)])
+        {
             assert_eq!(empty.start, cmp.0);
             assert_eq!(empty.end, cmp.0 + cmp.1);
         }
