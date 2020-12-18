@@ -57,7 +57,7 @@ impl From<u32> for PieceIndex {
 
 impl PieceIndex {
     pub fn next_piece(self) -> PieceIndex {
-        (self.0 + 1).into()
+        self.0.checked_add(1).unwrap().into()
     }
 }
 
@@ -144,9 +144,10 @@ impl PieceState {
 pub struct PiecePicker {
     pieces_infos: Arc<Pieces>,
 
+    /// Index in `sorted_index`
     /// The first `start_at` pieces are already downloaded
     start_at: usize,
-    ///
+    /// Array sorted by number of Peers having the piece
     sorted_index: Box<[PeersPerPiece]>,
 
     /// states[9] is the state of the piece at index 9
@@ -235,9 +236,11 @@ impl PiecePicker {
         mut fun: impl FnMut(&mut PiecePicker, Picked) -> PickMode,
     ) {
         if self.start_at == self.sorted_index.len() {
+            // All pieces are downloaded
             return;
         }
 
+        // Number of peers having the piece at the current index
         let mut npeers_current = self.sorted_index[self.start_at].npeers;
 
         for index in self.start_at..self.sorted_index.len() {
@@ -256,8 +259,15 @@ impl PiecePicker {
                 continue;
             }
 
+            // No worker requested the piece
             let is_empty = state.workers.is_empty();
 
+            // Branch taken when we reach a piece having a different number of peers
+            // Since we prioritize rarest piece first, we need to process
+            // pieces from previous iteration of the loop.
+            // For thoses pieces, there are already other workers requesting
+            // them but we want to download them before passing to pieces with more
+            // peers
             if npeers != npeers_current {
                 if !self.haves.is_empty() {
                     // Do not use randomness during tests, for assertions in tests
@@ -280,11 +290,14 @@ impl PiecePicker {
 
                     self.haves.clear();
                 }
+                // Pass to the pieces with more Peers having them
                 npeers_current = npeers;
             }
 
+            // This peer has this piece
             let have = bitfield.get_bit(piece_index);
 
+            // The peer have this piece and no worker is on it
             if have && is_empty {
                 let mode = if collector.is_empty(piece_index) {
                     fun(self, Picked::Full(piece_index))
@@ -299,11 +312,14 @@ impl PiecePicker {
                 continue;
             }
 
+            // The peer has this piece, but another worker is on it
+            // Save the piece for next iterations
             if have {
                 self.haves.push(piece_index);
             }
         }
 
+        // Process remaining pieces
         if !self.haves.is_empty() {
             // Do not use randomness during tests, for assertions in tests
             #[cfg(not(test))]
@@ -325,6 +341,9 @@ impl PiecePicker {
         }
     }
 
+    // `tasks_nbytes` Max number of bytes to pick
+    // `available` Max number of task to pick
+    // `bitfield` Bitfield of the Peer
     pub fn pick_piece(
         &mut self,
         peer_id: PeerId,
@@ -353,6 +372,8 @@ impl PiecePicker {
 
                     nbytes += piece_length as usize;
 
+                    // The max number of task is already reach
+                    // Do not push new task, only accept modifying a piece range
                     let no_push = picker.to_download.len() == available;
                     let would_push = picker.add_piece_to_download(piece_index, no_push);
 
@@ -367,6 +388,7 @@ impl PiecePicker {
                         return PickMode::Stop;
                     }
 
+                    // Iteration on the blocks not yet downloaded in the piece
                     for next_empty in collector.iter_empty_ranges(piece_index) {
                         found = true;
                         nbytes += (next_empty.end - next_empty.start) as usize;
@@ -441,6 +463,7 @@ impl PiecePicker {
     }
 
     fn sort_indexed(&mut self) {
+        // TODO: Improve this
         self.sorted_index.sort_unstable();
         self.start_at = self
             .sorted_index
