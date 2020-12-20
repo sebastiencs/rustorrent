@@ -1,9 +1,14 @@
 use std::sync::Arc;
 
-use crate::{logger, metadata::Torrent};
+use crate::{
+    actors::vfs::{VFSMessage, VFS},
+    logger,
+    metadata::Torrent,
+};
 //use crate::http_client::{self, AnnounceQuery, AnnounceResponse};
 
 //use crate::http_client::HttpError;
+use async_channel::Sender;
 use crossbeam_channel::{unbounded, Receiver as SyncReceiver, Sender as SyncSender};
 
 use tokio::runtime::Runtime;
@@ -21,6 +26,7 @@ struct SessionInner {
     cmds: SyncReceiver<SessionCommand>,
     actors: Vec<TorrentSupervisor>,
     sha1_workers: SyncSender<Sha1Task>,
+    vfs: Sender<VFSMessage>,
     runtime: Arc<Runtime>,
 }
 
@@ -42,8 +48,11 @@ impl SessionInner {
         match cmd {
             AddTorrent(torrent) => {
                 let sha1_workers = self.sha1_workers.clone();
+                let vfs = self.vfs.clone();
                 tokio::spawn(async move {
-                    TorrentSupervisor::new(torrent, sha1_workers).start().await;
+                    TorrentSupervisor::new(torrent, sha1_workers, vfs)
+                        .start()
+                        .await;
                 });
             }
         }
@@ -73,6 +82,7 @@ impl Session {
         let (sender, receiver) = unbounded();
         let runtime = Arc::new(Runtime::new().unwrap());
         let sha1_workers = Sha1Workers::new_pool(runtime.clone());
+        let vfs = VFS::new(runtime.clone());
         let runtime_clone = runtime.clone();
 
         let handle = std::thread::spawn(move || {
@@ -81,6 +91,7 @@ impl Session {
                 actors: vec![],
                 sha1_workers,
                 runtime: runtime_clone,
+                vfs,
             };
             session.start();
         });

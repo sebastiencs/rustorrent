@@ -37,10 +37,10 @@ pub enum InfoFile {
 
 #[derive(Debug)]
 pub struct TorrentFile {
-    path: PathBuf,
+    pub path: PathBuf,
     // TODO: Make it a shared pointer
-    md5sum: Option<String>,
-    length: u64,
+    pub md5sum: Option<String>,
+    pub length: u64,
 }
 
 #[derive(Serialize, Deserialize)]

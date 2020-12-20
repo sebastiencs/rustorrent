@@ -3,7 +3,7 @@ use crossbeam_channel::Sender as SyncSender;
 use std::sync::{
     atomic::{
         AtomicUsize,
-        Ordering::{Acquire, Relaxed},
+        Ordering::{self, Acquire, Relaxed},
     },
     Arc,
 };
@@ -16,17 +16,36 @@ use crate::{
     actors::{
         peer::{Peer, PeerCommand, PeerExternId, PeerId},
         sha1::Sha1Task,
+        vfs::VFSMessage,
     },
     bitfield::{BitField, BitFieldUpdate},
     errors::TorrentError,
     metadata::Torrent,
     piece_collector::{Block, PieceCollector},
-    piece_picker::PiecePicker,
+    piece_picker::{PieceIndex, PiecePicker},
     pieces::{Pieces, TaskDownload},
     spsc::{self, Producer},
     supervisors::tracker::TrackerSupervisor,
     utils::Map,
 };
+
+static TORRENT_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Eq, PartialEq, Copy, Clone, Debug, Hash)]
+pub struct TorrentId(usize);
+
+impl std::fmt::Display for TorrentId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Torrent {}", self.0)
+    }
+}
+
+impl TorrentId {
+    fn new() -> Self {
+        let id = TORRENT_COUNTER.fetch_add(1, Ordering::SeqCst);
+        Self(id)
+    }
+}
 
 pub struct Shared {
     pub nbytes_on_tasks: AtomicUsize,
@@ -101,6 +120,10 @@ pub enum TorrentNotification {
     PeerDiscovered {
         addrs: Box<[SocketAddr]>,
     },
+    PieceFromVFS {
+        piece: PieceIndex,
+        data: Box<[u8]>,
+    },
 }
 
 impl std::fmt::Debug for TorrentNotification {
@@ -136,11 +159,17 @@ impl std::fmt::Debug for TorrentNotification {
                 .debug_struct("TorrentNotification")
                 .field("addrs", &addrs)
                 .finish(),
+            TorrentNotification::PieceFromVFS { piece, .. } => f
+                .debug_struct("TorrentNotification")
+                .field("PieceFromVFS", &piece)
+                .finish(),
         }
     }
 }
 
 pub struct TorrentSupervisor {
+    id: TorrentId,
+
     metadata: Arc<Torrent>,
     receiver: Receiver<TorrentNotification>,
     // We keep a Sender to not close the channel
@@ -158,12 +187,18 @@ pub struct TorrentSupervisor {
     sha1_workers: SyncSender<Sha1Task>,
 
     extern_id: Arc<PeerExternId>,
+
+    vfs: Sender<VFSMessage>,
 }
 
 pub type Result<T> = std::result::Result<T, TorrentError>;
 
 impl TorrentSupervisor {
-    pub fn new(torrent: Torrent, sha1_workers: SyncSender<Sha1Task>) -> TorrentSupervisor {
+    pub fn new(
+        torrent: Torrent,
+        sha1_workers: SyncSender<Sha1Task>,
+        vfs: Sender<VFSMessage>,
+    ) -> TorrentSupervisor {
         let (my_addr, receiver) = bounded(10000);
         let pieces_infos = Arc::new(Pieces::from(&torrent));
 
@@ -172,7 +207,10 @@ impl TorrentSupervisor {
         let collector = PieceCollector::new(&pieces_infos);
         let piece_picker = PiecePicker::new(&pieces_infos);
 
+        let id = TorrentId::new();
+
         TorrentSupervisor {
+            id,
             metadata: Arc::new(torrent),
             receiver,
             my_addr,
@@ -182,6 +220,7 @@ impl TorrentSupervisor {
             peers: Map::default(),
             sha1_workers,
             extern_id,
+            vfs,
         }
     }
 
@@ -195,6 +234,15 @@ impl TorrentSupervisor {
                 .start()
                 .await;
         });
+
+        self.vfs
+            .send(VFSMessage::AddTorrent {
+                id: self.id,
+                meta: Arc::clone(&self.metadata),
+                pieces_infos: Arc::clone(&self.pieces_infos),
+            })
+            .await
+            .unwrap();
 
         self.process_cmds().await;
     }
@@ -299,9 +347,18 @@ impl TorrentSupervisor {
                 AddBlock { id, block } => {
                     let piece_index = block.piece_index;
 
-                    if let Some(_piece) = self.collector.add_block(&block) {
+                    if let Some(piece) = self.collector.add_block(&block) {
                         info!("[{}] Piece completed {:?}", id, piece_index);
                         self.piece_picker.set_as_downloaded(piece_index);
+
+                        self.vfs
+                            .send(VFSMessage::Write {
+                                id: self.id,
+                                piece: piece_index,
+                                data: piece,
+                            })
+                            .await
+                            .unwrap();
                     }
 
                     if let Some(peer) = self.peers.get_mut(&id) {
@@ -342,6 +399,7 @@ impl TorrentSupervisor {
                         }
                     }
                 }
+                PieceFromVFS { piece: _, data: _ } => {}
             }
         }
     }
@@ -349,6 +407,14 @@ impl TorrentSupervisor {
     /// Check if the peer extern id is already in our state
     fn is_duplicate_peer(&self, id: &PeerExternId) -> bool {
         self.peers.values().any(|p| &*p.extern_id == id)
+    }
+}
+
+impl Drop for TorrentSupervisor {
+    fn drop(&mut self) {
+        self.vfs
+            .try_send(VFSMessage::RemoveTorrent { id: self.id })
+            .unwrap();
     }
 }
 
