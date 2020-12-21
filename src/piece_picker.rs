@@ -875,7 +875,7 @@ mod tests {
                 TaskDownload::BlockRange {
                     piece_index: PieceIndex(0),
                     start: BlockIndex(0),
-                    end: BlockIndex(100)
+                    end: BlockIndex(122)
                 }
             ]
         );
@@ -1020,26 +1020,11 @@ mod tests {
                 TaskDownload::BlockRange {
                     piece_index: 2.into(),
                     start: 0.into(),
-                    end: 100.into()
-                },
-                TaskDownload::BlockRange {
-                    piece_index: 2.into(),
-                    start: 100.into(),
                     end: 122.into()
                 },
                 TaskDownload::BlockRange {
                     piece_index: 2.into(),
                     start: 964.into(),
-                    end: 1064.into()
-                },
-                TaskDownload::BlockRange {
-                    piece_index: 2.into(),
-                    start: 1064.into(),
-                    end: 1164.into()
-                },
-                TaskDownload::BlockRange {
-                    piece_index: 2.into(),
-                    start: 1164.into(),
                     end: 1250.into()
                 },
                 TaskDownload::Piece {
@@ -1262,18 +1247,8 @@ mod tests {
                 TaskDownload::BlockRange {
                     piece_index: PieceIndex(7),
                     start: BlockIndex(1042),
-                    end: BlockIndex(1142)
-                },
-                TaskDownload::BlockRange {
-                    piece_index: PieceIndex(7),
-                    start: BlockIndex(1142),
-                    end: BlockIndex(1242)
-                },
-                TaskDownload::BlockRange {
-                    piece_index: PieceIndex(7),
-                    start: BlockIndex(1242),
                     end: BlockIndex(1250)
-                }
+                },
             ]
         );
 

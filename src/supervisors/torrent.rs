@@ -423,6 +423,7 @@ mod tests {
     use super::TorrentNotification;
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn assert_message_size() {
         assert_eq!(std::mem::size_of::<TorrentNotification>(), 40);
     }
