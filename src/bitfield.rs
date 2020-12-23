@@ -34,7 +34,7 @@ impl BitField {
     }
 
     pub fn from(bitfield: &[u8], nbits: usize) -> Result<BitField> {
-        if nbits < bitfield.len() * 8 {
+        if nbits <= bitfield.len() * 8 {
             Ok(BitField {
                 inner: Vec::from_slice(bitfield).into_boxed_slice(),
                 nbits,
