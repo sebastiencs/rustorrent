@@ -112,8 +112,8 @@ pub struct AnnounceResponse {
     pub min_interval: Option<i64>,
     #[serde(rename = "tracker id")]
     pub tracker_id: Option<String>,
-    pub complete: i64,
-    pub incomplete: i64,
+    pub complete: Option<i64>,
+    pub incomplete: Option<i64>,
     pub downloaded: Option<i64>,
     pub peers: Option<Peers>,
     pub peers6: Option<Peers6>,
