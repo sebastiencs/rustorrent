@@ -328,7 +328,7 @@ impl TorrentSupervisor {
                         // We are already connected to this peer, disconnect.
                         // This happens when we are connected to its ipv4 and ipv6 addresses
 
-                        peer.addr.send(PeerCommand::Die).await.unwrap();
+                        peer.addr.send(PeerCommand::Die).await.ok();
                     } else {
                         self.peers.insert(
                             peer.id,
