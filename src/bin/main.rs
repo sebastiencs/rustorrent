@@ -16,10 +16,20 @@ use rustorrent::{bencode::de, session::Session};
 
 //use rustorrent::memory_pool::pool::CircularIterator;
 
+fn testss() {
+    let mut iou = iou::IoUring::new(256).unwrap();
+    println!("LA {:?}", iou.probe().unwrap());
+}
+
 //fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
 #[allow(unreachable_code)]
 #[tokio::main]
 async fn main() {
+    testss();
+    // rustorrent::io_uring::IoUring::new();
+
+    return;
+
     // use std::mem::ManuallyDrop;
     // use rustorrent::memory_pool::SharedArena;
 
