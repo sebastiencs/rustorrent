@@ -80,12 +80,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "631ae5198c9be5e753e5cc215e1bd73c2b466a3565173db433f52bb9d3e66dba"
 
 [[package]]
-name = "cc"
-version = "1.0.66"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c0496836a84f8d0495758516b8621a622beb77c0fed418570e50764093ced48"
-
-[[package]]
 name = "cfg-if"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -322,18 +316,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "iou"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22820ec519c7eb16f9ea64316062817963fae77652de6cd8e7655f97bf4fd6dc"
-dependencies = [
- "bitflags",
- "libc",
- "nix",
- "uring-sys",
-]
-
-[[package]]
 name = "itertools"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -429,18 +411,6 @@ checksum = "07b88fb9795d4d36d62a012dfbf49a8f5cf12751f36d31a9dbe66d528e58979e"
 dependencies = [
  "socket2",
  "winapi",
-]
-
-[[package]]
-name = "nix"
-version = "0.18.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83450fe6a6142ddd95fb064b746083fc4ef1705fe81f64a64e1d4b39f54a1055"
-dependencies = [
- "bitflags",
- "cc",
- "cfg-if 0.1.10",
- "libc",
 ]
 
 [[package]]
@@ -624,6 +594,7 @@ dependencies = [
  "ansi_term",
  "async-channel",
  "async-trait",
+ "bitflags",
  "byteorder",
  "chrono",
  "coarsetime",
@@ -634,7 +605,6 @@ dependencies = [
  "fixed",
  "futures",
  "hashbrown",
- "iou",
  "itertools",
  "kv-log-macro",
  "libc",
@@ -867,16 +837,6 @@ name = "unicode-xid"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f7fe0bb3479651439c9112f72b6c505038574c9fbb575ed1bf3b797fa39dd564"
-
-[[package]]
-name = "uring-sys"
-version = "0.7.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a0c460001a5aba8959d84d643a413a709b19871248651f912a264485da3324c"
-dependencies = [
- "cc",
- "libc",
-]
 
 [[package]]
 name = "url"
