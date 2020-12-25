@@ -89,6 +89,8 @@ struct CompletionQueueEntry {
     flags: u32,
 }
 
+assert_eq_size!(CompletionQueueEntry, [u8; 16]);
+
 #[allow(non_camel_case_types)]
 #[derive(Debug, Clone)]
 pub(super) struct io_sqring_offsets {
@@ -305,6 +307,9 @@ pub enum Operation<'a> {
     OpenAt {
         path: &'a Path,
     },
+    TimeOut {
+        spec: *mut libc::timespec,
+    },
     NoOp,
 }
 
@@ -357,6 +362,11 @@ impl SubmissionQueueEntry {
                 self.addr_splice_off_in = path as u64;
                 self.flags.open_flags = flags as u32;
                 self.len = mode as u32;
+            }
+            Operation::TimeOut { spec } => {
+                self.opcode = IORING_OP_TIMEOUT;
+                self.addr_splice_off_in = spec as u64;
+                self.len = 1;
             }
             Operation::NoOp => {
                 self.opcode = IORING_OP_NOP;
@@ -502,10 +512,27 @@ pub struct CompletionQueue<'ring> {
     overflow: &'ring u32,
 
     cqes: &'ring [CompletionQueueEntry],
+
+    fd: IoUringFd,
+}
+
+#[derive(Debug)]
+pub struct Completed {
+    user_data: u64,
+    result: i32,
+}
+
+impl From<&CompletionQueueEntry> for Completed {
+    fn from(e: &CompletionQueueEntry) -> Self {
+        Self {
+            user_data: e.user_data,
+            result: e.res,
+        }
+    }
 }
 
 impl<'ring> CompletionQueue<'ring> {
-    fn new(params: &io_uring_params, ring_ptr: NonNull<u8>) -> Self {
+    fn new(fd: IoUringFd, params: &io_uring_params, ring_ptr: NonNull<u8>) -> Self {
         let ring_ptr = ring_ptr.as_ptr();
 
         unsafe {
@@ -520,19 +547,36 @@ impl<'ring> CompletionQueue<'ring> {
                     ring_ptr.add(params.cq_off.cqes as usize) as *const CompletionQueueEntry,
                     params.cq_entries as usize,
                 ),
+                fd,
             }
         }
     }
 
-    pub fn get_entry(&self) {
+    pub fn pop(&self) -> Option<Completed> {
         let tail = self.tail.load(Acquire);
         let head = self.head.load(Relaxed);
 
-        println!("completion tail={:?} head={:?}", tail, head);
-        let entry = &self.cqes[head as usize];
-        println!("entry={:#?}", entry);
+        if tail == head {
+            return None;
+        }
 
-        self.head.store(tail.wrapping_add(1), Release);
+        let index = head & *self.mask;
+        let entry = (&self.cqes[index as usize]).into();
+
+        // Atomic: The entry must be read before modifying the head
+        self.head.store(head.wrapping_add(1), Release);
+
+        Some(entry)
+    }
+
+    pub fn wait_pop(&self) -> std::io::Result<Completed> {
+        if let Some(e) = self.pop() {
+            return Ok(e);
+        };
+
+        io_uring_enter(self.fd, 0, 1, IORING_ENTER_GETEVENTS as u32)?;
+
+        Ok(self.pop().unwrap())
     }
 
     pub fn pending(&self) -> usize {
@@ -562,7 +606,6 @@ impl IoUring {
         let mut params = unsafe { std::mem::zeroed() };
         let io_ring_fd = io_uring_setup(len, &mut params)?;
 
-        println!("PARAMS {:#?}", params);
         display_io_uring_features(params.features);
 
         let features = FeaturesFlags::from_bits_truncate(params.features);
@@ -637,7 +680,7 @@ impl IoUring {
     }
 
     pub fn cq(&self) -> CompletionQueue {
-        CompletionQueue::new(&self.params, self.cq_ptr)
+        CompletionQueue::new(self.fd, &self.params, self.cq_ptr)
     }
 }
 
@@ -658,6 +701,7 @@ mod tests {
     use super::{IoUring, Operation};
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Miri doesn't support io_uring
     fn simple() {
         let iou = IoUring::new(4).unwrap();
 
@@ -684,6 +728,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Miri doesn't support io_uring
     fn multiple() {
         let iou = IoUring::new(4).unwrap();
 
@@ -695,5 +740,45 @@ mod tests {
 
         let n = sq.push_entries(|| Some(Operation::NoOp));
         assert_eq!(n, 0);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Miri doesn't support io_uring
+    fn pop() {
+        let iou = IoUring::new(4).unwrap();
+
+        let sq = iou.sq();
+        let cq = iou.cq();
+
+        let mut iter = repeat_with(|| Operation::NoOp).take(4);
+        let n = sq.push_entries(|| iter.next());
+        assert_eq!(n, 4);
+        sq.submit().unwrap();
+
+        assert!(cq.pending() > 0);
+
+        cq.pop().unwrap();
+        cq.pop().unwrap();
+        cq.pop().unwrap();
+        cq.pop().unwrap();
+        assert!(cq.pop().is_none());
+
+        let mut spec = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 100000000, // 0,1 sec
+        };
+
+        sq.push_entry(Operation::TimeOut { spec: &mut spec })
+            .unwrap();
+        sq.submit().unwrap();
+
+        assert!(cq.pop().is_none());
+
+        let val = cq.wait_pop().unwrap();
+        assert_eq!(val.result, -libc::ETIME);
+        println!("val={:?}", val);
+        println!("sq={:?}", sq);
+        println!("cq={:?}", cq);
+        println!("iou={:?}", iou);
     }
 }
