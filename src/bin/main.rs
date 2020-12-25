@@ -25,11 +25,6 @@ use rustorrent::{bencode::de, session::Session};
 #[allow(unreachable_code)]
 #[tokio::main]
 async fn main() {
-    // testss();
-    rustorrent::io_uring::IoUring::new();
-
-    return;
-
     // use std::mem::ManuallyDrop;
     // use rustorrent::memory_pool::SharedArena;
 
