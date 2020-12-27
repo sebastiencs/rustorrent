@@ -782,6 +782,20 @@ impl IoUring {
         io_uring_register(self.fd, IORING_REGISTER_FILES, files.as_ptr() as *mut _, files.len() as u32)
     }
 
+    /// Update a single entry
+    pub fn register_file_update(&self, files: &[i32], offset: usize) -> std::io::Result<()> {
+        let update = io_uring_files_update {
+            offset: offset as u32,
+            resv: 0,
+            fds: files.as_ptr() as u64,
+        };
+        io_uring_register(
+            self.fd,
+            IORING_REGISTER_FILES_UPDATE,
+            &update as *const _ as *mut _,
+            1,
+        )
+    }
 
     pub fn register_files_update(&self, files: &[i32]) -> std::io::Result<()> {
         let update = io_uring_files_update {
@@ -790,7 +804,6 @@ impl IoUring {
             fds: files.as_ptr() as u64,
         };
         io_uring_register(self.fd, IORING_REGISTER_FILES_UPDATE, &update as *const _ as *mut _, files.len() as u32)
-        // io_uring_register(self.fd, IORING_REGISTER_FILES_UPDATE, files.as_ptr() as *mut _, files.len() as u32)
     }
 
     pub fn unregister_files(&self) -> std::io::Result<()> {
@@ -808,6 +821,7 @@ impl IoUring {
 
 impl Drop for IoUring {
     fn drop(&mut self) {
+        // TODO: Make sure the completion queue is empty
         munmap(self.sqes_ptr, self.sqes_size).unwrap();
         munmap(self.sq_ptr, self.sq_size).unwrap();
         if self.sq_ptr != self.cq_ptr {

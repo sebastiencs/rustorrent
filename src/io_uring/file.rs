@@ -138,7 +138,10 @@ impl File {
         self.registered_files[new_index] = fd;
         self.registered_files_map.insert(fd, new_index);
 
-        self.io_uring.register_files_update(&self.registered_files).unwrap();
+        self.io_uring.register_file_update(
+            &self.registered_files[new_index..new_index + 1],
+            new_index
+        ).unwrap();
 
         FileDescriptor::RegisteredIndex(new_index.try_into().unwrap())
     }
