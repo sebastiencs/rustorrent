@@ -15,6 +15,10 @@ use bitflags::bitflags;
 use libc::{c_int, c_long, c_uint, c_void, off_t, syscall};
 use static_assertions::{assert_eq_size, assert_type_eq_all};
 
+use self::file::RingId;
+
+pub mod file;
+
 const SYS_IO_URING_SETUP: c_long = 425;
 const SYS_IO_URING_ENTER: c_long = 426;
 const SYS_IO_URING_REGISTER: c_long = 427;
@@ -300,9 +304,11 @@ pub enum Operation<'a> {
         iovecs: &'a [IoSlice<'a>],
     },
     Write {
+        id: RingId,
         fd: RawFd,
         offset: usize,
-        iovecs: &'a [IoSlice<'a>],
+        data: &'a [u8],
+        //iovecs: &'a [IoSlice<'a>],
     },
     OpenAt {
         path: &'a Path,
@@ -348,10 +354,20 @@ impl SubmissionQueueEntry {
                 self.len = length as u32;
             }
             Operation::Write {
-                fd: _,
-                offset: _,
-                iovecs: _,
-            } => {}
+                id,
+                fd,
+                offset,
+                data,
+                //iovecs: _,
+            } => {
+                self.opcode = IORING_OP_WRITE;
+                self.fd = fd;
+                self.addr_splice_off_in = data.as_ptr() as u64;
+                self.off_addr2 = offset as u64;
+                //self.flags.open_flags = flags as u32;
+                self.len = data.len() as u32;
+                self.user_data = id.into();
+            }
             Operation::OpenAt { path } => {
                 let path = path.to_str().unwrap().as_ptr();
                 let flags = libc::O_CREAT | libc::O_RDWR;
@@ -445,6 +461,13 @@ impl<'ring> SubmissionQueue<'ring> {
         }
     }
 
+    pub fn available(&self) -> usize {
+        let tail = self.tail.load(Relaxed);
+        let head = self.head.load(Acquire);
+
+        (*self.entries - tail.wrapping_sub(head)) as usize
+    }
+
     pub fn push_entry<'op>(&self, op: Operation<'op>) -> Result<(), Operation<'op>> {
         let tail = self.tail.load(Relaxed);
 
@@ -518,8 +541,8 @@ pub struct CompletionQueue<'ring> {
 
 #[derive(Debug)]
 pub struct Completed {
-    user_data: u64,
-    result: i32,
+    pub user_data: u64,
+    pub result: i32,
 }
 
 impl From<&CompletionQueueEntry> for Completed {
@@ -600,6 +623,8 @@ pub struct IoUring {
     features: FeaturesFlags,
     params: io_uring_params,
 }
+
+unsafe impl Send for IoUring {}
 
 impl IoUring {
     pub fn new(len: u32) -> std::io::Result<Self> {
@@ -776,9 +801,20 @@ mod tests {
 
         let val = cq.wait_pop().unwrap();
         assert_eq!(val.result, -libc::ETIME);
+
+        sq.push_entry(Operation::NoOp).unwrap();
+        sq.push_entry(Operation::NoOp).unwrap();
+        sq.submit().unwrap();
+        sq.submit().unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        let val = cq.wait_pop().unwrap();
+        let val = cq.wait_pop().unwrap();
+
         println!("val={:?}", val);
-        println!("sq={:?}", sq);
-        println!("cq={:?}", cq);
-        println!("iou={:?}", iou);
+        println!("sq={:#?}", sq);
+        println!("cq={:#?}", cq);
+        println!("iou={:#?}", iou);
     }
 }

@@ -6,6 +6,8 @@ use std::{
     sync::Arc,
 };
 
+use std::os::unix::prelude::AsRawFd;
+
 use async_channel::{Receiver, Sender};
 use hashbrown::HashMap;
 use kv_log_macro::{debug, info};
@@ -61,11 +63,11 @@ fn open_file(path: &Path) -> File {
         .unwrap()
 }
 
-struct TorrentCache {
-    torrent: Arc<Torrent>,
-    pieces_infos: Arc<Pieces>,
-    files: Vec<TorrentFile>,
-    fds: HashMap<PathBuf, File>,
+pub struct TorrentCache {
+    pub torrent: Arc<Torrent>,
+    pub pieces_infos: Arc<Pieces>,
+    pub files: Vec<TorrentFile>,
+    pub fds: HashMap<PathBuf, File>,
 }
 
 impl TorrentCache {
@@ -86,7 +88,7 @@ impl TorrentCache {
         None
     }
 
-    fn iter_files_on_piece(
+    pub fn iter_files_on_piece(
         &mut self,
         piece: PieceIndex,
         block: BlockIndex,

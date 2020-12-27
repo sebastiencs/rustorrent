@@ -24,6 +24,7 @@ pub mod time;
 pub mod udp_ext;
 pub mod utils;
 pub mod utp;
+pub mod fs;
 
 // pub mod memory_pool;
 
