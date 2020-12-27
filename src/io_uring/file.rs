@@ -32,36 +32,58 @@ impl From<RingId> for u64 {
     }
 }
 
+#[derive(Debug, Copy, Clone)]
+pub enum FileDescriptor {
+    Fd(i32),
+    RegisteredIndex(i32)
+}
+
 struct File {
     io_uring: IoUring,
     ring_id: u32,
-    pending_write: Map<RingId, PendingWrite>,
+    pending_write: Map<RingId, Pending>,
     completed: VecDeque<Completed>,
     in_flight: usize,
     need_submit: bool,
+    registered_files: Vec<i32>,
+    /// map fd to index in registered_files
+    registered_files_map: Map<i32, usize>,
 }
 
-struct PendingWrite {
-    fd: i32,
-    data: NonNull<u8>,
-    data_length: usize,
-    written: usize,
-    offset: usize,
-    /// Number of EOF (res == 0) received
-    /// Consider EOF reached after 2
-    /// https://github.com/facebook/rocksdb/pull/6441#issuecomment-589843435
-    neof: u8,
+enum Pending {
+    Write {
+        fd: FileDescriptor,
+        data: NonNull<u8>,
+        data_length: usize,
+        // number of bytes read/written
+        nbytes_processed: usize,
+        offset: usize,
+        /// Number of EOF (res == 0) received
+        /// Consider EOF reached after 2
+        /// https://github.com/facebook/rocksdb/pull/6441#issuecomment-589843435
+        neof: u8,
+    },
+    Register
 }
 
 impl File {
     pub fn new() -> std::io::Result<File> {
+        let iou = IoUring::new(4)?;
+
+        // TODO:
+        // Make this configurable and respect RLIMIT_NOFILE
+        let registered_files = vec![-1; 512];
+        iou.register_files(&registered_files).unwrap();
+
         Ok(Self {
-            io_uring: IoUring::new(4)?,
+            io_uring: iou,
             ring_id: 10,
             pending_write: HashMap::default(),
             completed: VecDeque::with_capacity(64),
             in_flight: 0,
             need_submit: false,
+            registered_files,
+            registered_files_map: Map::default()
         })
     }
 
@@ -75,9 +97,6 @@ impl File {
         if sq_available == 0 {
             // The submission queue is full, need to submit
             self.submit();
-            // sq.submit().ok();
-            // self.need_submit = false;
-            // TODO: Should we wait for a completion here ?
         }
 
         // let sq_available = sq.available();
@@ -104,7 +123,29 @@ impl File {
         }
     }
 
+    fn find_or_register_file(&mut self, fd: i32) -> FileDescriptor {
+        if let Some(index) = self.registered_files_map.get(&fd) {
+            return FileDescriptor::RegisteredIndex((*index).try_into().unwrap());
+        }
+
+        let new_index = match self.registered_files.iter().position(|file| *file == -1) {
+            Some(index) => index,
+            None => {
+                return FileDescriptor::Fd(fd)
+            }
+        };
+
+        self.registered_files[new_index] = fd;
+        self.registered_files_map.insert(fd, new_index);
+
+        self.io_uring.register_files_update(&self.registered_files).unwrap();
+
+        FileDescriptor::RegisteredIndex(new_index.try_into().unwrap())
+    }
+
     pub fn write(&mut self, fd: i32, offset: usize, data: &[u8]) {
+
+        let fd = self.find_or_register_file(fd);
 
         self.ensure_can_push();
 
@@ -121,11 +162,11 @@ impl File {
         self.need_submit = true;
         self.ring_id = self.ring_id.wrapping_add(1);
         self.in_flight += 1;
-        self.pending_write.insert(id, PendingWrite {
+        self.pending_write.insert(id, Pending::Write {
             fd,
             data: NonNull::new(data.as_ptr() as *mut _).unwrap(),
             data_length: data.len(),
-            written: 0,
+            nbytes_processed: 0,
             offset,
             neof: 0,
         });
@@ -185,52 +226,64 @@ impl File {
         }
 
         let mut pending = self.pending_write.get_mut(&id).unwrap();
-        pending.written += written as usize;
 
-        if pending.written == pending.data_length {
-            // All data written
+        match pending {
+            Pending::Register => {
+                Some((id, Ok(())))
+            }
+            Pending::Write { fd, data, data_length, nbytes_processed, offset, neof } => {
 
-            self.pending_write.remove(&id).unwrap();
-            Some((id, Ok(())))
-        } else {
-            // Partial read/write, make another request
-            // See https://github.com/axboe/liburing/issues/78
+                *nbytes_processed += written as usize;
 
-            if written == 0 {
-                // https://github.com/facebook/rocksdb/pull/6441#issuecomment-589843435
-                if pending.neof == 1 {
-                    // EOF reached
+                if nbytes_processed == data_length {
+                    // All data written
 
                     self.pending_write.remove(&id).unwrap();
-                    return Some((id, Err(UnexpectedEof.into())));
+                    Some((id, Ok(())))
+                } else {
+                    // Partial read/write, make another request
+                    // See https://github.com/axboe/liburing/issues/78
+
+                    if written == 0 {
+                        // Try twice
+                        // https://github.com/facebook/rocksdb/pull/6441#issuecomment-589843435
+                        if *neof == 1 {
+                            // EOF reached
+
+                            self.pending_write.remove(&id).unwrap();
+                            return Some((id, Err(UnexpectedEof.into())));
+                        }
+                        *neof += 1;
+                    }
+                    let data = unsafe {
+                        std::slice::from_raw_parts(
+                            data.as_ptr().add(*nbytes_processed as usize),
+                            *data_length - *nbytes_processed
+                        )
+                    };
+                    let fd = *fd;
+                    let offset = *offset + *nbytes_processed;
+
+                    // For &mut self aliasing
+                    drop(pending);
+
+                    self.ensure_can_push();
+                    self.in_flight += 1;
+
+                    // Write the remaining data
+                    let sq = self.io_uring.sq();
+                    sq.push_entry(Operation::Write {
+                        id,
+                        fd,
+                        offset,
+                        data,
+                    }).unwrap();
+                    sq.submit().unwrap();
+                    self.need_submit = false;
+
+                    None
                 }
-                pending.neof += 1;
             }
-            let data = unsafe {
-                std::slice::from_raw_parts(
-                    pending.data.as_ptr().add(pending.written as usize),
-                    pending.data_length - pending.written
-                )
-            };
-            let fd = pending.fd;
-            let offset = pending.offset + pending.written;
-            drop(pending); // For &mut self aliasing
-
-            self.ensure_can_push();
-            self.in_flight += 1;
-
-            // Write the remaining data
-            let sq = self.io_uring.sq();
-            sq.push_entry(Operation::Write {
-                id,
-                fd,
-                offset,
-                data,
-            }).unwrap();
-            sq.submit().unwrap();
-            self.need_submit = false;
-
-            None
         }
     }
 }
@@ -261,7 +314,13 @@ mod tests {
         file.write(fd.as_raw_fd(), 0, vec.as_slice());
         assert_eq!(file.in_flight(), 1);
 
-        file.wait_completed();
+        let res = file.wait_completed();
+        println!("RES={:?}", res);
+        assert!(res.unwrap().1.is_ok());
+        let res = file.wait_completed();
+        println!("RES={:?}", res);
+        assert!(res.is_none());
+
         assert_eq!(file.in_flight(), 0);
     }
 
@@ -291,9 +350,11 @@ mod tests {
 
         let mut results = Vec::new();
         while let Some(res) = file.get_completed() {
+            assert!(res.1.is_ok());
             results.push(res);
         }
         while let Some(res) = file.wait_completed() {
+            assert!(res.1.is_ok());
             results.push(res);
         }
 

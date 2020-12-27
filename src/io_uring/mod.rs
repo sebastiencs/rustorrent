@@ -15,7 +15,7 @@ use bitflags::bitflags;
 use libc::{c_int, c_long, c_uint, c_void, off_t, syscall};
 use static_assertions::{assert_eq_size, assert_type_eq_all};
 
-use self::file::RingId;
+use self::file::{FileDescriptor, RingId};
 
 pub mod file;
 
@@ -71,6 +71,40 @@ const IORING_ENTER_SQ_WAKEUP: u8 = 1 << 1;
 const IORING_ENTER_SQ_WAIT: u8 = 1 << 2;
 const IORING_ENTER_EXT_ARG: u8 = 1 << 3;
 
+const IORING_REGISTER_BUFFERS : u32 = 0;
+const IORING_UNREGISTER_BUFFERS: u32 = 1;
+const IORING_REGISTER_FILES : u32 = 2;
+const IORING_UNREGISTER_FILES : u32 = 3;
+const IORING_REGISTER_EVENTFD : u32 = 4;
+const IORING_UNREGISTER_EVENTFD: u32 = 5;
+const IORING_REGISTER_FILES_UPDATE : u32 = 6;
+const IORING_REGISTER_EVENTFD_ASYNC: u32 = 7;
+const IORING_REGISTER_PROBE : u32 = 8;
+const IORING_REGISTER_PERSONALITY  : u32 = 9;
+const IORING_UNREGISTER_PERSONALITY: u32 = 10;
+const IORING_REGISTER_RESTRICTIONS : u32 = 11;
+const IORING_REGISTER_ENABLE_RINGS : u32 = 12;
+
+bitflags! {
+    // sqe->flags
+    struct SqeFlags: u8 {
+        // use fixed fileset
+        const IOSQE_FIXED_FILE = 1 << 0;
+        // issue after inflight IO
+        const IOSQE_IO_DRAIN = 1 << 1;
+        // links next sqe
+        const IOSQE_IO_LINK = 1 << 2;
+        // like LINK, but stronger
+        const IOSQE_IO_HARDLINK = 1 << 3;
+        // always go async
+        const IOSQE_ASYNC = 1 << 4;
+        // select buffer from sqe->buf_group
+        const IOSQE_BUFFER_SELECT = 1 << 5;
+    }
+}
+
+assert_eq_size!(SqeFlags, u8);
+
 bitflags! {
     struct FeaturesFlags: u32 {
         const IORING_FEAT_SINGLE_MMAP = 1 << 0;
@@ -97,6 +131,7 @@ assert_eq_size!(CompletionQueueEntry, [u8; 16]);
 
 #[allow(non_camel_case_types)]
 #[derive(Debug, Clone)]
+#[repr(C)]
 pub(super) struct io_sqring_offsets {
     head: u32,
     tail: u32,
@@ -110,6 +145,7 @@ pub(super) struct io_sqring_offsets {
 
 #[allow(non_camel_case_types)]
 #[derive(Debug, Clone)]
+#[repr(C)]
 pub(super) struct io_cqring_offsets {
     head: u32,
     tail: u32,
@@ -123,6 +159,7 @@ pub(super) struct io_cqring_offsets {
 
 #[allow(non_camel_case_types)]
 #[derive(Debug, Clone)]
+#[repr(C)]
 pub(super) struct io_uring_params {
     sq_entries: u32,
     cq_entries: u32,
@@ -135,6 +172,15 @@ pub(super) struct io_uring_params {
     cq_off: io_cqring_offsets,
 }
 
+#[allow(non_camel_case_types)]
+#[derive(Debug, Clone)]
+#[repr(C)]
+pub(super) struct io_uring_files_update {
+    offset: u32,
+    resv: u32,
+    fds: u64,
+}
+
 assert_eq_size!(io_uring_params, [u8; 120]);
 assert_eq_size!(io_cqring_offsets, [u8; 40]);
 assert_eq_size!(io_sqring_offsets, [u8; 40]);
@@ -142,7 +188,7 @@ assert_type_eq_all!(c_uint, u32);
 assert_type_eq_all!(c_int, i32);
 
 #[derive(Debug, Copy, Clone)]
-pub(super) struct IoUringFd(RawFd);
+pub struct IoUringFd(RawFd);
 
 pub(super) fn io_uring_setup(
     entries: u32,
@@ -192,12 +238,18 @@ pub(super) fn io_uring_enter(
     }
 }
 
-pub(super) fn io_uring_register(fd: i32, opcode: u32, arg: *const (), nr_args: u32) -> isize {
-    unsafe {
+pub(super) fn io_uring_register(fd: IoUringFd, opcode: u32, arg: *const (), nr_args: u32) -> std::io::Result<()> {
+    let res = unsafe {
         // int io_uring_register(unsigned int fd, unsigned int opcode,
         //                       void *arg, unsigned int nr_args);
-        syscall(SYS_IO_URING_REGISTER, fd, opcode, arg, nr_args) as isize
+        syscall(SYS_IO_URING_REGISTER, fd.0, opcode, arg, nr_args) as isize
+    };
+
+    if res < 0 {
+        return Err(std::io::Error::last_os_error());
     }
+
+    Ok(())
 }
 
 pub(super) fn mmap<T>(
@@ -239,28 +291,31 @@ fn display_io_uring_features(features: u32) {
     println!("[io_uring] Detected features: {:?}", flags);
 }
 
-union SubmissionFlags {
-    fsync_flags: u32,
-    poll_events: u16,
-    poll32_events: u32,
-    sync_range_flags: u32,
-    msg_flags: u32,
-    timeout_flags: u32,
-    accept_flags: u32,
-    cancel_flags: u32,
-    open_flags: u32,
-    statx_flags: u32,
-    fadvise_advice: u32,
-    splice_flags: u32,
-    rename_flags: u32,
-    unlink_flags: u32,
-}
+type SubmissionFlags = u32;
 
-impl Debug for SubmissionFlags {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        unsafe { write!(f, "SubmissionFlags {:032b}", self.fsync_flags) }
-    }
-}
+// union SubmissionFlags {
+//     rw_flags: RWFlags,
+//     fsync_flags: u32,
+//     poll_events: u16,
+//     poll32_events: u32,
+//     sync_range_flags: u32,
+//     msg_flags: u32,
+//     timeout_flags: u32,
+//     accept_flags: u32,
+//     cancel_flags: u32,
+//     open_flags: u32,
+//     statx_flags: u32,
+//     fadvise_advice: u32,
+//     splice_flags: u32,
+//     rename_flags: u32,
+//     unlink_flags: u32,
+// }
+
+// impl Debug for SubmissionFlags {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         unsafe { write!(f, "SubmissionFlags {:032b}", self.fsync_flags) }
+//     }
+// }
 
 #[derive(Debug)]
 #[repr(C)]
@@ -268,7 +323,7 @@ struct SubmissionQueueEntry {
     /// type of operation for this sqe
     opcode: u8,
     /// IOSQE_ flags
-    iosqe_flags: u8,
+    iosqe_flags: SqeFlags,
     /// ioprio for the request
     ioprio: u16,
     /// file descriptor to do IO on
@@ -297,6 +352,12 @@ pub enum Operation<'a> {
         length: usize,
         buf_index: u16,
     },
+    RegisterFiles {
+        id: RingId,
+        io_uring_fd: IoUringFd,
+        files: &'a [i32],
+        link_next: bool,
+    },
     Read {
         fd: RawFd,
         offset: usize,
@@ -305,7 +366,7 @@ pub enum Operation<'a> {
     },
     Write {
         id: RingId,
-        fd: RawFd,
+        fd: FileDescriptor,
         offset: usize,
         data: &'a [u8],
         //iovecs: &'a [IoSlice<'a>],
@@ -328,6 +389,16 @@ impl SubmissionQueueEntry {
         self.zeroed();
 
         match op {
+            Operation::RegisterFiles { id, io_uring_fd, files, link_next } => {
+                self.opcode = IORING_OP_FILES_UPDATE;
+                self.fd = -1;
+                self.addr_splice_off_in = files.as_ptr() as u64;
+                self.off_addr2 = 0;
+                self.len = files.len() as u32;
+                self.user_data = id.into();
+                self.iosqe_flags.set(SqeFlags::IOSQE_IO_LINK, link_next);
+                //self.flags.rw_flags.set(RWFlags::IOSQE_IO_LINK, link_next);
+            }
             Operation::ReadFixed {
                 fd,
                 offset,
@@ -361,7 +432,13 @@ impl SubmissionQueueEntry {
                 //iovecs: _,
             } => {
                 self.opcode = IORING_OP_WRITE;
-                self.fd = fd;
+                self.fd = match fd {
+                    FileDescriptor::RegisteredIndex(index) => {
+                        self.iosqe_flags.set(SqeFlags::IOSQE_FIXED_FILE, true);
+                        index
+                    }
+                    FileDescriptor::Fd(fd) => fd
+                };
                 self.addr_splice_off_in = data.as_ptr() as u64;
                 self.off_addr2 = offset as u64;
                 //self.flags.open_flags = flags as u32;
@@ -376,7 +453,8 @@ impl SubmissionQueueEntry {
                 self.opcode = IORING_OP_OPENAT;
                 self.fd = libc::AT_FDCWD;
                 self.addr_splice_off_in = path as u64;
-                self.flags.open_flags = flags as u32;
+                self.flags = flags as u32;
+                //self.flags.open_flags = flags as u32;
                 self.len = mode as u32;
             }
             Operation::TimeOut { spec } => {
@@ -700,6 +778,25 @@ impl IoUring {
         })
     }
 
+    pub fn register_files(&self, files: &[i32]) -> std::io::Result<()> {
+        io_uring_register(self.fd, IORING_REGISTER_FILES, files.as_ptr() as *mut _, files.len() as u32)
+    }
+
+
+    pub fn register_files_update(&self, files: &[i32]) -> std::io::Result<()> {
+        let update = io_uring_files_update {
+            offset: 0,
+            resv: 0,
+            fds: files.as_ptr() as u64,
+        };
+        io_uring_register(self.fd, IORING_REGISTER_FILES_UPDATE, &update as *const _ as *mut _, files.len() as u32)
+        // io_uring_register(self.fd, IORING_REGISTER_FILES_UPDATE, files.as_ptr() as *mut _, files.len() as u32)
+    }
+
+    pub fn unregister_files(&self) -> std::io::Result<()> {
+        io_uring_register(self.fd, IORING_UNREGISTER_FILES, std::ptr::null_mut(), 0)
+    }
+
     pub fn sq(&self) -> SubmissionQueue {
         SubmissionQueue::new(self.fd, &self.params, self.sq_ptr, self.sqes_ptr)
     }
@@ -722,6 +819,7 @@ impl Drop for IoUring {
 #[cfg(test)]
 mod tests {
     use std::iter::repeat_with;
+    use std::os::unix::io::AsRawFd;
 
     use super::{IoUring, Operation};
 
@@ -816,5 +914,41 @@ mod tests {
         println!("sq={:#?}", sq);
         println!("cq={:#?}", cq);
         println!("iou={:#?}", iou);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Miri doesn't support io_uring
+    fn register_files() {
+        let iou = IoUring::new(4).unwrap();
+
+        let fd = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .read(true)
+            .open("register.txt")
+            .unwrap();
+
+        let registered_files = vec![-1; 512];
+        iou.register_files(&registered_files).unwrap();
+
+        let sq = iou.sq();
+
+        let mut files = Vec::new();
+        files.push(fd.as_raw_fd());
+
+        sq.push_entry(Operation::RegisterFiles {
+            id: 101.into(),
+            io_uring_fd: sq.fd,
+            files: files.as_slice(),
+            link_next: false,
+        }).unwrap();
+        sq.submit();
+
+        let cq = iou.cq();
+        let completed = cq.wait_pop().unwrap();
+
+        assert_eq!(completed.result, 1);
+
+        println!("completed={:?}", completed);
     }
 }
