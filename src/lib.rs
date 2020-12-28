@@ -10,6 +10,7 @@ pub mod bitfield;
 pub mod cache_line;
 pub mod errors;
 pub mod extensions;
+pub mod fs;
 pub mod io_uring;
 pub mod logger;
 pub mod metadata;
@@ -24,7 +25,6 @@ pub mod time;
 pub mod udp_ext;
 pub mod utils;
 pub mod utp;
-pub mod fs;
 
 // pub mod memory_pool;
 

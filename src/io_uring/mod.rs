@@ -71,19 +71,19 @@ const IORING_ENTER_SQ_WAKEUP: u8 = 1 << 1;
 const IORING_ENTER_SQ_WAIT: u8 = 1 << 2;
 const IORING_ENTER_EXT_ARG: u8 = 1 << 3;
 
-const IORING_REGISTER_BUFFERS : u32 = 0;
+const IORING_REGISTER_BUFFERS: u32 = 0;
 const IORING_UNREGISTER_BUFFERS: u32 = 1;
-const IORING_REGISTER_FILES : u32 = 2;
-const IORING_UNREGISTER_FILES : u32 = 3;
-const IORING_REGISTER_EVENTFD : u32 = 4;
+const IORING_REGISTER_FILES: u32 = 2;
+const IORING_UNREGISTER_FILES: u32 = 3;
+const IORING_REGISTER_EVENTFD: u32 = 4;
 const IORING_UNREGISTER_EVENTFD: u32 = 5;
-const IORING_REGISTER_FILES_UPDATE : u32 = 6;
+const IORING_REGISTER_FILES_UPDATE: u32 = 6;
 const IORING_REGISTER_EVENTFD_ASYNC: u32 = 7;
-const IORING_REGISTER_PROBE : u32 = 8;
-const IORING_REGISTER_PERSONALITY  : u32 = 9;
+const IORING_REGISTER_PROBE: u32 = 8;
+const IORING_REGISTER_PERSONALITY: u32 = 9;
 const IORING_UNREGISTER_PERSONALITY: u32 = 10;
-const IORING_REGISTER_RESTRICTIONS : u32 = 11;
-const IORING_REGISTER_ENABLE_RINGS : u32 = 12;
+const IORING_REGISTER_RESTRICTIONS: u32 = 11;
+const IORING_REGISTER_ENABLE_RINGS: u32 = 12;
 
 bitflags! {
     // sqe->sqe_flags
@@ -238,7 +238,12 @@ pub(super) fn io_uring_enter(
     }
 }
 
-pub(super) fn io_uring_register(fd: IoUringFd, opcode: u32, arg: *const (), nr_args: u32) -> std::io::Result<()> {
+pub(super) fn io_uring_register(
+    fd: IoUringFd,
+    opcode: u32,
+    arg: *const (),
+    nr_args: u32,
+) -> std::io::Result<()> {
     let res = unsafe {
         // int io_uring_register(unsigned int fd, unsigned int opcode,
         //                       void *arg, unsigned int nr_args);
@@ -389,7 +394,12 @@ impl SubmissionQueueEntry {
         self.zeroed();
 
         match op {
-            Operation::RegisterFiles { id, io_uring_fd, files, link_next } => {
+            Operation::RegisterFiles {
+                id,
+                io_uring_fd,
+                files,
+                link_next,
+            } => {
                 self.opcode = IORING_OP_FILES_UPDATE;
                 self.fd = -1;
                 self.addr_splice_off_in = files.as_ptr() as u64;
@@ -437,7 +447,7 @@ impl SubmissionQueueEntry {
                         self.sqe_flags.set(SqeFlags::IOSQE_FIXED_FILE, true);
                         index
                     }
-                    FileDescriptor::Fd(fd) => fd
+                    FileDescriptor::Fd(fd) => fd,
                 };
                 self.addr_splice_off_in = data.as_ptr() as u64;
                 self.off_addr2 = offset as u64;
@@ -505,7 +515,7 @@ pub struct IoUring {
     cq_mask: u32,
     cq_head: NonNull<AtomicU32>,
     cq_tail: NonNull<AtomicU32>,
-    cqes_ptr: NonNull<CompletionQueueEntry>
+    cqes_ptr: NonNull<CompletionQueueEntry>,
 }
 
 unsafe impl Send for IoUring {}
@@ -616,7 +626,12 @@ impl IoUring {
     }
 
     pub fn register_files(&self, files: &[i32]) -> std::io::Result<()> {
-        io_uring_register(self.fd, IORING_REGISTER_FILES, files.as_ptr() as *mut _, files.len() as u32)
+        io_uring_register(
+            self.fd,
+            IORING_REGISTER_FILES,
+            files.as_ptr() as *mut _,
+            files.len() as u32,
+        )
     }
 
     /// Update a single entry
@@ -640,7 +655,12 @@ impl IoUring {
             resv: 0,
             fds: files.as_ptr() as u64,
         };
-        io_uring_register(self.fd, IORING_REGISTER_FILES_UPDATE, &update as *const _ as *mut _, files.len() as u32)
+        io_uring_register(
+            self.fd,
+            IORING_REGISTER_FILES_UPDATE,
+            &update as *const _ as *mut _,
+            files.len() as u32,
+        )
     }
 
     pub fn unregister_files(&self) -> std::io::Result<()> {
@@ -648,15 +668,11 @@ impl IoUring {
     }
 
     fn sq_refs(&self) -> (&AtomicU32, &AtomicU32) {
-        unsafe {
-            (&*self.sq_head.as_ptr(), &*self.sq_tail.as_ptr())
-        }
+        unsafe { (&*self.sq_head.as_ptr(), &*self.sq_tail.as_ptr()) }
     }
 
     fn cq_refs(&self) -> (&AtomicU32, &AtomicU32) {
-        unsafe {
-            (&*self.cq_head.as_ptr(), &*self.cq_tail.as_ptr())
-        }
+        unsafe { (&*self.cq_head.as_ptr(), &*self.cq_tail.as_ptr()) }
     }
 
     pub fn sq_available(&self) -> usize {
@@ -798,8 +814,7 @@ impl Drop for IoUring {
 
 #[cfg(test)]
 mod tests {
-    use std::iter::repeat_with;
-    use std::os::unix::io::AsRawFd;
+    use std::{iter::repeat_with, os::unix::io::AsRawFd};
 
     use super::{IoUring, Operation};
 
@@ -910,7 +925,8 @@ mod tests {
             io_uring_fd: iou.fd,
             files: files.as_slice(),
             link_next: false,
-        }).unwrap();
+        })
+        .unwrap();
         iou.submit();
 
         let completed = iou.wait_pop().unwrap();

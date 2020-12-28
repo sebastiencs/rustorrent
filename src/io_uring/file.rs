@@ -1,4 +1,9 @@
-use std::{collections::{HashMap, VecDeque}, convert::TryInto, io::ErrorKind::UnexpectedEof, ptr::NonNull};
+use std::{
+    collections::{HashMap, VecDeque},
+    convert::TryInto,
+    io::ErrorKind::UnexpectedEof,
+    ptr::NonNull,
+};
 
 use crate::utils::Map;
 
@@ -35,7 +40,7 @@ impl From<RingId> for u64 {
 #[derive(Debug, Copy, Clone)]
 pub enum FileDescriptor {
     Fd(i32),
-    RegisteredIndex(i32)
+    RegisteredIndex(i32),
 }
 
 struct File {
@@ -63,7 +68,7 @@ enum Pending {
         /// https://github.com/facebook/rocksdb/pull/6441#issuecomment-589843435
         neof: u8,
     },
-    Register
+    Register,
 }
 
 impl File {
@@ -83,7 +88,7 @@ impl File {
             in_flight: 0,
             need_submit: false,
             registered_files,
-            registered_files_map: Map::default()
+            registered_files_map: Map::default(),
         })
     }
 
@@ -127,48 +132,49 @@ impl File {
 
         let new_index = match self.registered_files.iter().position(|file| *file == -1) {
             Some(index) => index,
-            None => {
-                return FileDescriptor::Fd(fd)
-            }
+            None => return FileDescriptor::Fd(fd),
         };
 
         self.registered_files[new_index] = fd;
         self.registered_files_map.insert(fd, new_index);
 
-        self.io_uring.register_file_update(
-            &self.registered_files[new_index..new_index + 1],
-            new_index
-        ).unwrap();
+        self.io_uring
+            .register_file_update(&self.registered_files[new_index..new_index + 1], new_index)
+            .unwrap();
 
         FileDescriptor::RegisteredIndex(new_index.try_into().unwrap())
     }
 
     pub fn write(&mut self, fd: i32, offset: usize, data: &[u8]) {
-
         let fd = self.find_or_register_file(fd);
 
         self.ensure_can_push();
 
         let id = self.ring_id.into();
 
-        self.io_uring.push_entry(Operation::Write {
-            id,
-            fd,
-            offset,
-            data,
-        }).unwrap();
+        self.io_uring
+            .push_entry(Operation::Write {
+                id,
+                fd,
+                offset,
+                data,
+            })
+            .unwrap();
 
         self.need_submit = true;
         self.ring_id = self.ring_id.wrapping_add(1);
         self.in_flight += 1;
-        self.pending_write.insert(id, Pending::Write {
-            fd,
-            data: NonNull::new(data.as_ptr() as *mut _).unwrap(),
-            data_length: data.len(),
-            nbytes_processed: 0,
-            offset,
-            neof: 0,
-        });
+        self.pending_write.insert(
+            id,
+            Pending::Write {
+                fd,
+                data: NonNull::new(data.as_ptr() as *mut _).unwrap(),
+                data_length: data.len(),
+                nbytes_processed: 0,
+                offset,
+                neof: 0,
+            },
+        );
     }
 
     pub fn get_completed(&mut self) -> Option<(RingId, std::io::Result<()>)> {
@@ -183,7 +189,7 @@ impl File {
             })?;
 
             if let Some(res) = self.process_completed(completed) {
-                return Some(res)
+                return Some(res);
             }
         }
     }
@@ -206,7 +212,7 @@ impl File {
             })?;
 
             if let Some(res) = self.process_completed(completed) {
-                return Some(res)
+                return Some(res);
             }
         }
     }
@@ -227,11 +233,15 @@ impl File {
         let mut pending = self.pending_write.get_mut(&id).unwrap();
 
         match pending {
-            Pending::Register => {
-                Some((id, Ok(())))
-            }
-            Pending::Write { fd, data, data_length, nbytes_processed, offset, neof } => {
-
+            Pending::Register => Some((id, Ok(()))),
+            Pending::Write {
+                fd,
+                data,
+                data_length,
+                nbytes_processed,
+                offset,
+                neof,
+            } => {
                 *nbytes_processed += written as usize;
 
                 if nbytes_processed == data_length {
@@ -257,7 +267,7 @@ impl File {
                     let data = unsafe {
                         std::slice::from_raw_parts(
                             data.as_ptr().add(*nbytes_processed as usize),
-                            *data_length - *nbytes_processed
+                            *data_length - *nbytes_processed,
                         )
                     };
                     let fd = *fd;
@@ -270,12 +280,14 @@ impl File {
                     self.in_flight += 1;
 
                     // Write the remaining data
-                    self.io_uring.push_entry(Operation::Write {
-                        id,
-                        fd,
-                        offset,
-                        data,
-                    }).unwrap();
+                    self.io_uring
+                        .push_entry(Operation::Write {
+                            id,
+                            fd,
+                            offset,
+                            data,
+                        })
+                        .unwrap();
                     self.io_uring.submit().unwrap();
                     self.need_submit = false;
 
@@ -288,13 +300,12 @@ impl File {
 
 #[cfg(test)]
 mod tests {
-    use super::{IoUring, File};
+    use super::{File, IoUring};
     use std::os::unix::io::AsRawFd;
 
     #[test]
     #[cfg_attr(miri, ignore)] // Miri doesn't support io_uring
     fn simple_file() {
-
         let fd = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
@@ -325,7 +336,6 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // Miri doesn't support io_uring
     fn multiple_write() {
-
         let fd = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
