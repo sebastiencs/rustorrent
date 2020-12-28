@@ -364,17 +364,16 @@ pub enum Operation<'a> {
         link_next: bool,
     },
     Read {
-        fd: RawFd,
+        id: RingId,
+        fd: FileDescriptor,
         offset: usize,
-        length: usize,
-        iovecs: &'a [IoSlice<'a>],
+        data: &'a mut [u8],
     },
     Write {
         id: RingId,
         fd: FileDescriptor,
         offset: usize,
         data: &'a [u8],
-        //iovecs: &'a [IoSlice<'a>],
     },
     OpenAt {
         path: &'a Path,
@@ -423,23 +422,29 @@ impl SubmissionQueueEntry {
                 self.len = length as u32;
             }
             Operation::Read {
+                id,
                 fd,
                 offset,
-                length,
-                iovecs,
+                data,
             } => {
-                self.fd = fd;
                 self.opcode = IORING_OP_READ;
+                self.fd = match fd {
+                    FileDescriptor::RegisteredIndex(index) => {
+                        self.sqe_flags.set(SqeFlags::IOSQE_FIXED_FILE, true);
+                        index
+                    }
+                    FileDescriptor::Fd(fd) => fd,
+                };
                 self.off_addr2 = offset as u64;
-                self.addr_splice_off_in = iovecs.as_ptr() as u64;
-                self.len = length as u32;
+                self.addr_splice_off_in = data.as_ptr() as u64;
+                self.len = data.len() as u32;
+                self.user_data = id.into();
             }
             Operation::Write {
                 id,
                 fd,
                 offset,
                 data,
-                //iovecs: _,
             } => {
                 self.opcode = IORING_OP_WRITE;
                 self.fd = match fd {
@@ -451,7 +456,6 @@ impl SubmissionQueueEntry {
                 };
                 self.addr_splice_off_in = data.as_ptr() as u64;
                 self.off_addr2 = offset as u64;
-                //self.flags.open_flags = flags as u32;
                 self.len = data.len() as u32;
                 self.user_data = id.into();
             }

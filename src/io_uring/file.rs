@@ -55,8 +55,14 @@ struct File {
     registered_files_map: Map<i32, usize>,
 }
 
+#[derive(Copy, Clone)]
+enum OpKind {
+    Write,
+    Read,
+}
+
 enum Pending {
-    Write {
+    ReadWrite {
         fd: FileDescriptor,
         data: NonNull<u8>,
         data_length: usize,
@@ -67,6 +73,7 @@ enum Pending {
         /// Consider EOF reached after 2
         /// https://github.com/facebook/rocksdb/pull/6441#issuecomment-589843435
         neof: u8,
+        kind: OpKind,
     },
     Register,
 }
@@ -138,19 +145,18 @@ impl File {
         self.registered_files[new_index] = fd;
         self.registered_files_map.insert(fd, new_index);
 
-        self.io_uring
-            .register_file_update(&self.registered_files[new_index..new_index + 1], new_index)
-            .unwrap();
+        let slice = &self.registered_files[new_index..new_index + 1];
+        let offset = new_index;
+        self.io_uring.register_file_update(slice, offset).unwrap();
 
         FileDescriptor::RegisteredIndex(new_index.try_into().unwrap())
     }
 
     pub fn write(&mut self, fd: i32, offset: usize, data: &[u8]) {
         let fd = self.find_or_register_file(fd);
+        let id = self.ring_id.into();
 
         self.ensure_can_push();
-
-        let id = self.ring_id.into();
 
         self.io_uring
             .push_entry(Operation::Write {
@@ -166,13 +172,46 @@ impl File {
         self.in_flight += 1;
         self.pending_write.insert(
             id,
-            Pending::Write {
+            Pending::ReadWrite {
                 fd,
                 data: NonNull::new(data.as_ptr() as *mut _).unwrap(),
                 data_length: data.len(),
                 nbytes_processed: 0,
                 offset,
                 neof: 0,
+                kind: OpKind::Write,
+            },
+        );
+    }
+
+    pub fn read(&mut self, fd: i32, offset: usize, data: &mut [u8]) {
+        let fd = self.find_or_register_file(fd);
+        let id = self.ring_id.into();
+
+        self.ensure_can_push();
+
+        self.io_uring
+            .push_entry(Operation::Read {
+                id,
+                fd,
+                offset,
+                data,
+            })
+            .unwrap();
+
+        self.need_submit = true;
+        self.ring_id = self.ring_id.wrapping_add(1);
+        self.in_flight += 1;
+        self.pending_write.insert(
+            id,
+            Pending::ReadWrite {
+                fd,
+                data: NonNull::new(data.as_ptr() as *mut _).unwrap(),
+                data_length: data.len(),
+                nbytes_processed: 0,
+                offset,
+                neof: 0,
+                kind: OpKind::Read,
             },
         );
     }
@@ -234,13 +273,14 @@ impl File {
 
         match pending {
             Pending::Register => Some((id, Ok(()))),
-            Pending::Write {
+            Pending::ReadWrite {
                 fd,
                 data,
                 data_length,
                 nbytes_processed,
                 offset,
                 neof,
+                kind,
             } => {
                 *nbytes_processed += written as usize;
 
@@ -265,13 +305,14 @@ impl File {
                         *neof += 1;
                     }
                     let data = unsafe {
-                        std::slice::from_raw_parts(
+                        std::slice::from_raw_parts_mut(
                             data.as_ptr().add(*nbytes_processed as usize),
                             *data_length - *nbytes_processed,
                         )
                     };
                     let fd = *fd;
                     let offset = *offset + *nbytes_processed;
+                    let kind = *kind;
 
                     // For &mut self aliasing
                     drop(pending);
@@ -279,13 +320,21 @@ impl File {
                     self.ensure_can_push();
                     self.in_flight += 1;
 
-                    // Write the remaining data
+                    // Read/Write the remaining data
                     self.io_uring
-                        .push_entry(Operation::Write {
-                            id,
-                            fd,
-                            offset,
-                            data,
+                        .push_entry(match kind {
+                            OpKind::Write => Operation::Write {
+                                id,
+                                fd,
+                                offset,
+                                data,
+                            },
+                            OpKind::Read => Operation::Read {
+                                id,
+                                fd,
+                                offset,
+                                data,
+                            },
                         })
                         .unwrap();
                     self.io_uring.submit().unwrap();
@@ -340,6 +389,7 @@ mod tests {
             .write(true)
             .create(true)
             .read(true)
+            .truncate(true)
             .open("coucou2.txt")
             .unwrap();
 
@@ -370,5 +420,27 @@ mod tests {
 
         let result_file = std::fs::read("coucou2.txt").unwrap();
         assert_eq!(result_file, data);
+
+        let mut read = vec![0; SIZE];
+
+        for (index, chunk) in read.chunks_mut(2).enumerate() {
+            file.read(fd.as_raw_fd(), index * 2, chunk);
+        }
+
+        let mut results = Vec::new();
+        while let Some(res) = file.get_completed() {
+            assert!(res.1.is_ok());
+            results.push(res);
+        }
+        while let Some(res) = file.wait_completed() {
+            assert!(res.1.is_ok());
+            results.push(res);
+        }
+
+        assert_eq!(results.len(), SIZE / 2);
+
+        // println!("RES={:?}", res);
+
+        assert_eq!(read, data);
     }
 }
