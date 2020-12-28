@@ -88,11 +88,8 @@ impl File {
     }
 
     fn ensure_can_push(&mut self) {
-        let sq = self.io_uring.sq();
-        let cq = self.io_uring.cq();
-
-        let sq_available = sq.available();
-        let cq_entries = *cq.entries as usize;
+        let sq_available = self.io_uring.sq_available();
+        let cq_entries = self.io_uring.cq_entries as usize;
 
         if sq_available == 0 {
             // The submission queue is full, need to submit
@@ -106,7 +103,7 @@ impl File {
             // We made the maximum number of request for the completion
             // queue. We can't push more request, we need to wait for
             // at least one to complete before being able to push.
-            let completed = self.io_uring.cq().wait_pop().unwrap();
+            let completed = self.io_uring.wait_pop().unwrap();
             self.in_flight = self.in_flight.checked_sub(1).unwrap();
             self.completed.push_back(completed);
         }
@@ -118,7 +115,7 @@ impl File {
 
     pub fn submit(&mut self) {
         if self.need_submit {
-            self.io_uring.sq().submit().unwrap();
+            self.io_uring.submit().unwrap();
             self.need_submit = false;
         }
     }
@@ -152,10 +149,9 @@ impl File {
 
         self.ensure_can_push();
 
-        let sq = self.io_uring.sq();
         let id = self.ring_id.into();
 
-        sq.push_entry(Operation::Write {
+        self.io_uring.push_entry(Operation::Write {
             id,
             fd,
             offset,
@@ -179,7 +175,7 @@ impl File {
         loop {
             let completed = self.completed.pop_front().or_else(|| {
                 self.submit();
-                let completed = self.io_uring.cq().pop();
+                let completed = self.io_uring.pop();
                 if completed.is_some() {
                     self.in_flight = self.in_flight.checked_sub(1).unwrap();
                 }
@@ -199,7 +195,7 @@ impl File {
                 // Make sure to not block forever, wait only when there are
                 // in flight requests
                 if self.in_flight > 0 {
-                    let completed = self.io_uring.cq().wait_pop().ok();
+                    let completed = self.io_uring.wait_pop().ok();
                     if completed.is_some() {
                         self.in_flight = self.in_flight.checked_sub(1).unwrap();
                     }
@@ -274,14 +270,13 @@ impl File {
                     self.in_flight += 1;
 
                     // Write the remaining data
-                    let sq = self.io_uring.sq();
-                    sq.push_entry(Operation::Write {
+                    self.io_uring.push_entry(Operation::Write {
                         id,
                         fd,
                         offset,
                         data,
                     }).unwrap();
-                    sq.submit().unwrap();
+                    self.io_uring.submit().unwrap();
                     self.need_submit = false;
 
                     None

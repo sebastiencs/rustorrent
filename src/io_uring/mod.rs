@@ -86,7 +86,7 @@ const IORING_REGISTER_RESTRICTIONS : u32 = 11;
 const IORING_REGISTER_ENABLE_RINGS : u32 = 12;
 
 bitflags! {
-    // sqe->flags
+    // sqe->sqe_flags
     struct SqeFlags: u8 {
         // use fixed fileset
         const IOSQE_FIXED_FILE = 1 << 0;
@@ -106,7 +106,7 @@ bitflags! {
 assert_eq_size!(SqeFlags, u8);
 
 bitflags! {
-    struct FeaturesFlags: u32 {
+    pub struct FeaturesFlags: u32 {
         const IORING_FEAT_SINGLE_MMAP = 1 << 0;
         const IORING_FEAT_NODROP = 1 << 1;
         const IORING_FEAT_SUBMIT_STABLE = 1 << 2;
@@ -323,7 +323,7 @@ struct SubmissionQueueEntry {
     /// type of operation for this sqe
     opcode: u8,
     /// IOSQE_ flags
-    iosqe_flags: SqeFlags,
+    sqe_flags: SqeFlags,
     /// ioprio for the request
     ioprio: u16,
     /// file descriptor to do IO on
@@ -396,7 +396,7 @@ impl SubmissionQueueEntry {
                 self.off_addr2 = 0;
                 self.len = files.len() as u32;
                 self.user_data = id.into();
-                self.iosqe_flags.set(SqeFlags::IOSQE_IO_LINK, link_next);
+                self.sqe_flags.set(SqeFlags::IOSQE_IO_LINK, link_next);
                 //self.flags.rw_flags.set(RWFlags::IOSQE_IO_LINK, link_next);
             }
             Operation::ReadFixed {
@@ -434,7 +434,7 @@ impl SubmissionQueueEntry {
                 self.opcode = IORING_OP_WRITE;
                 self.fd = match fd {
                     FileDescriptor::RegisteredIndex(index) => {
-                        self.iosqe_flags.set(SqeFlags::IOSQE_FIXED_FILE, true);
+                        self.sqe_flags.set(SqeFlags::IOSQE_FIXED_FILE, true);
                         index
                     }
                     FileDescriptor::Fd(fd) => fd
@@ -469,154 +469,6 @@ impl SubmissionQueueEntry {
     }
 }
 
-pub struct SubmissionQueue<'ring> {
-    head: &'ring AtomicU32,
-    tail: &'ring AtomicU32,
-    mask: &'ring u32,
-    entries: &'ring u32,
-    // flags: &'ring AtomicU32,
-    // dropped: &'ring u32,
-    // array: &'ring [AtomicU32],
-    sqes: &'ring [UnsafeCell<SubmissionQueueEntry>],
-    // sqe_head: Cell<u32>,
-    // sqe_tail: Cell<u32>,
-
-    // ring_size: u32,
-    fd: IoUringFd,
-}
-
-impl<'ring> Debug for SubmissionQueue<'ring> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SubmissionQueue")
-            .field("head", &self.head.load(Relaxed))
-            .field("tail", &self.tail.load(Relaxed))
-            .field("mask", self.mask)
-            .field("entries", &self.entries)
-            // .field("flags", &self.flags.load(Relaxed))
-            // .field("dropped", &self.dropped)
-            // .field("array", &self.array)
-            //.field("array_length", &self.array.len())
-            .field("sqes", &self.sqes)
-            // .field("sqe_head", &self.sqe_head)
-            // .field("sqe_tail", &self.sqe_tail)
-            .finish()
-    }
-}
-
-impl<'ring> SubmissionQueue<'ring> {
-    fn new(
-        fd: IoUringFd,
-        params: &io_uring_params,
-        ring_ptr: NonNull<u8>,
-        sqes: NonNull<SubmissionQueueEntry>,
-    ) -> Self {
-        let ring_ptr = ring_ptr.as_ptr();
-        let sqes = sqes.as_ptr();
-
-        unsafe {
-            // let head = &*(ring_ptr.add(params.sq_off.head as usize) as *const AtomicU32);
-            // let tail = &*(ring_ptr.add(params.sq_off.tail as usize) as *const AtomicU32);
-
-            Self {
-                // head,
-                // tail,
-                head: &*(ring_ptr.add(params.sq_off.head as usize) as *const AtomicU32),
-                tail: &*(ring_ptr.add(params.sq_off.tail as usize) as *const AtomicU32),
-                mask: &*(ring_ptr.add(params.sq_off.ring_mask as usize) as *const u32),
-                entries: &*(ring_ptr.add(params.sq_off.ring_entries as usize) as *const u32),
-                // flags: &*(ring_ptr.add(params.sq_off.flags as usize) as *const AtomicU32),
-                // dropped: &*(ring_ptr.add(params.sq_off.dropped as usize) as *const u32),
-                // array: std::slice::from_raw_parts(
-                //     ring_ptr.add(params.sq_off.array as usize) as *const AtomicU32,
-                //     params.sq_entries as usize,
-                // ),
-                sqes: std::slice::from_raw_parts(sqes as *mut _, params.sq_entries as usize),
-                // sqe_head: Cell::new(head.load(Relaxed)),
-                // sqe_tail: Cell::new(tail.load(Relaxed)),
-                //ring_size,
-                fd,
-            }
-        }
-    }
-
-    pub fn available(&self) -> usize {
-        let tail = self.tail.load(Relaxed);
-        let head = self.head.load(Acquire);
-
-        (*self.entries - tail.wrapping_sub(head)) as usize
-    }
-
-    pub fn push_entry<'op>(&self, op: Operation<'op>) -> Result<(), Operation<'op>> {
-        let tail = self.tail.load(Relaxed);
-
-        if tail == self.head.load(Acquire).wrapping_add(*self.entries) {
-            return Err(op);
-        }
-
-        let index = tail & *self.mask;
-        let entry = unsafe { &mut *self.sqes[index as usize].get() };
-        entry.apply_operation(op);
-
-        self.tail.store(tail.wrapping_add(1), Release);
-
-        Ok(())
-    }
-
-    pub fn push_entries<'op, F>(&self, mut fun: F) -> usize
-    where
-        F: FnMut() -> Option<Operation<'op>>,
-    {
-        let head = self.head.load(Acquire);
-        let mut tail = self.tail.load(Relaxed);
-        let mask = *self.mask;
-        let end = head.wrapping_add(*self.entries);
-
-        let mut index = 0;
-
-        while tail != end {
-            let entry = unsafe { &mut *self.sqes[(tail & mask) as usize].get() };
-
-            match fun() {
-                Some(op) => entry.apply_operation(op),
-                _ => break,
-            }
-
-            index += 1;
-            tail = tail.wrapping_add(1);
-        }
-
-        self.tail.store(tail, Release);
-
-        index
-    }
-
-    pub fn submit(&self) -> std::io::Result<()> {
-        let tail = self.tail.load(Relaxed);
-        let head = self.head.load(Relaxed);
-
-        // These might wrap around
-        let submitted = tail.wrapping_sub(head);
-
-        io_uring_enter(self.fd, submitted, 0, IORING_ENTER_GETEVENTS as u32)?;
-
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-pub struct CompletionQueue<'ring> {
-    head: &'ring AtomicU32,
-    tail: &'ring AtomicU32,
-    mask: &'ring u32,
-    entries: &'ring u32,
-    flags: &'ring u32,
-    overflow: &'ring u32,
-
-    cqes: &'ring [CompletionQueueEntry],
-
-    fd: IoUringFd,
-}
-
 #[derive(Debug)]
 pub struct Completed {
     pub user_data: u64,
@@ -632,74 +484,28 @@ impl From<&CompletionQueueEntry> for Completed {
     }
 }
 
-impl<'ring> CompletionQueue<'ring> {
-    fn new(fd: IoUringFd, params: &io_uring_params, ring_ptr: NonNull<u8>) -> Self {
-        let ring_ptr = ring_ptr.as_ptr();
-
-        unsafe {
-            Self {
-                head: &*(ring_ptr.add(params.cq_off.head as usize) as *const AtomicU32),
-                tail: &*(ring_ptr.add(params.cq_off.tail as usize) as *const AtomicU32),
-                mask: &*(ring_ptr.add(params.cq_off.ring_mask as usize) as *const u32),
-                entries: &*(ring_ptr.add(params.cq_off.ring_entries as usize) as *const u32),
-                flags: &*(ring_ptr.add(params.cq_off.flags as usize) as *const u32),
-                overflow: &*(ring_ptr.add(params.cq_off.overflow as usize) as *const u32),
-                cqes: std::slice::from_raw_parts(
-                    ring_ptr.add(params.cq_off.cqes as usize) as *const CompletionQueueEntry,
-                    params.cq_entries as usize,
-                ),
-                fd,
-            }
-        }
-    }
-
-    pub fn pop(&self) -> Option<Completed> {
-        let tail = self.tail.load(Acquire);
-        let head = self.head.load(Relaxed);
-
-        if tail == head {
-            return None;
-        }
-
-        let index = head & *self.mask;
-        let entry = (&self.cqes[index as usize]).into();
-
-        // Atomic: The entry must be read before modifying the head
-        self.head.store(head.wrapping_add(1), Release);
-
-        Some(entry)
-    }
-
-    pub fn wait_pop(&self) -> std::io::Result<Completed> {
-        if let Some(e) = self.pop() {
-            return Ok(e);
-        };
-
-        io_uring_enter(self.fd, 0, 1, IORING_ENTER_GETEVENTS as u32)?;
-
-        Ok(self.pop().unwrap())
-    }
-
-    pub fn pending(&self) -> usize {
-        let tail = self.tail.load(Acquire);
-        let head = self.head.load(Relaxed);
-
-        tail.wrapping_sub(head) as usize
-    }
-}
-
 #[derive(Debug)]
 pub struct IoUring {
     fd: IoUringFd,
+    params: io_uring_params,
+
     sq_ptr: NonNull<u8>,
     cq_ptr: NonNull<u8>,
     sq_size: u32,
     cq_size: u32,
-    sqes_ptr: NonNull<SubmissionQueueEntry>,
     sqes_size: u32,
-    flags: u32,
-    features: FeaturesFlags,
-    params: io_uring_params,
+
+    sq_entries: u32,
+    sq_mask: u32,
+    sq_head: NonNull<AtomicU32>,
+    sq_tail: NonNull<AtomicU32>,
+    sqes_ptr: NonNull<SubmissionQueueEntry>,
+
+    cq_entries: u32,
+    cq_mask: u32,
+    cq_head: NonNull<AtomicU32>,
+    cq_tail: NonNull<AtomicU32>,
+    cqes_ptr: NonNull<CompletionQueueEntry>
 }
 
 unsafe impl Send for IoUring {}
@@ -712,7 +518,6 @@ impl IoUring {
         display_io_uring_features(params.features);
 
         let features = FeaturesFlags::from_bits_truncate(params.features);
-
         let has_single_mmap = features.contains(FeaturesFlags::IORING_FEAT_SINGLE_MMAP);
 
         let mut sq_ring_size =
@@ -764,6 +569,27 @@ impl IoUring {
             }
         };
 
+        let (sq_head, sq_tail, sq_entries, sq_mask) = unsafe {
+            let sq_ptr = sq_ring_ptr.as_ptr() as *const u8;
+            let head = sq_ptr.add(params.sq_off.head as usize) as *mut AtomicU32;
+            let tail = sq_ptr.add(params.sq_off.tail as usize) as *mut AtomicU32;
+            let entries = *(sq_ptr.add(params.sq_off.ring_entries as usize) as *const u32);
+            let mask = *(sq_ptr.add(params.sq_off.ring_mask as usize) as *const u32);
+
+            (head, tail, entries, mask)
+        };
+
+        let (cq_head, cq_tail, cq_entries, cq_mask, cqes_ptr) = unsafe {
+            let cq_ptr = cq_ring_ptr.as_ptr() as *const u8;
+            let head = cq_ptr.add(params.cq_off.head as usize) as *mut AtomicU32;
+            let tail = cq_ptr.add(params.cq_off.tail as usize) as *mut AtomicU32;
+            let entries = *(cq_ptr.add(params.cq_off.ring_entries as usize) as *const u32);
+            let mask = *(cq_ptr.add(params.cq_off.ring_mask as usize) as *const u32);
+            let cqes_ptr = cq_ptr.add(params.cq_off.cqes as usize) as *mut CompletionQueueEntry;
+
+            (head, tail, entries, mask, cqes_ptr)
+        };
+
         Ok(IoUring {
             fd: io_ring_fd,
             sq_ptr: sq_ring_ptr,
@@ -771,11 +597,22 @@ impl IoUring {
             sq_size: sq_ring_size,
             cq_size: cq_ring_size,
             sqes_ptr: sqes,
-            flags: params.flags,
             sqes_size,
-            features,
             params,
+            sq_mask,
+            sq_entries,
+            sq_tail: NonNull::new(sq_tail).unwrap(),
+            sq_head: NonNull::new(sq_head).unwrap(),
+            cq_entries,
+            cq_mask,
+            cq_tail: NonNull::new(cq_tail).unwrap(),
+            cq_head: NonNull::new(cq_head).unwrap(),
+            cqes_ptr: NonNull::new(cqes_ptr).unwrap(),
         })
+    }
+
+    pub fn features(&self) -> FeaturesFlags {
+        FeaturesFlags::from_bits_truncate(self.params.features)
     }
 
     pub fn register_files(&self, files: &[i32]) -> std::io::Result<()> {
@@ -810,18 +647,147 @@ impl IoUring {
         io_uring_register(self.fd, IORING_UNREGISTER_FILES, std::ptr::null_mut(), 0)
     }
 
-    pub fn sq(&self) -> SubmissionQueue {
-        SubmissionQueue::new(self.fd, &self.params, self.sq_ptr, self.sqes_ptr)
+    fn sq_refs(&self) -> (&AtomicU32, &AtomicU32) {
+        unsafe {
+            (&*self.sq_head.as_ptr(), &*self.sq_tail.as_ptr())
+        }
     }
 
-    pub fn cq(&self) -> CompletionQueue {
-        CompletionQueue::new(self.fd, &self.params, self.cq_ptr)
+    fn cq_refs(&self) -> (&AtomicU32, &AtomicU32) {
+        unsafe {
+            (&*self.cq_head.as_ptr(), &*self.cq_tail.as_ptr())
+        }
+    }
+
+    pub fn sq_available(&self) -> usize {
+        let (head_ref, tail_ref) = self.sq_refs();
+
+        let tail = tail_ref.load(Relaxed);
+        let head = head_ref.load(Acquire);
+
+        (self.sq_entries - tail.wrapping_sub(head)) as usize
+    }
+
+    pub fn push_entry<'op>(&self, op: Operation<'op>) -> Result<(), Operation<'op>> {
+        let (head_ref, tail_ref) = self.sq_refs();
+
+        let tail = tail_ref.load(Relaxed);
+
+        if tail == head_ref.load(Acquire).wrapping_add(self.sq_entries) {
+            return Err(op);
+        }
+
+        let index = tail & self.sq_mask;
+        assert!(index < self.sq_entries);
+
+        let entry = unsafe {
+            let sqes = self.sqes_ptr.as_ptr() as *mut SubmissionQueueEntry;
+            &mut *sqes.add(index as usize)
+        };
+        entry.apply_operation(op);
+
+        tail_ref.store(tail.wrapping_add(1), Release);
+
+        Ok(())
+    }
+
+    pub fn push_entries<'op, F>(&self, mut fun: F) -> usize
+    where
+        F: FnMut() -> Option<Operation<'op>>,
+    {
+        let (head_ref, tail_ref) = self.sq_refs();
+
+        let head = head_ref.load(Acquire);
+        let mut tail = tail_ref.load(Relaxed);
+        let mask = self.sq_mask;
+        let end = head.wrapping_add(self.sq_entries);
+
+        let mut index = 0;
+
+        while tail != end {
+            assert!((tail & mask) < self.sq_entries);
+
+            let entry = unsafe {
+                let sqes = self.sqes_ptr.as_ptr() as *mut SubmissionQueueEntry;
+                &mut *sqes.add((tail & mask) as usize)
+            };
+
+            match fun() {
+                Some(op) => entry.apply_operation(op),
+                _ => break,
+            }
+
+            index += 1;
+            tail = tail.wrapping_add(1);
+        }
+
+        tail_ref.store(tail, Release);
+
+        index
+    }
+
+    pub fn submit(&self) -> std::io::Result<()> {
+        let (head_ref, tail_ref) = self.sq_refs();
+
+        let tail = tail_ref.load(Relaxed);
+        let head = head_ref.load(Relaxed);
+
+        // These might wrap around
+        let submitted = tail.wrapping_sub(head);
+
+        io_uring_enter(self.fd, submitted, 0, IORING_ENTER_GETEVENTS as u32)?;
+
+        Ok(())
+    }
+
+    pub fn pop(&self) -> Option<Completed> {
+        let (head_ref, tail_ref) = self.cq_refs();
+
+        let tail = tail_ref.load(Acquire);
+        let head = head_ref.load(Relaxed);
+
+        if tail == head {
+            return None;
+        }
+
+        let index = head & self.cq_mask;
+        assert!(index < self.cq_entries);
+
+        let entry = unsafe {
+            let cqes = self.cqes_ptr.as_ptr() as *const CompletionQueueEntry;
+            Completed::from(&*cqes.add(index as usize))
+        };
+
+        // Atomic: The entry must be read before modifying the head
+        head_ref.store(head.wrapping_add(1), Release);
+
+        Some(entry)
+    }
+
+    pub fn wait_pop(&self) -> std::io::Result<Completed> {
+        if let Some(e) = self.pop() {
+            return Ok(e);
+        };
+
+        io_uring_enter(self.fd, 0, 1, IORING_ENTER_GETEVENTS as u32)?;
+
+        Ok(self.pop().unwrap())
+    }
+
+    pub fn cq_pending(&self) -> usize {
+        let (head_ref, tail_ref) = self.cq_refs();
+
+        let tail = tail_ref.load(Acquire);
+        let head = head_ref.load(Relaxed);
+
+        tail.wrapping_sub(head) as usize
     }
 }
 
 impl Drop for IoUring {
     fn drop(&mut self) {
-        // TODO: Make sure the completion queue is empty
+        // TODO: Make sure the completion queue is empty before unmapping
+        // Or the kernel will work on unmapped memory
         munmap(self.sqes_ptr, self.sqes_size).unwrap();
         munmap(self.sq_ptr, self.sq_size).unwrap();
         if self.sq_ptr != self.cq_ptr {
@@ -842,26 +808,24 @@ mod tests {
     fn simple() {
         let iou = IoUring::new(4).unwrap();
 
-        let sq = iou.sq();
+        iou.push_entry(Operation::NoOp).unwrap();
+        iou.push_entry(Operation::NoOp).unwrap();
+        iou.push_entry(Operation::NoOp).unwrap();
+        iou.push_entry(Operation::NoOp).unwrap();
+        iou.push_entry(Operation::NoOp).unwrap_err();
 
-        sq.push_entry(Operation::NoOp).unwrap();
-        sq.push_entry(Operation::NoOp).unwrap();
-        sq.push_entry(Operation::NoOp).unwrap();
-        sq.push_entry(Operation::NoOp).unwrap();
-        sq.push_entry(Operation::NoOp).unwrap_err();
+        iou.submit().unwrap();
 
-        sq.submit().unwrap();
+        iou.push_entry(Operation::NoOp).unwrap();
+        iou.push_entry(Operation::NoOp).unwrap();
 
-        sq.push_entry(Operation::NoOp).unwrap();
-        sq.push_entry(Operation::NoOp).unwrap();
+        iou.submit().unwrap();
 
-        sq.submit().unwrap();
-
-        sq.push_entry(Operation::NoOp).unwrap();
-        sq.push_entry(Operation::NoOp).unwrap();
-        sq.push_entry(Operation::NoOp).unwrap();
-        sq.push_entry(Operation::NoOp).unwrap();
-        sq.push_entry(Operation::NoOp).unwrap_err();
+        iou.push_entry(Operation::NoOp).unwrap();
+        iou.push_entry(Operation::NoOp).unwrap();
+        iou.push_entry(Operation::NoOp).unwrap();
+        iou.push_entry(Operation::NoOp).unwrap();
+        iou.push_entry(Operation::NoOp).unwrap_err();
     }
 
     #[test]
@@ -869,13 +833,11 @@ mod tests {
     fn multiple() {
         let iou = IoUring::new(4).unwrap();
 
-        let sq = iou.sq();
-
         let mut iter = repeat_with(|| Operation::NoOp).take(4);
-        let n = sq.push_entries(|| iter.next());
+        let n = iou.push_entries(|| iter.next());
         assert_eq!(n, 4);
 
-        let n = sq.push_entries(|| Some(Operation::NoOp));
+        let n = iou.push_entries(|| Some(Operation::NoOp));
         assert_eq!(n, 0);
     }
 
@@ -884,49 +846,44 @@ mod tests {
     fn pop() {
         let iou = IoUring::new(4).unwrap();
 
-        let sq = iou.sq();
-        let cq = iou.cq();
-
         let mut iter = repeat_with(|| Operation::NoOp).take(4);
-        let n = sq.push_entries(|| iter.next());
+        let n = iou.push_entries(|| iter.next());
         assert_eq!(n, 4);
-        sq.submit().unwrap();
+        iou.submit().unwrap();
 
-        assert!(cq.pending() > 0);
+        assert!(iou.cq_pending() > 0);
 
-        cq.pop().unwrap();
-        cq.pop().unwrap();
-        cq.pop().unwrap();
-        cq.pop().unwrap();
-        assert!(cq.pop().is_none());
+        iou.pop().unwrap();
+        iou.pop().unwrap();
+        iou.pop().unwrap();
+        iou.pop().unwrap();
+        assert!(iou.pop().is_none());
 
         let mut spec = libc::timespec {
             tv_sec: 0,
             tv_nsec: 100000000, // 0,1 sec
         };
 
-        sq.push_entry(Operation::TimeOut { spec: &mut spec })
+        iou.push_entry(Operation::TimeOut { spec: &mut spec })
             .unwrap();
-        sq.submit().unwrap();
+        iou.submit().unwrap();
 
-        assert!(cq.pop().is_none());
+        assert!(iou.pop().is_none());
 
-        let val = cq.wait_pop().unwrap();
+        let val = iou.wait_pop().unwrap();
         assert_eq!(val.result, -libc::ETIME);
 
-        sq.push_entry(Operation::NoOp).unwrap();
-        sq.push_entry(Operation::NoOp).unwrap();
-        sq.submit().unwrap();
-        sq.submit().unwrap();
+        iou.push_entry(Operation::NoOp).unwrap();
+        iou.push_entry(Operation::NoOp).unwrap();
+        iou.submit().unwrap();
+        iou.submit().unwrap();
 
         std::thread::sleep(std::time::Duration::from_millis(100));
 
-        let val = cq.wait_pop().unwrap();
-        let val = cq.wait_pop().unwrap();
+        let val = iou.wait_pop().unwrap();
+        let val = iou.wait_pop().unwrap();
 
         println!("val={:?}", val);
-        println!("sq={:#?}", sq);
-        println!("cq={:#?}", cq);
         println!("iou={:#?}", iou);
     }
 
@@ -945,21 +902,18 @@ mod tests {
         let registered_files = vec![-1; 512];
         iou.register_files(&registered_files).unwrap();
 
-        let sq = iou.sq();
-
         let mut files = Vec::new();
         files.push(fd.as_raw_fd());
 
-        sq.push_entry(Operation::RegisterFiles {
+        iou.push_entry(Operation::RegisterFiles {
             id: 101.into(),
-            io_uring_fd: sq.fd,
+            io_uring_fd: iou.fd,
             files: files.as_slice(),
             link_next: false,
         }).unwrap();
-        sq.submit();
+        iou.submit();
 
-        let cq = iou.cq();
-        let completed = cq.wait_pop().unwrap();
+        let completed = iou.wait_pop().unwrap();
 
         assert_eq!(completed.result, 1);
 
