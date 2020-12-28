@@ -763,8 +763,8 @@ impl IoUring {
     pub fn pop(&self) -> Option<Completed> {
         let (head_ref, tail_ref) = self.cq_refs();
 
-        let tail = tail_ref.load(Acquire);
         let head = head_ref.load(Relaxed);
+        let tail = tail_ref.load(Acquire);
 
         if tail == head {
             return None;
@@ -797,8 +797,8 @@ impl IoUring {
     pub fn cq_pending(&self) -> usize {
         let (head_ref, tail_ref) = self.cq_refs();
 
-        let tail = tail_ref.load(Acquire);
         let head = head_ref.load(Relaxed);
+        let tail = tail_ref.load(Acquire);
 
         tail.wrapping_sub(head) as usize
     }
