@@ -66,11 +66,6 @@ const IORING_OP_SHUTDOWN: u8 = 34;
 const IORING_OP_RENAMEAT: u8 = 35;
 const IORING_OP_UNLINKAT: u8 = 36;
 
-const IORING_ENTER_GETEVENTS: u8 = 1 << 0;
-const IORING_ENTER_SQ_WAKEUP: u8 = 1 << 1;
-const IORING_ENTER_SQ_WAIT: u8 = 1 << 2;
-const IORING_ENTER_EXT_ARG: u8 = 1 << 3;
-
 const IORING_REGISTER_BUFFERS: u32 = 0;
 const IORING_UNREGISTER_BUFFERS: u32 = 1;
 const IORING_REGISTER_FILES: u32 = 2;
@@ -84,6 +79,15 @@ const IORING_REGISTER_PERSONALITY: u32 = 9;
 const IORING_UNREGISTER_PERSONALITY: u32 = 10;
 const IORING_REGISTER_RESTRICTIONS: u32 = 11;
 const IORING_REGISTER_ENABLE_RINGS: u32 = 12;
+
+bitflags! {
+    struct EnterFlags: u32 {
+        const IORING_ENTER_GETEVENTS = 1 << 0;
+        const IORING_ENTER_SQ_WAKEUP = 1 << 1;
+        const IORING_ENTER_SQ_WAIT = 1 << 2;
+        const IORING_ENTER_EXT_ARG = 1 << 3;
+    }
+}
 
 bitflags! {
     // sqe->sqe_flags
@@ -116,6 +120,16 @@ bitflags! {
         const IORING_FEAT_POLL_32BITS = 1 << 6;
         const IORING_FEAT_SQPOLL_NONFIXED = 1 << 7;
         const IORING_FEAT_EXT_ARG = 1 << 8;
+    }
+}
+
+bitflags! {
+    /// sq_ring->flags
+    pub struct SqFlags: u32 {
+        /// needs io_uring_enter wakeup
+        const IORING_SQ_NEED_WAKEUP = 1 << 0;
+        /// CQ ring is overflown
+        const IORING_SQ_CQ_OVERFLOW = 1 << 1;
     }
 }
 
@@ -498,6 +512,18 @@ impl From<&CompletionQueueEntry> for Completed {
     }
 }
 
+pub enum Submit {
+    All,
+    None,
+    N(u32),
+}
+
+impl From<u32> for Submit {
+    fn from(n: u32) -> Self {
+        Submit::N(n)
+    }
+}
+
 #[derive(Debug)]
 pub struct IoUring {
     fd: IoUringFd,
@@ -679,21 +705,23 @@ impl IoUring {
         unsafe { (&*self.cq_head.as_ptr(), &*self.cq_tail.as_ptr()) }
     }
 
-    pub fn sq_available(&self) -> usize {
+    /// Number of entries pushed by us, waiting to be read by the kernel
+    pub fn sq_pending(&self) -> u32 {
         let (head_ref, tail_ref) = self.sq_refs();
 
-        let tail = tail_ref.load(Relaxed);
         let head = head_ref.load(Acquire);
+        let tail = tail_ref.load(Relaxed);
 
-        (self.sq_entries - tail.wrapping_sub(head)) as usize
+        tail.wrapping_sub(head)
     }
 
     pub fn push_entry<'op>(&self, op: Operation<'op>) -> Result<(), Operation<'op>> {
         let (head_ref, tail_ref) = self.sq_refs();
 
+        let head = head_ref.load(Acquire);
         let tail = tail_ref.load(Relaxed);
 
-        if tail == head_ref.load(Acquire).wrapping_add(self.sq_entries) {
+        if tail == head.wrapping_add(self.sq_entries) {
             return Err(op);
         }
 
@@ -746,16 +774,25 @@ impl IoUring {
         index
     }
 
-    pub fn submit(&self) -> std::io::Result<()> {
+    pub fn submit<S: Into<Submit>>(&self, n: S) -> std::io::Result<()> {
         let (head_ref, tail_ref) = self.sq_refs();
+        let submit = n.into();
 
+        let head = head_ref.load(Acquire);
         let tail = tail_ref.load(Relaxed);
-        let head = head_ref.load(Relaxed);
 
         // These might wrap around
-        let submitted = tail.wrapping_sub(head);
+        let pending = tail.wrapping_sub(head);
 
-        io_uring_enter(self.fd, submitted, 0, IORING_ENTER_GETEVENTS as u32)?;
+        let to_submit = match submit {
+            Submit::All => pending,
+            Submit::N(n) => n.min(pending),
+            Submit::None => 0,
+        };
+
+        if to_submit > 0 {
+            io_uring_enter(self.fd, to_submit, 0, 0)?;
+        }
 
         Ok(())
     }
@@ -763,8 +800,8 @@ impl IoUring {
     pub fn pop(&self) -> Option<Completed> {
         let (head_ref, tail_ref) = self.cq_refs();
 
-        let head = head_ref.load(Relaxed);
         let tail = tail_ref.load(Acquire);
+        let head = head_ref.load(Relaxed);
 
         if tail == head {
             return None;
@@ -785,22 +822,30 @@ impl IoUring {
     }
 
     pub fn wait_pop(&self) -> std::io::Result<Completed> {
-        if let Some(e) = self.pop() {
-            return Ok(e);
-        };
+        loop {
+            if let Some(e) = self.pop() {
+                return Ok(e);
+            };
 
-        io_uring_enter(self.fd, 0, 1, IORING_ENTER_GETEVENTS as u32)?;
-
-        Ok(self.pop().unwrap())
+            // Submit at the same time
+            let sq_pending = self.sq_pending();
+            io_uring_enter(
+                self.fd,
+                sq_pending,
+                1,
+                EnterFlags::IORING_ENTER_GETEVENTS.bits,
+            )?;
+        }
     }
 
-    pub fn cq_pending(&self) -> usize {
+    /// Number of entries pushed by the kernel, but not yet read by us
+    pub fn cq_pending(&self) -> u32 {
         let (head_ref, tail_ref) = self.cq_refs();
 
-        let head = head_ref.load(Relaxed);
         let tail = tail_ref.load(Acquire);
+        let head = head_ref.load(Relaxed);
 
-        tail.wrapping_sub(head) as usize
+        tail.wrapping_sub(head) as u32
     }
 }
 
@@ -820,7 +865,7 @@ impl Drop for IoUring {
 mod tests {
     use std::{iter::repeat_with, os::unix::io::AsRawFd};
 
-    use super::{IoUring, Operation};
+    use super::{IoUring, Operation, Submit};
 
     #[test]
     #[cfg_attr(miri, ignore)] // Miri doesn't support io_uring
@@ -833,12 +878,12 @@ mod tests {
         iou.push_entry(Operation::NoOp).unwrap();
         iou.push_entry(Operation::NoOp).unwrap_err();
 
-        iou.submit().unwrap();
+        iou.submit(Submit::All).unwrap();
 
         iou.push_entry(Operation::NoOp).unwrap();
         iou.push_entry(Operation::NoOp).unwrap();
 
-        iou.submit().unwrap();
+        iou.submit(Submit::All).unwrap();
 
         iou.push_entry(Operation::NoOp).unwrap();
         iou.push_entry(Operation::NoOp).unwrap();
@@ -868,7 +913,7 @@ mod tests {
         let mut iter = repeat_with(|| Operation::NoOp).take(4);
         let n = iou.push_entries(|| iter.next());
         assert_eq!(n, 4);
-        iou.submit().unwrap();
+        iou.submit(Submit::All).unwrap();
 
         assert!(iou.cq_pending() > 0);
 
@@ -885,7 +930,7 @@ mod tests {
 
         iou.push_entry(Operation::TimeOut { spec: &mut spec })
             .unwrap();
-        iou.submit().unwrap();
+        iou.submit(Submit::All).unwrap();
 
         assert!(iou.pop().is_none());
 
@@ -894,8 +939,8 @@ mod tests {
 
         iou.push_entry(Operation::NoOp).unwrap();
         iou.push_entry(Operation::NoOp).unwrap();
-        iou.submit().unwrap();
-        iou.submit().unwrap();
+        iou.submit(Submit::All).unwrap();
+        iou.submit(Submit::All).unwrap();
 
         std::thread::sleep(std::time::Duration::from_millis(100));
 
@@ -931,7 +976,7 @@ mod tests {
             link_next: false,
         })
         .unwrap();
-        iou.submit();
+        iou.submit(Submit::All);
 
         let completed = iou.wait_pop().unwrap();
 

@@ -48,7 +48,9 @@ struct File {
     ring_id: u32,
     pending_write: Map<RingId, Pending>,
     completed: VecDeque<Completed>,
-    in_flight: usize,
+    /// +1 when an entry is added to the sq (submitted or not)
+    /// -1 when an entry is read from the cq
+    in_flight: u32,
     need_submit: bool,
     registered_files: Vec<i32>,
     /// map fd to index in registered_files
@@ -100,18 +102,10 @@ impl File {
     }
 
     fn ensure_can_push(&mut self) {
-        let sq_available = self.io_uring.sq_available();
-        let cq_entries = self.io_uring.cq_entries as usize;
+        let cq_entries = self.io_uring.cq_entries;
+        let sq_entries = self.io_uring.sq_entries;
 
-        if sq_available == 0 {
-            // The submission queue is full, need to submit
-            self.submit();
-        }
-
-        // let sq_available = sq.available();
-
-        if sq_available == 0 || self.in_flight == cq_entries {
-            // println!("LAAA {:?} {:?} {:?}", sq_available, self.in_flight, cq_entries);
+        if self.in_flight == cq_entries {
             // We made the maximum number of request for the completion
             // queue. We can't push more request, we need to wait for
             // at least one to complete before being able to push.
@@ -119,16 +113,27 @@ impl File {
             self.in_flight = self.in_flight.checked_sub(1).unwrap();
             self.completed.push_back(completed);
         }
+
+        let sq_pending = self.io_uring.sq_pending();
+
+        if sq_pending == sq_entries {
+            // The submission queue is full, need to submit
+            self.submit();
+        }
     }
 
-    pub fn in_flight(&self) -> usize {
+    pub fn in_flight(&self) -> u32 {
         self.in_flight
     }
 
     pub fn submit(&mut self) {
         if self.need_submit {
-            self.io_uring.submit().unwrap();
-            self.need_submit = false;
+            let nfree_cq = self.io_uring.cq_entries - self.in_flight;
+            // Do not submit more than what is available in cq
+            if nfree_cq > 0 {
+                self.io_uring.submit(nfree_cq).unwrap();
+                self.need_submit = self.io_uring.sq_pending() != 0;
+            }
         }
     }
 
@@ -269,7 +274,7 @@ impl File {
             return Some((id, Err(std::io::ErrorKind::Other.into())));
         }
 
-        let mut pending = self.pending_write.get_mut(&id).unwrap();
+        let pending = self.pending_write.get_mut(&id).unwrap();
 
         match pending {
             Pending::Register => Some((id, Ok(()))),
@@ -319,6 +324,7 @@ impl File {
 
                     self.ensure_can_push();
                     self.in_flight += 1;
+                    self.need_submit = true;
 
                     // Read/Write the remaining data
                     self.io_uring
@@ -337,8 +343,8 @@ impl File {
                             },
                         })
                         .unwrap();
-                    self.io_uring.submit().unwrap();
-                    self.need_submit = false;
+
+                    self.submit();
 
                     None
                 }
@@ -395,7 +401,7 @@ mod tests {
 
         let mut file = File::new().unwrap();
 
-        const SIZE: usize = 0x4000 * 25;
+        const SIZE: usize = 0x4000 * 250;
 
         let mut data = Vec::with_capacity(SIZE);
         for n in 0..data.capacity() {
