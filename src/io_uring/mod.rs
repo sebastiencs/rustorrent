@@ -537,6 +537,7 @@ pub struct IoUring {
 
     sq_entries: u32,
     sq_mask: u32,
+    sq_tail_local: u32,
     sq_head: NonNull<AtomicU32>,
     sq_tail: NonNull<AtomicU32>,
     sqes_ptr: NonNull<SubmissionQueueEntry>,
@@ -609,14 +610,15 @@ impl IoUring {
             }
         };
 
-        let (sq_head, sq_tail, sq_entries, sq_mask) = unsafe {
+        let (sq_head, sq_tail, sq_entries, sq_mask, sq_tail_local) = unsafe {
             let sq_ptr = sq_ring_ptr.as_ptr() as *const u8;
             let head = sq_ptr.add(params.sq_off.head as usize) as *mut AtomicU32;
             let tail = sq_ptr.add(params.sq_off.tail as usize) as *mut AtomicU32;
             let entries = *(sq_ptr.add(params.sq_off.ring_entries as usize) as *const u32);
             let mask = *(sq_ptr.add(params.sq_off.ring_mask as usize) as *const u32);
+            let tail_local = (&*tail).load(Relaxed);
 
-            (head, tail, entries, mask)
+            (head, tail, entries, mask, tail_local)
         };
 
         let (cq_head, cq_tail, cq_entries, cq_mask, cqes_ptr) = unsafe {
@@ -641,6 +643,7 @@ impl IoUring {
             params,
             sq_mask,
             sq_entries,
+            sq_tail_local,
             sq_tail: NonNull::new(sq_tail).unwrap(),
             sq_head: NonNull::new(sq_head).unwrap(),
             cq_entries,
@@ -707,19 +710,19 @@ impl IoUring {
 
     /// Number of entries pushed by us, waiting to be read by the kernel
     pub fn sq_pending(&self) -> u32 {
-        let (head_ref, tail_ref) = self.sq_refs();
+        let (head_ref, _) = self.sq_refs();
 
         let head = head_ref.load(Acquire);
-        let tail = tail_ref.load(Relaxed);
+        let tail = self.sq_tail_local;
 
         tail.wrapping_sub(head)
     }
 
-    pub fn push_entry<'op>(&self, op: Operation<'op>) -> Result<(), Operation<'op>> {
-        let (head_ref, tail_ref) = self.sq_refs();
+    pub fn push_entry<'op>(&mut self, op: Operation<'op>) -> Result<(), Operation<'op>> {
+        let (head_ref, _) = self.sq_refs();
 
         let head = head_ref.load(Acquire);
-        let tail = tail_ref.load(Relaxed);
+        let tail = self.sq_tail_local;
 
         if tail == head.wrapping_add(self.sq_entries) {
             return Err(op);
@@ -734,19 +737,19 @@ impl IoUring {
         };
         entry.apply_operation(op);
 
-        tail_ref.store(tail.wrapping_add(1), Release);
+        self.sq_tail_local = tail.wrapping_add(1);
 
         Ok(())
     }
 
-    pub fn push_entries<'op, F>(&self, mut fun: F) -> usize
+    pub fn push_entries<'op, F>(&mut self, mut fun: F) -> usize
     where
         F: FnMut() -> Option<Operation<'op>>,
     {
-        let (head_ref, tail_ref) = self.sq_refs();
+        let (head_ref, _) = self.sq_refs();
 
         let head = head_ref.load(Acquire);
-        let mut tail = tail_ref.load(Relaxed);
+        let mut tail = self.sq_tail_local;
         let mask = self.sq_mask;
         let end = head.wrapping_add(self.sq_entries);
 
@@ -769,7 +772,7 @@ impl IoUring {
             tail = tail.wrapping_add(1);
         }
 
-        tail_ref.store(tail, Release);
+        self.sq_tail_local = tail;
 
         index
     }
@@ -779,7 +782,7 @@ impl IoUring {
         let submit = n.into();
 
         let head = head_ref.load(Acquire);
-        let tail = tail_ref.load(Relaxed);
+        let tail = self.sq_tail_local;
 
         // These might wrap around
         let pending = tail.wrapping_sub(head);
@@ -791,6 +794,7 @@ impl IoUring {
         };
 
         if to_submit > 0 {
+            tail_ref.store(tail, Release);
             io_uring_enter(self.fd, to_submit, 0, 0)?;
         }
 
@@ -870,7 +874,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // Miri doesn't support io_uring
     fn simple() {
-        let iou = IoUring::new(4).unwrap();
+        let mut iou = IoUring::new(4).unwrap();
 
         iou.push_entry(Operation::NoOp).unwrap();
         iou.push_entry(Operation::NoOp).unwrap();
@@ -895,7 +899,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // Miri doesn't support io_uring
     fn multiple() {
-        let iou = IoUring::new(4).unwrap();
+        let mut iou = IoUring::new(4).unwrap();
 
         let mut iter = repeat_with(|| Operation::NoOp).take(4);
         let n = iou.push_entries(|| iter.next());
@@ -908,7 +912,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // Miri doesn't support io_uring
     fn pop() {
-        let iou = IoUring::new(4).unwrap();
+        let mut iou = IoUring::new(4).unwrap();
 
         let mut iter = repeat_with(|| Operation::NoOp).take(4);
         let n = iou.push_entries(|| iter.next());
@@ -954,7 +958,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // Miri doesn't support io_uring
     fn register_files() {
-        let iou = IoUring::new(4).unwrap();
+        let mut iou = IoUring::new(4).unwrap();
 
         let fd = std::fs::OpenOptions::new()
             .write(true)
