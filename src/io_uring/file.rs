@@ -1,11 +1,11 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::VecDeque,
     convert::TryInto,
-    io::ErrorKind::UnexpectedEof,
+    os::unix::io::{AsRawFd, RawFd},
     ptr::NonNull,
 };
 
-use crate::utils::Map;
+use crate::utils::{Map, NoHash};
 
 use super::{Completed, IoUring, Operation};
 
@@ -43,19 +43,21 @@ pub enum FileDescriptor {
     RegisteredIndex(i32),
 }
 
-struct File {
+pub struct FilesUring<T> {
     io_uring: IoUring,
     ring_id: u32,
-    pending_write: Map<RingId, Pending>,
+    pending: Map<RingId, Pending<T>>,
     completed: VecDeque<Completed>,
     /// +1 when an entry is added to the sq (submitted or not)
     /// -1 when an entry is read from the cq
     in_flight: u32,
     need_submit: bool,
-    registered_files: Vec<i32>,
+    registered_files: Vec<RawFd>,
     /// map fd to index in registered_files
-    registered_files_map: Map<i32, usize>,
+    registered_files_map: Map<RawFd, usize>,
 }
+
+unsafe impl<T> Send for FilesUring<T> {}
 
 #[derive(Copy, Clone)]
 enum OpKind {
@@ -63,7 +65,12 @@ enum OpKind {
     Read,
 }
 
-enum Pending {
+struct Pending<T> {
+    op: PendingOperation,
+    user_data: Option<T>,
+}
+
+enum PendingOperation {
     ReadWrite {
         fd: FileDescriptor,
         data: NonNull<u8>,
@@ -80,9 +87,9 @@ enum Pending {
     Register,
 }
 
-impl File {
-    pub fn new() -> std::io::Result<File> {
-        let iou = IoUring::new(4)?;
+impl<T> FilesUring<T> {
+    pub fn new(ring_size: u32) -> std::io::Result<FilesUring<T>> {
+        let iou = IoUring::new(ring_size)?;
 
         // TODO:
         // Make this configurable and respect RLIMIT_NOFILE
@@ -92,7 +99,7 @@ impl File {
         Ok(Self {
             io_uring: iou,
             ring_id: 10,
-            pending_write: HashMap::default(),
+            pending: Map::with_capacity_and_hasher(16, NoHash::default()),
             completed: VecDeque::with_capacity(64),
             in_flight: 0,
             need_submit: false,
@@ -123,7 +130,8 @@ impl File {
     }
 
     pub fn in_flight(&self) -> u32 {
-        self.in_flight
+        let in_completed: u32 = self.completed.len().try_into().unwrap();
+        self.in_flight + in_completed
     }
 
     pub fn submit(&mut self) {
@@ -137,7 +145,7 @@ impl File {
         }
     }
 
-    fn find_or_register_file(&mut self, fd: i32) -> FileDescriptor {
+    fn find_or_register_file(&mut self, fd: RawFd) -> FileDescriptor {
         if let Some(index) = self.registered_files_map.get(&fd) {
             return FileDescriptor::RegisteredIndex((*index).try_into().unwrap());
         }
@@ -157,8 +165,21 @@ impl File {
         FileDescriptor::RegisteredIndex(new_index.try_into().unwrap())
     }
 
-    pub fn write(&mut self, fd: i32, offset: usize, data: &[u8]) {
-        let fd = self.find_or_register_file(fd);
+    pub fn write<F>(&mut self, fd: &F, offset: usize, data: &[u8])
+    where
+        F: AsRawFd,
+    {
+        unsafe { self.write_with_data(fd, offset, data, None) }
+    }
+
+    /// # Safety
+    /// The buffer must lives until the request is completed
+    pub unsafe fn write_with_data<F, D>(&mut self, fd: &F, offset: usize, data: &[u8], user_data: D)
+    where
+        F: AsRawFd,
+        D: Into<Option<T>>,
+    {
+        let fd = self.find_or_register_file(fd.as_raw_fd());
         let id = self.ring_id.into();
 
         self.ensure_can_push();
@@ -175,22 +196,43 @@ impl File {
         self.need_submit = true;
         self.ring_id = self.ring_id.wrapping_add(1);
         self.in_flight += 1;
-        self.pending_write.insert(
+        self.pending.insert(
             id,
-            Pending::ReadWrite {
-                fd,
-                data: NonNull::new(data.as_ptr() as *mut _).unwrap(),
-                data_length: data.len(),
-                nbytes_processed: 0,
-                offset,
-                neof: 0,
-                kind: OpKind::Write,
+            Pending {
+                user_data: user_data.into(),
+                op: PendingOperation::ReadWrite {
+                    fd,
+                    data: NonNull::new(data.as_ptr() as *mut _).unwrap(),
+                    data_length: data.len(),
+                    nbytes_processed: 0,
+                    offset,
+                    neof: 0,
+                    kind: OpKind::Write,
+                },
             },
         );
     }
 
-    pub fn read(&mut self, fd: i32, offset: usize, data: &mut [u8]) {
-        let fd = self.find_or_register_file(fd);
+    fn read<F>(&mut self, fd: &F, offset: usize, data: &mut [u8])
+    where
+        F: AsRawFd,
+    {
+        unsafe { self.read_with_data(fd, offset, data, None) }
+    }
+
+    /// # Safety
+    /// The buffer must lives until the request is completed
+    pub unsafe fn read_with_data<F, D>(
+        &mut self,
+        fd: &F,
+        offset: usize,
+        data: &mut [u8],
+        user_data: D,
+    ) where
+        F: AsRawFd,
+        D: Into<Option<T>>,
+    {
+        let fd = self.find_or_register_file(fd.as_raw_fd());
         let id = self.ring_id.into();
 
         self.ensure_can_push();
@@ -207,21 +249,24 @@ impl File {
         self.need_submit = true;
         self.ring_id = self.ring_id.wrapping_add(1);
         self.in_flight += 1;
-        self.pending_write.insert(
+        self.pending.insert(
             id,
-            Pending::ReadWrite {
-                fd,
-                data: NonNull::new(data.as_ptr() as *mut _).unwrap(),
-                data_length: data.len(),
-                nbytes_processed: 0,
-                offset,
-                neof: 0,
-                kind: OpKind::Read,
+            Pending {
+                user_data: user_data.into(),
+                op: PendingOperation::ReadWrite {
+                    fd,
+                    data: NonNull::new(data.as_ptr() as *mut _).unwrap(),
+                    data_length: data.len(),
+                    nbytes_processed: 0,
+                    offset,
+                    neof: 0,
+                    kind: OpKind::Read,
+                },
             },
         );
     }
 
-    pub fn get_completed(&mut self) -> Option<(RingId, std::io::Result<()>)> {
+    pub fn get_completed(&mut self) -> Option<(Option<T>, std::io::Result<()>)> {
         loop {
             let completed = self.completed.pop_front().or_else(|| {
                 self.submit();
@@ -238,7 +283,7 @@ impl File {
         }
     }
 
-    pub fn wait_completed(&mut self) -> Option<(RingId, std::io::Result<()>)> {
+    pub fn wait_completed(&mut self) -> Option<(Option<T>, std::io::Result<()>)> {
         loop {
             let completed = self.completed.pop_front().or_else(|| {
                 self.submit();
@@ -261,7 +306,24 @@ impl File {
         }
     }
 
-    fn process_completed(&mut self, completed: Completed) -> Option<(RingId, std::io::Result<()>)> {
+    pub fn block(&mut self) {
+        if !self.completed.is_empty() {
+            return;
+        }
+
+        if self.in_flight == 0 {
+            return;
+        }
+
+        let completed = self.io_uring.wait_pop().unwrap();
+        self.in_flight = self.in_flight.checked_sub(1).unwrap();
+        self.completed.push_back(completed);
+    }
+
+    fn process_completed(
+        &mut self,
+        completed: Completed,
+    ) -> Option<(Option<T>, std::io::Result<()>)> {
         // println!("Completed {:?}", completed);
 
         let written = completed.result;
@@ -270,15 +332,19 @@ impl File {
         if written < 0 {
             // Error
 
-            self.pending_write.remove(&id).unwrap();
-            return Some((id, Err(std::io::ErrorKind::Other.into())));
+            let Pending { user_data, .. } = self.pending.remove(&id).unwrap();
+            return Some((user_data, Err(std::io::ErrorKind::Other.into())));
         }
 
-        let pending = self.pending_write.get_mut(&id).unwrap();
+        let Pending { op: pending, .. } = self.pending.get_mut(&id).unwrap();
 
         match pending {
-            Pending::Register => Some((id, Ok(()))),
-            Pending::ReadWrite {
+            PendingOperation::Register => {
+                let Pending { user_data, .. } = self.pending.remove(&id).unwrap();
+
+                Some((user_data, Ok(())))
+            }
+            PendingOperation::ReadWrite {
                 fd,
                 data,
                 data_length,
@@ -292,8 +358,8 @@ impl File {
                 if nbytes_processed == data_length {
                     // All data written
 
-                    self.pending_write.remove(&id).unwrap();
-                    Some((id, Ok(())))
+                    let Pending { user_data, .. } = self.pending.remove(&id).unwrap();
+                    Some((user_data, Ok(())))
                 } else {
                     // Partial read/write, make another request
                     // See https://github.com/axboe/liburing/issues/78
@@ -304,8 +370,8 @@ impl File {
                         if *neof == 1 {
                             // EOF reached
 
-                            self.pending_write.remove(&id).unwrap();
-                            return Some((id, Err(UnexpectedEof.into())));
+                            let Pending { user_data, .. } = self.pending.remove(&id).unwrap();
+                            return Some((user_data, Ok(())));
                         }
                         *neof += 1;
                     }
@@ -318,9 +384,6 @@ impl File {
                     let fd = *fd;
                     let offset = *offset + *nbytes_processed;
                     let kind = *kind;
-
-                    // For &mut self aliasing
-                    drop(pending);
 
                     self.ensure_can_push();
                     self.in_flight += 1;
@@ -355,8 +418,7 @@ impl File {
 
 #[cfg(test)]
 mod tests {
-    use super::{File, IoUring};
-    use std::os::unix::io::AsRawFd;
+    use super::FilesUring;
 
     #[test]
     #[cfg_attr(miri, ignore)] // Miri doesn't support io_uring
@@ -368,14 +430,14 @@ mod tests {
             .open("coucou.txt")
             .unwrap();
 
-        let mut file = File::new().unwrap();
+        let mut file = FilesUring::<()>::new(4).unwrap();
 
         let mut vec = Vec::with_capacity(0x4000 * 25);
         for n in 0..vec.capacity() {
             vec.push((n & 0xFF) as u8);
         }
 
-        file.write(fd.as_raw_fd(), 0, vec.as_slice());
+        file.write(&fd, 0, vec.as_slice());
         assert_eq!(file.in_flight(), 1);
 
         let res = file.wait_completed();
@@ -399,17 +461,17 @@ mod tests {
             .open("coucou2.txt")
             .unwrap();
 
-        let mut file = File::new().unwrap();
+        let mut file = FilesUring::<()>::new(4).unwrap();
 
         const SIZE: usize = 0x4000 * 250;
 
         let mut data = Vec::with_capacity(SIZE);
-        for n in 0..data.capacity() {
+        for _ in 0..data.capacity() {
             data.push(fastrand::u8(..));
         }
 
         for (index, byte) in data.chunks(2).enumerate() {
-            file.write(fd.as_raw_fd(), index * 2, byte);
+            file.write(&fd, index * 2, byte);
         }
 
         let mut results = Vec::new();
@@ -430,7 +492,7 @@ mod tests {
         let mut read = vec![0; SIZE];
 
         for (index, chunk) in read.chunks_mut(2).enumerate() {
-            file.read(fd.as_raw_fd(), index * 2, chunk);
+            file.read(&fd, index * 2, chunk);
         }
 
         let mut results = Vec::new();

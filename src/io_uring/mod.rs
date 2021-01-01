@@ -1,7 +1,6 @@
 use std::{
     cell::UnsafeCell,
     fmt::Debug,
-    io::IoSlice,
     os::unix::io::RawFd,
     path::Path,
     ptr::NonNull,
@@ -373,7 +372,6 @@ pub enum Operation<'a> {
     },
     RegisterFiles {
         id: RingId,
-        io_uring_fd: IoUringFd,
         files: &'a [i32],
         link_next: bool,
     },
@@ -409,7 +407,6 @@ impl SubmissionQueueEntry {
         match op {
             Operation::RegisterFiles {
                 id,
-                io_uring_fd,
                 files,
                 link_next,
             } => {
@@ -600,7 +597,7 @@ impl IoUring {
             }
         };
 
-        let sqes_size = params.sq_entries * std::mem::size_of::<CompletionQueueEntry>() as u32;
+        let sqes_size = params.sq_entries * std::mem::size_of::<SubmissionQueueEntry>() as u32;
         let sqes = match mmap(&io_ring_fd, sqes_size, IORING_OFF_SQES) {
             Ok(ptr) => ptr,
             Err(e) => {
@@ -948,7 +945,7 @@ mod tests {
 
         std::thread::sleep(std::time::Duration::from_millis(100));
 
-        let val = iou.wait_pop().unwrap();
+        let _ = iou.wait_pop().unwrap();
         let val = iou.wait_pop().unwrap();
 
         println!("val={:?}", val);
@@ -975,12 +972,11 @@ mod tests {
 
         iou.push_entry(Operation::RegisterFiles {
             id: 101.into(),
-            io_uring_fd: iou.fd,
             files: files.as_slice(),
             link_next: false,
         })
         .unwrap();
-        iou.submit(Submit::All);
+        iou.submit(Submit::All).unwrap();
 
         let completed = iou.wait_pop().unwrap();
 

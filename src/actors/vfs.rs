@@ -6,40 +6,19 @@ use std::{
     sync::Arc,
 };
 
-use std::os::unix::prelude::AsRawFd;
-
 use async_channel::{Receiver, Sender};
 use hashbrown::HashMap;
 use kv_log_macro::{debug, info};
 use tokio::runtime::Runtime;
 
 use crate::{
+    fs::FSMessage,
     metadata::{Torrent, TorrentFile},
     piece_picker::{BlockIndex, PieceIndex},
     pieces::Pieces,
     supervisors::torrent::TorrentId,
     utils::Map,
 };
-
-pub enum VFSMessage {
-    AddTorrent {
-        id: TorrentId,
-        meta: Arc<Torrent>,
-        pieces_infos: Arc<Pieces>,
-    },
-    RemoveTorrent {
-        id: TorrentId,
-    },
-    Read {
-        id: TorrentId,
-        piece: PieceIndex,
-    },
-    Write {
-        id: TorrentId,
-        piece: PieceIndex,
-        data: Box<[u8]>,
-    },
-}
 
 fn open_file(path: &Path) -> File {
     if !path.exists() {
@@ -122,13 +101,13 @@ impl TorrentCache {
 
 pub struct VFS {
     runtime: Arc<Runtime>,
-    recv: Receiver<VFSMessage>,
+    recv: Receiver<FSMessage>,
     torrents: Map<TorrentId, TorrentCache>,
 }
 
 impl VFS {
     #[allow(clippy::new_ret_no_self)]
-    pub fn new(runtime: Arc<Runtime>) -> Sender<VFSMessage> {
+    pub fn new(runtime: Arc<Runtime>) -> Sender<FSMessage> {
         let (sender, recv) = async_channel::bounded(1000);
 
         let vfs = VFS {
@@ -156,9 +135,9 @@ impl VFS {
         }
     }
 
-    fn process_msg(&mut self, msg: VFSMessage) {
+    fn process_msg(&mut self, msg: FSMessage) {
         match msg {
-            VFSMessage::AddTorrent {
+            FSMessage::AddTorrent {
                 id,
                 meta,
                 pieces_infos,
@@ -173,13 +152,13 @@ impl VFS {
 
                 info!("[vfs] {:?} Add torrent", id);
             }
-            VFSMessage::RemoveTorrent { id } => {
+            FSMessage::RemoveTorrent { id } => {
                 self.torrents.remove(&id);
             }
-            VFSMessage::Read { id, piece } => {
+            FSMessage::Read { id, piece, .. } => {
                 self.read(id, piece);
             }
-            VFSMessage::Write { id, piece, data } => {
+            FSMessage::Write { id, piece, data } => {
                 self.write(id, piece, &data);
             }
         }

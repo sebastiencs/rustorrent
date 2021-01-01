@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use crate::{
-    actors::vfs::{VFSMessage, VFS},
+    actors::vfs::VFS,
+    fs::{FSMessage, FileSystem, UringFS},
     logger,
     metadata::Torrent,
 };
@@ -26,7 +27,7 @@ struct SessionInner {
     cmds: SyncReceiver<SessionCommand>,
     actors: Vec<TorrentSupervisor>,
     sha1_workers: SyncSender<Sha1Task>,
-    vfs: Sender<VFSMessage>,
+    vfs: Sender<FSMessage>,
     runtime: Arc<Runtime>,
 }
 
@@ -82,7 +83,10 @@ impl Session {
         let (sender, receiver) = unbounded();
         let runtime = Arc::new(Runtime::new().unwrap());
         let sha1_workers = Sha1Workers::new_pool(runtime.clone());
-        let vfs = VFS::new(runtime.clone());
+        let vfs = match UringFS::init(runtime.clone()) {
+            Some(fs) => fs,
+            _ => VFS::new(runtime.clone()),
+        };
         let runtime_clone = runtime.clone();
 
         let handle = std::thread::spawn(move || {

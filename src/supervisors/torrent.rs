@@ -16,10 +16,10 @@ use crate::{
     actors::{
         peer::{Peer, PeerCommand, PeerExternId, PeerId},
         sha1::Sha1Task,
-        vfs::VFSMessage,
     },
     bitfield::{BitField, BitFieldUpdate},
     errors::TorrentError,
+    fs::FSMessage,
     metadata::Torrent,
     piece_collector::{Block, PieceCollector},
     piece_picker::{PieceIndex, PiecePicker},
@@ -188,7 +188,7 @@ pub struct TorrentSupervisor {
 
     extern_id: Arc<PeerExternId>,
 
-    vfs: Sender<VFSMessage>,
+    vfs: Sender<FSMessage>,
 }
 
 pub type Result<T> = std::result::Result<T, TorrentError>;
@@ -197,7 +197,7 @@ impl TorrentSupervisor {
     pub fn new(
         torrent: Torrent,
         sha1_workers: SyncSender<Sha1Task>,
-        vfs: Sender<VFSMessage>,
+        vfs: Sender<FSMessage>,
     ) -> TorrentSupervisor {
         let (my_addr, receiver) = bounded(10000);
         let pieces_infos = Arc::new(Pieces::from(&torrent));
@@ -236,7 +236,7 @@ impl TorrentSupervisor {
         });
 
         self.vfs
-            .send(VFSMessage::AddTorrent {
+            .send(FSMessage::AddTorrent {
                 id: self.id,
                 meta: Arc::clone(&self.metadata),
                 pieces_infos: Arc::clone(&self.pieces_infos),
@@ -352,7 +352,7 @@ impl TorrentSupervisor {
                         self.piece_picker.set_as_downloaded(piece_index);
 
                         self.vfs
-                            .send(VFSMessage::Write {
+                            .send(FSMessage::Write {
                                 id: self.id,
                                 piece: piece_index,
                                 data: piece,
@@ -413,7 +413,7 @@ impl TorrentSupervisor {
 impl Drop for TorrentSupervisor {
     fn drop(&mut self) {
         self.vfs
-            .try_send(VFSMessage::RemoveTorrent { id: self.id })
+            .try_send(FSMessage::RemoveTorrent { id: self.id })
             .unwrap();
     }
 }

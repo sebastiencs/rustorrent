@@ -179,6 +179,11 @@ pub enum PeerCommand {
     TasksAvailables,
     Die,
     TasksIncreased,
+    BlockData {
+        piece: PieceIndex,
+        block: BlockIndex,
+        data: Box<[u8]>,
+    },
 }
 
 use hashbrown::HashMap;
@@ -577,6 +582,9 @@ impl Peer {
                         }
                         Some(Die) => {
                             return Ok(());
+                        }
+                        Some(BlockData { piece: _, block: _, data: _ }) => {
+                            // send data to peer
                         }
                         None => {
                             // Disconnected
