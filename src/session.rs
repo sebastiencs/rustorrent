@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     actors::vfs::VFS,
-    fs::{FSMessage, FileSystem, UringFS},
+    fs::{uring_fs::UringFS, FSMessage, FileSystem},
     logger,
     metadata::Torrent,
 };

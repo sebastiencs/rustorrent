@@ -271,15 +271,16 @@ impl Torrent {
                 files
                     .iter()
                     .map(|ref file| {
-                        let name =
+                        let name = itertools::Itertools::intersperse(
                             std::iter::Iterator::chain(std::iter::once(name), file.path.iter())
                                 .map(|s| {
                                     s.chars()
                                         .filter(|c| !std::path::is_separator(*c))
                                         .collect::<String>()
-                                })
-                                .intersperse(sep.clone())
-                                .collect::<String>();
+                                }),
+                            sep.clone(),
+                        )
+                        .collect::<String>();
 
                         TorrentFile {
                             path: Path::new(name.as_str()).iter().collect(),

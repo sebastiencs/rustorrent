@@ -94,7 +94,7 @@ impl<T> FilesUring<T> {
         // TODO:
         // Make this configurable and respect RLIMIT_NOFILE
         let registered_files = vec![-1; 512];
-        iou.register_files(&registered_files).unwrap();
+        iou.register_files(&registered_files)?;
 
         Ok(Self {
             io_uring: iou,
@@ -430,7 +430,10 @@ mod tests {
             .open("coucou.txt")
             .unwrap();
 
-        let mut file = FilesUring::<()>::new(4).unwrap();
+        let mut file = match FilesUring::<()>::new(4) {
+            Ok(file) => file,
+            Err(_) => return,
+        };
 
         let mut vec = Vec::with_capacity(0x4000 * 25);
         for n in 0..vec.capacity() {
@@ -461,7 +464,10 @@ mod tests {
             .open("coucou2.txt")
             .unwrap();
 
-        let mut file = FilesUring::<()>::new(4).unwrap();
+        let mut file = match FilesUring::<()>::new(4) {
+            Ok(file) => file,
+            Err(_) => return,
+        };
 
         const SIZE: usize = 0x4000 * 250;
 
