@@ -165,7 +165,7 @@ impl<T> FilesUring<T> {
         FileDescriptor::RegisteredIndex(new_index.try_into().unwrap())
     }
 
-    pub fn write<F>(&mut self, fd: &F, offset: usize, data: &[u8])
+    fn write<F>(&mut self, fd: &F, offset: usize, data: &[u8])
     where
         F: AsRawFd,
     {

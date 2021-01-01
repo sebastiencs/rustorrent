@@ -363,6 +363,14 @@ assert_eq_size!(SubmissionQueueEntry, [u8; 64]);
 assert_eq_size!(SubmissionQueueEntry, UnsafeCell<SubmissionQueueEntry>);
 
 #[derive(Debug)]
+#[allow(non_camel_case_types)]
+#[repr(C)]
+pub struct timespec {
+    tv_sec: i64,
+    tv_nsec: libc::c_longlong,
+}
+
+#[derive(Debug)]
 pub enum Operation<'a> {
     ReadFixed {
         fd: RawFd,
@@ -391,7 +399,7 @@ pub enum Operation<'a> {
         path: &'a Path,
     },
     TimeOut {
-        spec: *mut libc::timespec,
+        spec: *mut timespec,
     },
     NoOp,
 }
@@ -866,7 +874,7 @@ impl Drop for IoUring {
 mod tests {
     use std::{iter::repeat_with, os::unix::io::AsRawFd};
 
-    use super::{IoUring, Operation, Submit};
+    use super::{timespec, IoUring, Operation, Submit};
 
     #[test]
     #[cfg_attr(miri, ignore)] // Miri doesn't support io_uring
@@ -924,7 +932,7 @@ mod tests {
         iou.pop().unwrap();
         assert!(iou.pop().is_none());
 
-        let mut spec = libc::timespec {
+        let mut spec = timespec {
             tv_sec: 0,
             tv_nsec: 100000000, // 0,1 sec
         };
