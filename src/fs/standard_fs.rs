@@ -1,6 +1,6 @@
 use std::{fs::File, sync::Arc};
 
-use async_channel::{Receiver, Sender};
+use async_channel::{Receiver, RecvError, Sender};
 use hashbrown::HashMap;
 use kv_log_macro::info;
 use tokio::runtime::Runtime;
@@ -78,13 +78,16 @@ impl StandardFS {
         sender
     }
 
+    fn wait_for_message(&self) -> Result<FSMessage, RecvError> {
+        if let Ok(msg) = self.recv.try_recv() {
+            return Ok(msg);
+        };
+
+        self.runtime.block_on(async { self.recv.recv().await })
+    }
+
     fn start(mut self) {
-        while let Some(msg) = {
-            self.recv
-                .try_recv()
-                .ok()
-                .or_else(|| self.runtime.block_on(async { self.recv.recv().await.ok() }))
-        } {
+        while let Ok(msg) = self.wait_for_message() {
             self.process_msg(msg);
         }
     }

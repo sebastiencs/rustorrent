@@ -23,6 +23,7 @@ pub struct UringFS {
     torrents: Map<TorrentId, TorrentCache>,
     files_ring: RefCell<Box<FilesUring<NonNull<u8>>>>,
     pending_buffers: Map<NonNull<u8>, Pending>,
+    to_remove: Vec<TorrentId>,
 }
 
 unsafe impl Send for UringFS {}
@@ -66,6 +67,7 @@ impl FileSystem for UringFS {
             torrents: Map::default(),
             files_ring: RefCell::new(Box::new(FilesUring::new(256).ok()?)),
             pending_buffers: Map::with_capacity_and_hasher(16, NoHash::default()),
+            to_remove: Vec::new(),
         };
 
         std::thread::Builder::new()
@@ -152,6 +154,16 @@ impl UringFS {
                 // as we prioritize running operations
                 ring.block();
             }
+
+            // Remove torrents data when there is nothing more in flight
+            if !self.to_remove.is_empty() && ring.in_flight() == 0 {
+                for id in &self.to_remove {
+                    let cache = self.torrents.remove(&id).unwrap();
+                    ring.unregister_files(cache.fds.values());
+                    drop(cache);
+                }
+                self.to_remove.clear();
+            }
         }
     }
 
@@ -173,7 +185,7 @@ impl UringFS {
                 info!("[vfs] {:?} Add torrent", id);
             }
             FSMessage::RemoveTorrent { id } => {
-                self.torrents.remove(&id);
+                self.to_remove.push(id);
             }
             FSMessage::Read {
                 id,

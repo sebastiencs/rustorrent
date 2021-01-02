@@ -91,6 +91,7 @@ bitflags! {
 
 bitflags! {
     // sqe->sqe_flags
+    #[derive(Default)]
     struct SqeFlags: u8 {
         // use fixed fileset
         const IOSQE_FIXED_FILE = 1 << 0;
@@ -110,7 +111,7 @@ bitflags! {
 assert_eq_size!(SqeFlags, u8);
 
 bitflags! {
-    pub struct FeaturesFlags: u32 {
+    pub(super) struct FeaturesFlags: u32 {
         const IORING_FEAT_SINGLE_MMAP = 1 << 0;
         const IORING_FEAT_NODROP = 1 << 1;
         const IORING_FEAT_SUBMIT_STABLE = 1 << 2;
@@ -125,7 +126,7 @@ bitflags! {
 
 bitflags! {
     /// sq_ring->flags
-    pub struct SqFlags: u32 {
+    pub(super) struct SqFlags: u32 {
         /// needs io_uring_enter wakeup
         const IORING_SQ_NEED_WAKEUP = 1 << 0;
         /// CQ ring is overflown
@@ -144,7 +145,7 @@ struct CompletionQueueEntry {
 assert_eq_size!(CompletionQueueEntry, [u8; 16]);
 
 #[allow(non_camel_case_types)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 #[repr(C)]
 pub(super) struct io_sqring_offsets {
     head: u32,
@@ -158,7 +159,7 @@ pub(super) struct io_sqring_offsets {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 #[repr(C)]
 pub(super) struct io_cqring_offsets {
     head: u32,
@@ -172,7 +173,7 @@ pub(super) struct io_cqring_offsets {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 #[repr(C)]
 pub(super) struct io_uring_params {
     sq_entries: u32,
@@ -198,7 +199,7 @@ pub(super) struct io_uring_files_update {
 #[allow(non_camel_case_types)]
 #[derive(Debug, Clone)]
 #[repr(C)]
-pub struct io_uring_probe_op {
+pub(super) struct io_uring_probe_op {
     op: u8,
     resv: u8,
     flags: u16,
@@ -223,7 +224,7 @@ assert_type_eq_all!(c_uint, u32);
 assert_type_eq_all!(c_int, i32);
 
 #[derive(Debug, Copy, Clone)]
-pub struct IoUringFd(RawFd);
+pub(super) struct IoUringFd(RawFd);
 
 pub(super) fn io_uring_setup(
     entries: u32,
@@ -357,7 +358,7 @@ type SubmissionFlags = u32;
 //     }
 // }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 #[repr(C)]
 struct SubmissionQueueEntry {
     /// type of operation for this sqe
@@ -448,12 +449,8 @@ impl<'a> From<(OpKind, RingId, FileDescriptor, usize, &'a mut [u8])> for Operati
 }
 
 impl SubmissionQueueEntry {
-    fn zeroed(&mut self) {
-        *self = unsafe { std::mem::zeroed() }
-    }
-
     fn apply_operation(&mut self, op: Operation) {
-        self.zeroed();
+        *self = Self::default();
 
         match op {
             Operation::RegisterFiles {
@@ -601,7 +598,7 @@ unsafe impl Send for IoUring {}
 
 impl IoUring {
     pub fn new(len: u32) -> std::io::Result<Self> {
-        let mut params = unsafe { std::mem::zeroed() };
+        let mut params = io_uring_params::default();
         let io_ring_fd = io_uring_setup(len, &mut params)?;
 
         display_io_uring_features(params.features);
@@ -720,11 +717,11 @@ impl IoUring {
         Ok(probe.last_op >= IORING_OP_WRITE)
     }
 
-    pub fn features(&self) -> FeaturesFlags {
+    pub(super) fn features(&self) -> FeaturesFlags {
         FeaturesFlags::from_bits_truncate(self.params.features)
     }
 
-    pub fn register_files(&self, files: &[i32]) -> std::io::Result<()> {
+    pub(super) fn register_files(&self, files: &[i32]) -> std::io::Result<()> {
         io_uring_register(
             self.fd,
             IORING_REGISTER_FILES,
@@ -734,7 +731,7 @@ impl IoUring {
     }
 
     /// Update a single entry
-    pub fn register_file_update(&self, files: &[i32], offset: usize) -> std::io::Result<()> {
+    pub(super) fn register_file_update(&self, files: &[i32], offset: usize) -> std::io::Result<()> {
         let update = io_uring_files_update {
             offset: offset as u32,
             resv: 0,
@@ -744,11 +741,11 @@ impl IoUring {
             self.fd,
             IORING_REGISTER_FILES_UPDATE,
             &update as *const _ as *mut _,
-            1,
+            files.len() as u32,
         )
     }
 
-    pub fn register_files_update(&self, files: &[i32]) -> std::io::Result<()> {
+    pub(super) fn register_files_update(&self, files: &[i32]) -> std::io::Result<()> {
         let update = io_uring_files_update {
             offset: 0,
             resv: 0,
@@ -762,7 +759,7 @@ impl IoUring {
         )
     }
 
-    pub fn unregister_files(&self) -> std::io::Result<()> {
+    pub(super) fn unregister_files(&self) -> std::io::Result<()> {
         io_uring_register(self.fd, IORING_UNREGISTER_FILES, std::ptr::null_mut(), 0)
     }
 
@@ -775,7 +772,7 @@ impl IoUring {
     }
 
     /// Number of entries pushed by us, waiting to be read by the kernel
-    pub fn sq_pending(&self) -> u32 {
+    pub(super) fn sq_pending(&self) -> u32 {
         let (head_ref, _) = self.sq_refs();
 
         let head = head_ref.load(Acquire);
@@ -784,7 +781,7 @@ impl IoUring {
         tail.wrapping_sub(head)
     }
 
-    pub fn push_entry<'op>(&mut self, op: Operation<'op>) -> Result<(), Operation<'op>> {
+    pub(super) fn push_entry<'op>(&mut self, op: Operation<'op>) -> Result<(), Operation<'op>> {
         let (head_ref, _) = self.sq_refs();
 
         let head = head_ref.load(Acquire);
@@ -797,6 +794,8 @@ impl IoUring {
         let index = tail & self.sq_mask;
         assert!(index < self.sq_entries);
 
+        // Safety:
+        // The index doesn't go past sq_entries
         let entry = unsafe {
             let sqes = self.sqes_ptr.as_ptr() as *mut SubmissionQueueEntry;
             &mut *sqes.add(index as usize)
@@ -808,7 +807,7 @@ impl IoUring {
         Ok(())
     }
 
-    pub fn push_entries<'op, F>(&mut self, mut fun: F) -> usize
+    pub(super) fn push_entries<'op, F>(&mut self, mut fun: F) -> usize
     where
         F: FnMut() -> Option<Operation<'op>>,
     {
@@ -824,6 +823,8 @@ impl IoUring {
         while tail != end {
             assert!((tail & mask) < self.sq_entries);
 
+            // Safety:
+            // The index doesn't go past sq_entries
             let entry = unsafe {
                 let sqes = self.sqes_ptr.as_ptr() as *mut SubmissionQueueEntry;
                 &mut *sqes.add((tail & mask) as usize)
@@ -843,7 +844,7 @@ impl IoUring {
         index
     }
 
-    pub fn submit<S: Into<Submit>>(&self, n: S) -> std::io::Result<()> {
+    pub(super) fn submit<S: Into<Submit>>(&self, n: S) -> std::io::Result<()> {
         let (head_ref, tail_ref) = self.sq_refs();
         let submit = n.into();
 
@@ -867,7 +868,7 @@ impl IoUring {
         Ok(())
     }
 
-    pub fn pop(&self) -> Option<Completed> {
+    pub(super) fn pop(&self) -> Option<Completed> {
         let (head_ref, tail_ref) = self.cq_refs();
 
         let tail = tail_ref.load(Acquire);
@@ -880,6 +881,8 @@ impl IoUring {
         let index = head & self.cq_mask;
         assert!(index < self.cq_entries);
 
+        // Safety:
+        // The index doesn't go past cq_entries
         let entry = unsafe {
             let cqes = self.cqes_ptr.as_ptr() as *const CompletionQueueEntry;
             Completed::from(&*cqes.add(index as usize))
@@ -891,7 +894,7 @@ impl IoUring {
         Some(entry)
     }
 
-    pub fn wait_pop(&self) -> std::io::Result<Completed> {
+    pub(super) fn wait_pop(&self) -> std::io::Result<Completed> {
         loop {
             if let Some(e) = self.pop() {
                 return Ok(e);
@@ -909,7 +912,7 @@ impl IoUring {
     }
 
     /// Number of entries pushed by the kernel, but not yet read by us
-    pub fn cq_pending(&self) -> u32 {
+    pub(super) fn cq_pending(&self) -> u32 {
         let (head_ref, tail_ref) = self.cq_refs();
 
         let tail = tail_ref.load(Acquire);

@@ -116,6 +116,32 @@ impl<T> FilesUring<T> {
         })
     }
 
+    pub fn unregister_files<'a, F: 'a, I>(&mut self, files: I)
+    where
+        F: AsRawFd,
+        I: Iterator<Item = &'a F>,
+    {
+        let mut min = self.registered_files.len();
+        let mut max = 0;
+
+        assert!(min > max);
+
+        for f in files {
+            let fd = f.as_raw_fd();
+            if let Some(index) = self.registered_files_map.remove(&fd) {
+                self.registered_files[index] = -1;
+                min = index.min(min);
+                max = index.max(max);
+            }
+        }
+
+        if min <= max {
+            let slice = &self.registered_files[min..max + 1];
+            let offset = min;
+            self.io_uring.register_file_update(slice, offset).unwrap();
+        }
+    }
+
     fn ensure_can_push(&mut self) {
         let cq_entries = self.io_uring.cq_entries;
         let sq_entries = self.io_uring.sq_entries;
@@ -185,7 +211,7 @@ impl<T> FilesUring<T> {
     }
 
     /// # Safety
-    /// The buffer must lives until the request is completed
+    /// The buffer must live until the request is completed
     pub unsafe fn write_with_data<F, D>(&mut self, fd: &F, offset: usize, data: &[u8], user_data: D)
     where
         F: AsRawFd,
@@ -233,7 +259,7 @@ impl<T> FilesUring<T> {
     }
 
     /// # Safety
-    /// The buffer must lives until the request is completed
+    /// The buffer must live until the request is completed
     pub unsafe fn read_with_data<F, D>(
         &mut self,
         fd: &F,
@@ -376,6 +402,10 @@ impl<T> FilesUring<T> {
                 } else {
                     // Partial read/write, make another request
                     // See https://github.com/axboe/liburing/issues/78
+                    let nbytes_processed = *nbytes_processed;
+                    let data_length = *data_length;
+
+                    assert!(nbytes_processed < data_length);
 
                     if written == 0 {
                         // Try twice
@@ -388,14 +418,17 @@ impl<T> FilesUring<T> {
                         }
                         *neof += 1;
                     }
+
+                    // Safety:
+                    // The new slice doesn't go past the end of the original slice
                     let data = unsafe {
                         std::slice::from_raw_parts_mut(
-                            data.as_ptr().add(*nbytes_processed as usize),
-                            *data_length - *nbytes_processed,
+                            data.as_ptr().add(nbytes_processed),
+                            data_length - nbytes_processed,
                         )
                     };
                     let fd = *fd;
-                    let offset = *offset + *nbytes_processed;
+                    let offset = *offset + nbytes_processed;
                     let kind = *kind;
 
                     self.ensure_can_push();
@@ -446,13 +479,13 @@ mod tests {
         assert_eq!(file.in_flight(), 1);
 
         let res = file.wait_completed();
-        println!("RES={:?}", res);
         assert!(res.unwrap().1.is_ok());
         let res = file.wait_completed();
-        println!("RES={:?}", res);
         assert!(res.is_none());
 
         assert_eq!(file.in_flight(), 0);
+
+        file.unregister_files(std::iter::once(&fd));
     }
 
     #[test]
@@ -516,9 +549,6 @@ mod tests {
         }
 
         assert_eq!(results.len(), SIZE / 2);
-
-        // println!("RES={:?}", res);
-
         assert_eq!(read, data);
     }
 }
