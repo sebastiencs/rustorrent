@@ -6,14 +6,15 @@ use kv_log_macro::info;
 use tokio::runtime::Runtime;
 
 use crate::{
-    actors::{peer::PeerCommand, vfs::TorrentCache},
+    actors::peer::PeerCommand,
+    fs::TorrentCache,
     io_uring::file::FilesUring,
     piece_picker::{BlockIndex, PieceIndex},
     supervisors::torrent::TorrentId,
     utils::{Map, NoHash},
 };
 
-use super::{FSMessage, FileSystem};
+use super::{send_to_peer, FSMessage, FileSystem};
 
 /// FileSystem implementation based on io_uring
 pub struct UringFS {
@@ -136,12 +137,7 @@ impl UringFS {
                             let pending = self.pending_buffers.remove(&ptr).unwrap();
                             let (piece, block, buffer, peer) = pending.extract_read();
 
-                            peer.try_send(PeerCommand::BlockData {
-                                piece,
-                                block,
-                                data: buffer,
-                            })
-                            .unwrap();
+                            send_to_peer(&self.runtime, peer, piece, block, buffer);
                         }
                     }
                 }
@@ -272,6 +268,7 @@ impl UringFS {
             !slice.is_empty()
         });
 
+        assert!(slice.is_empty());
         assert!(nrequest_on_data > 0);
 
         let buffer_length: u32 = data.len().try_into().unwrap();

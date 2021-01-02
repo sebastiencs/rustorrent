@@ -11,10 +11,11 @@ use std::{
 };
 
 use bitflags::bitflags;
+use kv_log_macro::warn;
 use libc::{c_int, c_long, c_uint, c_void, off_t, syscall};
 use static_assertions::{assert_eq_size, assert_type_eq_all};
 
-use self::file::{FileDescriptor, RingId};
+use self::file::{FileDescriptor, OpKind, RingId};
 
 pub mod file;
 
@@ -192,6 +193,27 @@ pub(super) struct io_uring_files_update {
     offset: u32,
     resv: u32,
     fds: u64,
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Debug, Clone)]
+#[repr(C)]
+pub struct io_uring_probe_op {
+    op: u8,
+    resv: u8,
+    flags: u16,
+    resv2: u32,
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Debug, Clone)]
+#[repr(C)]
+struct io_uring_probe {
+    last_op: u8,
+    ops_len: u8,
+    resv: u16,
+    resv2: [u32; 3],
+    ops: [io_uring_probe_op; 0],
 }
 
 assert_eq_size!(io_uring_params, [u8; 120]);
@@ -404,6 +426,27 @@ pub enum Operation<'a> {
     NoOp,
 }
 
+impl<'a> From<(OpKind, RingId, FileDescriptor, usize, &'a mut [u8])> for Operation<'a> {
+    fn from(
+        (kind, id, fd, offset, data): (OpKind, RingId, FileDescriptor, usize, &'a mut [u8]),
+    ) -> Operation<'a> {
+        match kind {
+            OpKind::Write => Operation::Write {
+                id,
+                fd,
+                offset,
+                data,
+            },
+            OpKind::Read => Operation::Read {
+                id,
+                fd,
+                offset,
+                data,
+            },
+        }
+    }
+}
+
 impl SubmissionQueueEntry {
     fn zeroed(&mut self) {
         *self = unsafe { std::mem::zeroed() }
@@ -563,6 +606,11 @@ impl IoUring {
 
         display_io_uring_features(params.features);
 
+        if !Self::is_ops_supported(io_ring_fd)? {
+            warn!("Kernel doesn't support our io_uring operations");
+            return Err(std::io::ErrorKind::Other.into());
+        }
+
         let features = FeaturesFlags::from_bits_truncate(params.features);
         let has_single_mmap = features.contains(FeaturesFlags::IORING_FEAT_SINGLE_MMAP);
 
@@ -657,6 +705,19 @@ impl IoUring {
             cq_head: NonNull::new(cq_head).unwrap(),
             cqes_ptr: NonNull::new(cqes_ptr).unwrap(),
         })
+    }
+
+    fn is_ops_supported(fd: IoUringFd) -> std::io::Result<bool> {
+        let probe = io_uring_probe {
+            last_op: 0,
+            ops_len: 0,
+            resv: 0,
+            resv2: [0; 3],
+            ops: [],
+        };
+        io_uring_register(fd, IORING_REGISTER_PROBE, &probe as *const _ as *mut _, 1)?;
+
+        Ok(probe.last_op >= IORING_OP_WRITE)
     }
 
     pub fn features(&self) -> FeaturesFlags {
@@ -879,7 +940,10 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // Miri doesn't support io_uring
     fn simple() {
-        let mut iou = IoUring::new(4).unwrap();
+        let mut iou = match IoUring::new(4) {
+            Ok(iou) => iou,
+            Err(_) => return, // not supported
+        };
 
         iou.push_entry(Operation::NoOp).unwrap();
         iou.push_entry(Operation::NoOp).unwrap();
@@ -904,7 +968,10 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // Miri doesn't support io_uring
     fn multiple() {
-        let mut iou = IoUring::new(4).unwrap();
+        let mut iou = match IoUring::new(4) {
+            Ok(iou) => iou,
+            Err(_) => return, // not supported
+        };
 
         let mut iter = repeat_with(|| Operation::NoOp).take(4);
         let n = iou.push_entries(|| iter.next());
@@ -917,7 +984,10 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // Miri doesn't support io_uring
     fn pop() {
-        let mut iou = IoUring::new(4).unwrap();
+        let mut iou = match IoUring::new(4) {
+            Ok(iou) => iou,
+            Err(_) => return, // not supported
+        };
 
         let mut iter = repeat_with(|| Operation::NoOp).take(4);
         let n = iou.push_entries(|| iter.next());
@@ -963,7 +1033,10 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // Miri doesn't support io_uring
     fn register_files() {
-        let mut iou = IoUring::new(4).unwrap();
+        let mut iou = match IoUring::new(4) {
+            Ok(iou) => iou,
+            Err(_) => return, // not supported
+        };
 
         let fd = std::fs::OpenOptions::new()
             .write(true)

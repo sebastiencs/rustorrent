@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    actors::vfs::VFS,
-    fs::{uring_fs::UringFS, FSMessage, FileSystem},
+    fs::{standard_fs::StandardFS, uring_fs::UringFS, FSMessage, FileSystem},
     logger,
     metadata::Torrent,
 };
@@ -85,7 +84,7 @@ impl Session {
         let sha1_workers = Sha1Workers::new_pool(runtime.clone());
         let vfs = match UringFS::init(runtime.clone()) {
             Some(fs) => fs,
-            _ => VFS::new(runtime.clone()),
+            _ => StandardFS::new(runtime.clone()),
         };
         let runtime_clone = runtime.clone();
 

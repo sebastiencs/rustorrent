@@ -5,6 +5,8 @@ use std::{
     ptr::NonNull,
 };
 
+use kv_log_macro::error;
+
 use crate::utils::{Map, NoHash};
 
 use super::{Completed, IoUring, Operation};
@@ -55,12 +57,13 @@ pub struct FilesUring<T> {
     registered_files: Vec<RawFd>,
     /// map fd to index in registered_files
     registered_files_map: Map<RawFd, usize>,
+    should_register_files: bool,
 }
 
 unsafe impl<T> Send for FilesUring<T> {}
 
 #[derive(Copy, Clone)]
-enum OpKind {
+pub(super) enum OpKind {
     Write,
     Read,
 }
@@ -75,7 +78,7 @@ enum PendingOperation {
         fd: FileDescriptor,
         data: NonNull<u8>,
         data_length: usize,
-        // number of bytes read/written
+        /// number of bytes read/written
         nbytes_processed: usize,
         offset: usize,
         /// Number of EOF (res == 0) received
@@ -91,10 +94,14 @@ impl<T> FilesUring<T> {
     pub fn new(ring_size: u32) -> std::io::Result<FilesUring<T>> {
         let iou = IoUring::new(ring_size)?;
 
+        let mut should_register_files = true;
+
         // TODO:
         // Make this configurable and respect RLIMIT_NOFILE
         let registered_files = vec![-1; 512];
-        iou.register_files(&registered_files)?;
+        if iou.register_files(&registered_files).is_err() {
+            should_register_files = false;
+        }
 
         Ok(Self {
             io_uring: iou,
@@ -105,6 +112,7 @@ impl<T> FilesUring<T> {
             need_submit: false,
             registered_files,
             registered_files_map: Map::default(),
+            should_register_files,
         })
     }
 
@@ -146,6 +154,10 @@ impl<T> FilesUring<T> {
     }
 
     fn find_or_register_file(&mut self, fd: RawFd) -> FileDescriptor {
+        if !self.should_register_files {
+            return FileDescriptor::Fd(fd);
+        }
+
         if let Some(index) = self.registered_files_map.get(&fd) {
             return FileDescriptor::RegisteredIndex((*index).try_into().unwrap());
         }
@@ -333,6 +345,7 @@ impl<T> FilesUring<T> {
             // Error
 
             let Pending { user_data, .. } = self.pending.remove(&id).unwrap();
+            error!("Operation failed error_code={:?}", written);
             return Some((user_data, Err(std::io::ErrorKind::Other.into())));
         }
 
@@ -391,20 +404,7 @@ impl<T> FilesUring<T> {
 
                     // Read/Write the remaining data
                     self.io_uring
-                        .push_entry(match kind {
-                            OpKind::Write => Operation::Write {
-                                id,
-                                fd,
-                                offset,
-                                data,
-                            },
-                            OpKind::Read => Operation::Read {
-                                id,
-                                fd,
-                                offset,
-                                data,
-                            },
-                        })
+                        .push_entry(Operation::from((kind, id, fd, offset, data)))
                         .unwrap();
 
                     self.submit();
@@ -423,6 +423,8 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // Miri doesn't support io_uring
     fn simple_file() {
+        crate::logger::start();
+
         let fd = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
@@ -456,6 +458,8 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // Miri doesn't support io_uring
     fn multiple_write() {
+        crate::logger::start();
+
         let fd = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
