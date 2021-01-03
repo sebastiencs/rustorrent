@@ -18,6 +18,11 @@
     <img src="https://img.shields.io/badge/status-in%20development-orange?style=flat-square"
          alt="Status" />
   </a>
+  <!-- Coverage -->
+  <a href="https://codecov.io/gh/sebastiencs/rustorrent/tree/master/src">
+    <img src="https://img.shields.io/codecov/c/github/sebastiencs/rustorrent?style=flat-square"
+         alt="Coverage" />
+  </a>
   <!-- Rust toolchain -->
   <a href="https://github.com/sebastiencs/rustorrent">
     <img src="https://img.shields.io/badge/rust-nightly-blue?style=flat-square"
