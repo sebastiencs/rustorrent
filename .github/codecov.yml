@@ -1,0 +1,5 @@
+coverage:
+  status:
+    # https://docs.codecov.io/docs/commit-status#disabling-a-status
+    project: off
+    patch: off
