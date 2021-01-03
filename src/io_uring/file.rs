@@ -9,7 +9,7 @@ use kv_log_macro::error;
 
 use crate::utils::{Map, NoHash};
 
-use super::{Completed, IoUring, Operation};
+use super::ring::{Completed, IoUring, Operation};
 
 #[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
 pub struct RingId(u32);

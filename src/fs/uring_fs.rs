@@ -14,7 +14,7 @@ use crate::{
     utils::{Map, NoHash},
 };
 
-use super::{send_to_peer, FSMessage, FileSystem};
+use super::{new_read_buffer, send_to_peer, FSMessage, FileSystem};
 
 /// FileSystem implementation based on io_uring
 pub struct UringFS {
@@ -214,11 +214,7 @@ impl UringFS {
         let mut ring = self.files_ring.borrow_mut();
         let length = length as usize;
 
-        let mut data = {
-            let mut data = Vec::with_capacity(length);
-            unsafe { data.set_len(length) };
-            data.into_boxed_slice()
-        };
+        let mut data = new_read_buffer(length);
         let user_data = NonNull::new(data.as_mut_ptr()).unwrap();
 
         let slice = &mut data[..];
@@ -242,8 +238,6 @@ impl UringFS {
 
         assert_eq!(cursor, length);
         assert!(nrequest_on_data > 0);
-
-        let user_data = NonNull::new(data.as_mut_ptr()).unwrap();
 
         self.pending_buffers.insert(
             user_data,
