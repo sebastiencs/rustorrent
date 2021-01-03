@@ -79,6 +79,8 @@ futures =  { version = "0.3", default-features = false }
 # surf = "1.0.3"
 
 static_assertions = "1"
+bitflags = "1.2"
+# iou = "0.3"
 
 fixed = { version = "1", default-features = false }
 

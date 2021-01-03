@@ -594,6 +594,7 @@ dependencies = [
  "ansi_term",
  "async-channel",
  "async-trait",
+ "bitflags",
  "byteorder",
  "chrono",
  "coarsetime",

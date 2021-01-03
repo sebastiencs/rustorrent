@@ -6,7 +6,7 @@ use std::io::{self, StdoutLock, Write};
 //pub(crate) fn start(level: LevelFilter) {
 pub(crate) fn start() {
     let logger = Box::new(Logger {});
-    log::set_boxed_logger(logger).expect("Could not start logging");
+    log::set_boxed_logger(logger).ok();
     log::set_max_level(LevelFilter::Trace);
 }
 

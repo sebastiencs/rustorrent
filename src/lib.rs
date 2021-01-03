@@ -10,6 +10,8 @@ pub mod bitfield;
 pub mod cache_line;
 pub mod errors;
 pub mod extensions;
+pub mod fs;
+pub mod io_uring;
 pub mod logger;
 pub mod metadata;
 pub mod piece_collector;
