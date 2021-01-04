@@ -323,6 +323,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Miri doesn't support tokio's runtime
     fn standard_fs() {
         crate::logger::start();
 
