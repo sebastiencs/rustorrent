@@ -33,9 +33,9 @@ impl TryFrom<u32> for Action {
     }
 }
 
-impl Into<u32> for &Action {
-    fn into(self) -> u32 {
-        match self {
+impl From<&Action> for u32 {
+    fn from(action: &Action) -> Self {
+        match action {
             Action::Connect => 0,
             Action::Announce => 1,
             Action::Scrape => 2,
@@ -90,9 +90,9 @@ impl TryFrom<u32> for Event {
     }
 }
 
-impl Into<u32> for &Event {
-    fn into(self) -> u32 {
-        match self {
+impl From<&Event> for u32 {
+    fn from(e: &Event) -> Self {
+        match e {
             Event::None => 0,
             Event::Completed => 1,
             Event::Started => 2,

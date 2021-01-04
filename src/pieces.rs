@@ -306,12 +306,12 @@ impl BlockToDownload {
     }
 }
 
-impl<'a> Into<MessagePeer<'a>> for BlockToDownload {
-    fn into(self) -> MessagePeer<'a> {
+impl<'a> From<BlockToDownload> for MessagePeer<'a> {
+    fn from(block: BlockToDownload) -> Self {
         MessagePeer::Request {
-            index: self.piece,
-            begin: self.start,
-            length: self.length,
+            index: block.piece,
+            begin: block.start,
+            length: block.length,
         }
     }
 }

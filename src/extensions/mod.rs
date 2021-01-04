@@ -83,23 +83,19 @@ pub struct PEXMessage<'a> {
 
 use crate::utils;
 
-impl<'a> Into<Vec<SocketAddr>> for PEXMessage<'a> {
-    fn into(self) -> Vec<SocketAddr> {
-        let mut length = self.added.as_ref().map(|a| a.slice.len() / 6).unwrap_or(0);
-        length += self
-            .added6
-            .as_ref()
-            .map(|a| a.slice.len() / 18)
-            .unwrap_or(0);
+impl<'a> From<PEXMessage<'a>> for Vec<SocketAddr> {
+    fn from(msg: PEXMessage<'a>) -> Self {
+        let mut length = msg.added.as_ref().map(|a| a.slice.len() / 6).unwrap_or(0);
+        length += msg.added6.as_ref().map(|a| a.slice.len() / 18).unwrap_or(0);
 
         // 1 alloc
         let mut addrs = Vec::with_capacity(length);
 
-        if let Some(PtrBuf { slice }) = self.added {
+        if let Some(PtrBuf { slice }) = msg.added {
             utils::ipv4_from_slice(slice, &mut addrs);
         };
 
-        if let Some(PtrBuf { slice }) = self.added6 {
+        if let Some(PtrBuf { slice }) = msg.added6 {
             utils::ipv6_from_slice(slice, &mut addrs);
         };
 

@@ -227,9 +227,9 @@ impl From<u32> for Timestamp {
     }
 }
 
-impl Into<u32> for Timestamp {
-    fn into(self) -> u32 {
-        self.0
+impl From<Timestamp> for u32 {
+    fn from(timestamp: Timestamp) -> Self {
+        timestamp.0
     }
 }
 
@@ -296,9 +296,9 @@ impl From<u32> for Delay {
 //     }
 // }
 
-impl Into<u32> for Delay {
-    fn into(self) -> u32 {
-        self.0 as u32
+impl From<Delay> for u32 {
+    fn from(delay: Delay) -> Self {
+        delay.0 as u32
     }
 }
 
@@ -478,9 +478,9 @@ impl TryFrom<u8> for PacketType {
     }
 }
 
-impl Into<u8> for PacketType {
-    fn into(self) -> u8 {
-        match self {
+impl From<PacketType> for u8 {
+    fn from(ptype: PacketType) -> Self {
+        match ptype {
             PacketType::Data => 0,
             PacketType::Fin => 1,
             PacketType::State => 2,
@@ -671,9 +671,9 @@ impl From<u16> for ConnectionId {
     }
 }
 
-impl Into<u16> for ConnectionId {
-    fn into(self) -> u16 {
-        self.0
+impl From<ConnectionId> for u16 {
+    fn from(id: ConnectionId) -> u16 {
+        id.0
     }
 }
 
