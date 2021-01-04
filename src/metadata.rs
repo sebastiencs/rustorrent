@@ -12,7 +12,7 @@ use std::{
     sync::Arc,
 };
 
-type StackVec<T> = SmallVec<[T; 16]>;
+pub(crate) type StackVec<T> = SmallVec<[T; 16]>;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MetaFile {

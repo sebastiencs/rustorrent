@@ -41,7 +41,7 @@ impl std::fmt::Display for TorrentId {
 }
 
 impl TorrentId {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let id = TORRENT_COUNTER.fetch_add(1, Ordering::SeqCst);
         Self(id)
     }

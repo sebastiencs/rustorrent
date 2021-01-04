@@ -175,3 +175,106 @@ impl StandardFS {
         assert!(data.is_empty());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use tokio::runtime::Runtime;
+    use smallvec::smallvec;
+
+    use crate::{fs::FSMessage::{AddTorrent, Read, RemoveTorrent, Write}, metadata::{InfoFile::Multiple, MetaFile, MetaInfo, MetaTorrent, Torrent}, pieces::Pieces, supervisors::torrent::TorrentId};
+
+    use super::StandardFS;
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Miri doesn't support io_uring
+    fn fs() {
+        crate::logger::start();
+
+        let runtime = Arc::new(Runtime::new().unwrap());
+        let fs = StandardFS::new(runtime);
+
+        let torrent = Torrent {
+            meta: MetaTorrent {
+                announce: None,
+                info: MetaInfo {
+                    pieces: vec![1; 20 * 110],
+                    piece_length: 1000,
+                    private: None,
+                    files: Multiple {
+                        name: "abc".to_string(),
+                        files: vec![
+                            MetaFile {
+                                length: 98080,
+                                md5sum: None,
+                                path: smallvec!["a".to_string()]
+                            },
+                            MetaFile {
+                                length: 11111,
+                                md5sum: None,
+                                path: smallvec!["b".to_string()]
+                            },
+                            MetaFile {
+                                length: 198,
+                                md5sum: None,
+                                path: smallvec!["c".to_string()]
+                            },
+                            MetaFile {
+                                length: 5,
+                                md5sum: None,
+                                path: smallvec!["d".to_string()]
+                            },
+                        ],
+                    },
+                },
+                announce_list: None,
+                creation_date: None,
+                comment: None,
+                created_by: None,
+                encoding: None,
+                url_list: None,
+            },
+            info_hash: Arc::new([])
+        };
+
+        let pieces = Pieces::from(&torrent);
+        let piece_length = pieces.piece_length;
+        let files_size = pieces.files_size;
+        let torrent_id = TorrentId::new();
+
+        println!("PIECES={:#?}", pieces);
+
+        fs.try_send(AddTorrent {
+            id: torrent_id,
+            meta: Arc::new(torrent),
+            pieces_infos: Arc::new(pieces),
+        }).unwrap();
+
+        let mut data = Vec::with_capacity(files_size);
+        for _ in 0..data.capacity() {
+            data.push(fastrand::u8(..));
+        }
+
+        for (index, chunk) in data.chunks(piece_length).enumerate() {
+            fs.try_send(Write {
+                id: torrent_id,
+                piece: (index as u32).into(),
+                data: Vec::from(chunk).into_boxed_slice(),
+            }).unwrap();
+        }
+
+        std::thread::sleep_ms(1000);
+
+        // for (index, n) in (0..files_size).step_by(1000).enumerate() {
+        //     fs.try_send(Read {
+        //         id: torrent_id,
+        //         piece: 0.into(),
+        //         block: 0,
+        //         length: (),
+        //         peer: (),
+        //     }).unwrap();
+        // }
+
+    }
+}
