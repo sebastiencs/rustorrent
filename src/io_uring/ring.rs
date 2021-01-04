@@ -351,7 +351,7 @@ impl IoUring {
             fd,
             IORING_REGISTER_PROBE,
             &mut probe as *mut io_uring_probe as *mut _,
-            1,
+            0,
         )?;
 
         Ok(probe.last_op >= IORING_OP_WRITE)

@@ -36,18 +36,18 @@ pub struct Pieces {
 impl Debug for Pieces {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Pieces")
-         .field("info_hash", &self.info_hash)
-         .field("num_pieces", &self.num_pieces)
-         .field("sha1_pieces_length", &self.sha1_pieces.len())
-         // .field("sha1_pieces", &self.sha1_pieces)
-         .field("block_size", &self.block_size)
-         .field("last_block_size", &self.last_block_size)
-         .field("nblocks_piece", &self.nblocks_piece)
-         .field("nblocks_last_piece", &self.nblocks_last_piece)
-         .field("piece_length", &self.piece_length)
-         .field("last_piece_length", &self.last_piece_length)
-         .field("files_size", &self.files_size)
-         .finish()
+            .field("info_hash", &self.info_hash)
+            .field("num_pieces", &self.num_pieces)
+            .field("sha1_pieces_length", &self.sha1_pieces.len())
+            // .field("sha1_pieces", &self.sha1_pieces)
+            .field("block_size", &self.block_size)
+            .field("last_block_size", &self.last_block_size)
+            .field("nblocks_piece", &self.nblocks_piece)
+            .field("nblocks_last_piece", &self.nblocks_last_piece)
+            .field("piece_length", &self.piece_length)
+            .field("last_piece_length", &self.last_piece_length)
+            .field("files_size", &self.files_size)
+            .finish()
     }
 }
 
