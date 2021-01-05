@@ -194,10 +194,12 @@ impl PiecePicker {
         }
     }
 
-    pub fn set_as_downloaded(&mut self, piece: PieceIndex) {
+    pub fn set_as_downloaded(&mut self, piece: PieceIndex, valid: bool) {
         let index: usize = piece.into();
-        self.states[index].downloaded = true;
-        self.sort_indexed();
+        if valid != self.states[index].downloaded {
+            self.states[index].downloaded = valid;
+            self.sort_indexed();
+        }
     }
 
     fn add_piece_to_download(&mut self, piece_index: PieceIndex, no_push: bool) -> bool {
@@ -536,7 +538,7 @@ mod tests {
         let pieces_info = Arc::new(Pieces {
             info_hash: Arc::new([]),
             num_pieces: 9,
-            sha1_pieces: Arc::new(Vec::new()),
+            sha1_pieces: Arc::new([]),
             block_size: 100,
             last_block_size: 50,
             nblocks_piece: 13,
@@ -618,7 +620,7 @@ mod tests {
         let pieces_info = Arc::new(Pieces {
             info_hash: Arc::new([]),
             num_pieces: 9,
-            sha1_pieces: Arc::new(Vec::new()),
+            sha1_pieces: Arc::new([]),
             block_size: 100,
             last_block_size: 50,
             nblocks_piece: 13,
@@ -745,7 +747,7 @@ mod tests {
         let pieces_info = Arc::new(Pieces {
             info_hash: Arc::new([]),
             num_pieces: 9,
-            sha1_pieces: Arc::new(Vec::new()),
+            sha1_pieces: Arc::new([]),
             block_size: 100,
             last_block_size: 50,
             nblocks_piece: 13,
@@ -793,7 +795,7 @@ mod tests {
         let pieces_info = Arc::new(Pieces {
             info_hash: Arc::new([]),
             num_pieces: 9,
-            sha1_pieces: Arc::new(Vec::new()),
+            sha1_pieces: Arc::new([]),
             block_size: 100,
             last_block_size: 50,
             nblocks_piece: 13,
@@ -835,7 +837,7 @@ mod tests {
         let pieces_info = Arc::new(Pieces {
             info_hash: Arc::new([]),
             num_pieces: 9,
-            sha1_pieces: Arc::new(Vec::new()),
+            sha1_pieces: Arc::new([]),
             block_size: 100,
             last_block_size: 50,
             nblocks_piece: 13,
@@ -907,7 +909,7 @@ mod tests {
         let pieces_info = Arc::new(Pieces {
             info_hash: Arc::new([]),
             num_pieces: 9,
-            sha1_pieces: Arc::new(Vec::new()),
+            sha1_pieces: Arc::new([]),
             block_size: 100,
             last_block_size: 50,
             nblocks_piece: 13,
@@ -1054,8 +1056,8 @@ mod tests {
             ],
         );
 
-        picker.set_as_downloaded(6.into());
-        picker.set_as_downloaded(2.into());
+        picker.set_as_downloaded(6.into(), true);
+        picker.set_as_downloaded(2.into(), true);
 
         let to_download =
             picker.pick_piece(PeerId::new(4), piece_length * 2, 10, &bitfield, &collector);

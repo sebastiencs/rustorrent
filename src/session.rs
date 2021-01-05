@@ -26,7 +26,7 @@ struct SessionInner {
     cmds: SyncReceiver<SessionCommand>,
     actors: Vec<TorrentSupervisor>,
     sha1_workers: SyncSender<Sha1Task>,
-    vfs: Sender<FSMessage>,
+    fs: Sender<FSMessage>,
     runtime: Arc<Runtime>,
 }
 
@@ -48,7 +48,7 @@ impl SessionInner {
         match cmd {
             AddTorrent(torrent) => {
                 let sha1_workers = self.sha1_workers.clone();
-                let vfs = self.vfs.clone();
+                let vfs = self.fs.clone();
                 tokio::spawn(async move {
                     TorrentSupervisor::new(torrent, sha1_workers, vfs)
                         .start()
@@ -81,11 +81,11 @@ impl Session {
 
         let (sender, receiver) = unbounded();
         let runtime = Arc::new(Runtime::new().unwrap());
-        let sha1_workers = Sha1Workers::new_pool(runtime.clone());
-        let vfs = match UringFS::init(runtime.clone()) {
+        let fs = match UringFS::init(runtime.clone()) {
             Some(fs) => fs,
             _ => StandardFS::new(runtime.clone()),
         };
+        let sha1_workers = Sha1Workers::new_pool(runtime.clone(), fs.clone());
         let runtime_clone = runtime.clone();
 
         let handle = std::thread::spawn(move || {
@@ -94,7 +94,7 @@ impl Session {
                 actors: vec![],
                 sha1_workers,
                 runtime: runtime_clone,
-                vfs,
+                fs,
             };
             session.start();
         });

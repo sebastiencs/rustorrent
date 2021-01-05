@@ -1,19 +1,25 @@
-use async_channel::Sender;
+use async_channel::{Sender, TrySendError};
 use crossbeam_channel::{unbounded, Receiver as SyncReceiver, Sender as SyncSender};
 use tokio::runtime::Runtime;
+use TorrentNotification::ValidatePiece;
 
 use std::{ptr::read_unaligned, sync::Arc};
 
-use crate::supervisors::torrent::TorrentNotification;
+use crate::{
+    fs::FSMessage,
+    piece_picker::PieceIndex,
+    supervisors::torrent::{TorrentId, TorrentNotification},
+};
 
 pub enum Sha1Task {
     CheckSum {
+        torrent_id: TorrentId,
         /// Piece downloaded from a peer
         piece: Box<[u8]>,
         /// Sum in the metadata file
         sum_metadata: Arc<[u8; 20]>,
-        id: usize,
         addr: Sender<TorrentNotification>,
+        piece_index: PieceIndex,
     },
 }
 
@@ -42,13 +48,13 @@ pub fn compare_20_bytes(sum1: &[u8], sum2: &[u8]) -> bool {
 
 #[derive(Debug)]
 struct Sha1Worker {
-    runtime: Arc<Runtime>, // valids: usize,
-                           // invalids: usize
+    runtime: Arc<Runtime>,
+    fs: Sender<FSMessage>,
 }
 
 impl Sha1Worker {
-    fn new(runtime: Arc<Runtime>) -> Sha1Worker {
-        Sha1Worker { runtime }
+    fn new(runtime: Arc<Runtime>, fs: Sender<FSMessage>) -> Sha1Worker {
+        Sha1Worker { runtime, fs }
     }
 
     fn start(mut self, recv: SyncReceiver<Sha1Task>, task: impl Into<Option<Sha1Task>>) {
@@ -66,32 +72,43 @@ impl Sha1Worker {
             Sha1Task::CheckSum {
                 piece,
                 sum_metadata,
-                id,
                 addr,
+                piece_index,
+                torrent_id,
             } => {
                 let sha1 = crate::sha1::sha1(&piece);
 
                 let valid = compare_20_bytes(&sha1[..], &sum_metadata[..]);
 
-                self.send_result(id, valid, addr);
+                self.send_result(torrent_id, piece, valid, piece_index, addr);
             }
         }
     }
 
-    fn send_result(&mut self, id: usize, valid: bool, addr: Sender<TorrentNotification>) {
-        use TorrentNotification::ResultChecksum;
+    fn send_result(
+        &mut self,
+        torrent_id: TorrentId,
+        piece: Box<[u8]>,
+        valid: bool,
+        piece_index: PieceIndex,
+        addr: Sender<TorrentNotification>,
+    ) {
+        let msg = ValidatePiece { piece_index, valid };
+        if let Err(TrySendError::Full(msg)) = addr.try_send(msg) {
+            tokio::spawn(async move { addr.send(msg).await });
+        }
 
-        // if valid {
-        //     self.valids += 1;
-        // } else {
-        //     self.invalids += 1;
-        // }
-
-        // println!("{:?}", self);
-
-        self.runtime.spawn(async move {
-            addr.send(ResultChecksum { id, valid }).await.unwrap();
-        });
+        if valid {
+            let msg = FSMessage::Write {
+                id: torrent_id,
+                piece: piece_index,
+                data: piece,
+            };
+            if let Err(TrySendError::Full(msg)) = self.fs.try_send(msg) {
+                let fs = self.fs.clone();
+                tokio::spawn(async move { fs.send(msg).await });
+            }
+        }
     }
 }
 
@@ -99,17 +116,17 @@ impl Sha1Worker {
 pub struct Sha1Workers;
 
 impl Sha1Workers {
-    pub fn new_pool(runtime: Arc<Runtime>) -> SyncSender<Sha1Task> {
+    pub fn new_pool(runtime: Arc<Runtime>, fs: Sender<FSMessage>) -> SyncSender<Sha1Task> {
         let (sender, receiver) = unbounded();
 
-        thread::spawn(move || Self::start(receiver, runtime));
+        thread::spawn(move || Self::start(receiver, runtime, fs));
 
         sender
     }
 
-    fn start(recv: SyncReceiver<Sha1Task>, runtime: Arc<Runtime>) {
+    fn start(recv: SyncReceiver<Sha1Task>, runtime: Arc<Runtime>, fs: Sender<FSMessage>) {
         if let Ok(first_task) = recv.recv() {
-            let handles = Self::init_pool(first_task, recv, runtime);
+            let handles = Self::init_pool(first_task, recv, runtime, fs);
 
             for handle in handles {
                 let _ = handle.join();
@@ -121,22 +138,23 @@ impl Sha1Workers {
         task: Sha1Task,
         receiver: SyncReceiver<Sha1Task>,
         runtime: Arc<Runtime>,
+        fs: Sender<FSMessage>,
     ) -> Vec<thread::JoinHandle<()>> {
         let num_cpus = num_cpus::get().max(1);
         let mut handles = Vec::with_capacity(num_cpus);
+        let mut task = Some(task);
 
-        let recv = receiver.clone();
-        let runtime_clone = runtime.clone();
-        handles.push(thread::spawn(move || {
-            Sha1Worker::new(runtime_clone).start(recv, task)
-        }));
-
-        for _ in 0..(num_cpus - 1) {
+        for index in 0..num_cpus {
             let recv = receiver.clone();
             let runtime_clone = runtime.clone();
-            handles.push(thread::spawn(move || {
-                Sha1Worker::new(runtime_clone).start(recv, None)
-            }));
+            let fs_clone = fs.clone();
+            let task = task.take();
+            handles.push(
+                thread::Builder::new()
+                    .name(format!("sha-{}", index + 1))
+                    .spawn(|| Sha1Worker::new(runtime_clone, fs_clone).start(recv, task))
+                    .unwrap(),
+            );
         }
 
         handles

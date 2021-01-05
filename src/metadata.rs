@@ -224,7 +224,7 @@ impl Torrent {
         }
     }
 
-    pub fn sha_pieces(&self) -> Vec<Arc<[u8; 20]>> {
+    pub fn sha_pieces(&self) -> Arc<[Arc<[u8; 20]>]> {
         let pieces = self.meta.info.pieces.as_slice();
 
         pieces
@@ -314,7 +314,9 @@ mod tests {
         let tiers = torrent.get_urls_tiers();
         println!("TIERS {:#?}", tiers);
 
-        torrent.sha_pieces();
+        let sha_pieces = torrent.sha_pieces();
+        assert!(sha_pieces.len() > 1);
+
         torrent.files_total_size();
 
         let iter = torrent.iter_urls();

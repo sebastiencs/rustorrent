@@ -296,6 +296,7 @@ impl PieceCollector {
         }
     }
 
+    /// Return the piece if completed
     pub fn add_block(&mut self, block: &Block) -> Option<Box<[u8]>> {
         let piece_index = block.piece_index;
         let piece_length = self.pieces_infos.piece_size_of(block.piece_index);
@@ -332,7 +333,7 @@ mod tests {
         let pieces_info = Arc::new(Pieces {
             info_hash: Arc::new([]),
             num_pieces: 9,
-            sha1_pieces: Arc::new(Vec::new()),
+            sha1_pieces: Arc::new([]),
             block_size: 100,
             last_block_size: 50,
             nblocks_piece: 13,

@@ -1,5 +1,6 @@
-use async_channel::{bounded, Receiver, Sender};
+use async_channel::{bounded, Receiver, Sender, TrySendError};
 use crossbeam_channel::Sender as SyncSender;
+use hashbrown::HashSet;
 use std::sync::{
     atomic::{
         AtomicUsize,
@@ -111,18 +112,13 @@ pub enum TorrentNotification {
         update: Box<BitFieldUpdate>,
     },
     /// Whether or not the piece match its sha1 sum
-    ResultChecksum {
-        /// This id is a slab id
-        id: usize,
+    ValidatePiece {
+        piece_index: PieceIndex,
         valid: bool,
     },
     /// When a tracker discover peers, it send this message
     PeerDiscovered {
         addrs: Box<[SocketAddr]>,
-    },
-    PieceFromVFS {
-        piece: PieceIndex,
-        data: Box<[u8]>,
     },
 }
 
@@ -150,18 +146,14 @@ impl std::fmt::Debug for TorrentNotification {
                 .debug_struct("TorrentNotification")
                 .field("UpdateBitfield", &id)
                 .finish(),
-            ResultChecksum { id, valid } => f
+            ValidatePiece { piece_index, valid } => f
                 .debug_struct("TorrentNotification")
-                .field("ResultChecksum", &id)
+                .field("PieceIndex", &piece_index)
                 .field("valid", &valid)
                 .finish(),
             PeerDiscovered { addrs } => f
                 .debug_struct("TorrentNotification")
                 .field("addrs", &addrs)
-                .finish(),
-            TorrentNotification::PieceFromVFS { piece, .. } => f
-                .debug_struct("TorrentNotification")
-                .field("PieceFromVFS", &piece)
                 .finish(),
         }
     }
@@ -178,6 +170,7 @@ pub struct TorrentSupervisor {
 
     pieces_infos: Arc<Pieces>,
 
+    peers_socket: HashSet<SocketAddr>,
     peers: Map<PeerId, PeerState>,
 
     piece_picker: PiecePicker,
@@ -188,7 +181,7 @@ pub struct TorrentSupervisor {
 
     extern_id: Arc<PeerExternId>,
 
-    vfs: Sender<FSMessage>,
+    fs: Sender<FSMessage>,
 }
 
 pub type Result<T> = std::result::Result<T, TorrentError>;
@@ -197,7 +190,7 @@ impl TorrentSupervisor {
     pub fn new(
         torrent: Torrent,
         sha1_workers: SyncSender<Sha1Task>,
-        vfs: Sender<FSMessage>,
+        fs: Sender<FSMessage>,
     ) -> TorrentSupervisor {
         let (my_addr, receiver) = bounded(10000);
         let pieces_infos = Arc::new(Pieces::from(&torrent));
@@ -214,13 +207,14 @@ impl TorrentSupervisor {
             metadata: Arc::new(torrent),
             receiver,
             my_addr,
-            collector,
             pieces_infos,
-            piece_picker,
+            peers_socket: HashSet::new(),
             peers: Map::default(),
+            piece_picker,
+            collector,
             sha1_workers,
             extern_id,
-            vfs,
+            fs,
         }
     }
 
@@ -235,7 +229,7 @@ impl TorrentSupervisor {
                 .await;
         });
 
-        self.vfs
+        self.fs
             .send(FSMessage::AddTorrent {
                 id: self.id,
                 meta: Arc::clone(&self.metadata),
@@ -271,135 +265,152 @@ impl TorrentSupervisor {
     }
 
     async fn process_cmds(&mut self) {
+        while let Ok(msg) = self.receiver.recv().await {
+            self.process_cmd(msg);
+        }
+    }
+
+    fn process_cmd(&mut self, msg: TorrentNotification) {
         use TorrentNotification::*;
 
-        while let Ok(msg) = self.receiver.recv().await {
-            match msg {
-                UpdateBitfield { id, update } => {
-                    if let Some(peer) = self.peers.get_mut(&id) {
-                        self.piece_picker.update(&update);
-                        peer.bitfield.update(*update);
+        match msg {
+            UpdateBitfield { id, update } => {
+                let peer = match self.peers.get_mut(&id) {
+                    Some(peer) => peer,
+                    None => return,
+                };
 
-                        if !peer.queue_tasks.is_empty() {
-                            continue;
-                        }
+                self.piece_picker.update(&update);
+                peer.bitfield.update(*update);
 
-                        let tasks_nbytes = peer.tasks_nbytes;
-                        let available = peer.queue_tasks.available();
-
-                        if let Some((nbytes, tasks)) = self.piece_picker.pick_piece(
-                            id,
-                            tasks_nbytes,
-                            available,
-                            &peer.bitfield,
-                            &self.collector,
-                        ) {
-                            warn!("[{}] Tasks found {:?}", id, tasks);
-                            peer.shared.nbytes_on_tasks.fetch_add(nbytes, Relaxed);
-                            peer.queue_tasks.push_slice(tasks).unwrap();
-                        } else {
-                            warn!("[{}] Tasks not found", id);
-                        }
-
-                        peer.addr.send(PeerCommand::TasksAvailables).await.ok();
-                    };
+                if !peer.queue_tasks.is_empty() {
+                    return;
                 }
-                RemovePeer { id } => {
-                    self.peers.remove(&id);
-                    self.piece_picker.remove_peer(id);
-                }
-                IncreaseTasksPeer { id } => {
-                    if let Some(peer) = self.peers.get_mut(&id) {
-                        if self
-                            .piece_picker
-                            .would_pick_piece(id, &peer.bitfield, &self.collector)
-                        {
-                            info!("[{}] Multiply tasks {:?}", id, peer.tasks_nbytes * 3);
 
-                            peer.tasks_nbytes = peer.tasks_nbytes.saturating_mul(3);
-                            peer.addr.send(PeerCommand::TasksIncreased).await.ok();
-                        } else {
-                            info!("[{}] No more piece available for this peer", id);
-                        }
+                let tasks_nbytes = peer.tasks_nbytes;
+                let available = peer.queue_tasks.available();
+
+                if let Some((nbytes, tasks)) = self.piece_picker.pick_piece(
+                    id,
+                    tasks_nbytes,
+                    available,
+                    &peer.bitfield,
+                    &self.collector,
+                ) {
+                    warn!("[{}] Tasks found {:?}", id, tasks);
+                    peer.shared.nbytes_on_tasks.fetch_add(nbytes, Relaxed);
+                    peer.queue_tasks.push_slice(tasks).unwrap();
+                } else {
+                    warn!("[{}] Tasks not found", id);
+                }
+
+                send_to_peer(&peer.addr, PeerCommand::TasksAvailables);
+            }
+            RemovePeer { id } => {
+                let peer = match self.peers.get_mut(&id) {
+                    Some(peer) => peer,
+                    None => return,
+                };
+
+                self.peers_socket.remove(&peer.socket);
+                self.peers.remove(&id);
+                self.piece_picker.remove_peer(id);
+            }
+            IncreaseTasksPeer { id } => {
+                let peer = match self.peers.get_mut(&id) {
+                    Some(peer) => peer,
+                    None => return,
+                };
+
+                if self
+                    .piece_picker
+                    .would_pick_piece(id, &peer.bitfield, &self.collector)
+                {
+                    info!("[{}] Multiply tasks {:?}", id, peer.tasks_nbytes * 3);
+
+                    peer.tasks_nbytes = peer.tasks_nbytes.saturating_mul(3);
+                    send_to_peer(&peer.addr, PeerCommand::TasksIncreased);
+                } else {
+                    info!("[{}] No more piece available for this peer", id);
+                }
+            }
+            AddPeer { peer } => {
+                if self.is_duplicate_peer(&peer.extern_id) {
+                    // We are already connected to this peer, disconnect.
+                    // This happens when we are connected to its ipv4 and ipv6 addresses
+
+                    send_to_peer(&peer.addr, PeerCommand::Die);
+                } else {
+                    self.peers_socket.insert(peer.socket);
+                    self.peers.insert(
+                        peer.id,
+                        PeerState {
+                            bitfield: BitField::new(self.pieces_infos.num_pieces),
+                            queue_tasks: peer.queue,
+                            addr: peer.addr,
+                            socket: peer.socket,
+                            extern_id: peer.extern_id,
+                            shared: peer.shared,
+                            tasks_nbytes: self.pieces_infos.piece_length,
+                        },
+                    );
+                }
+            }
+            AddBlock { id, block } => {
+                let piece_index = block.piece_index;
+
+                if let Some(piece) = self.collector.add_block(&block) {
+                    info!("[{}] Piece completed {:?}", id, piece_index);
+
+                    self.piece_picker.set_as_downloaded(piece_index, true);
+
+                    let index: usize = piece_index.into();
+
+                    self.sha1_workers
+                        .try_send(Sha1Task::CheckSum {
+                            torrent_id: self.id,
+                            piece,
+                            sum_metadata: Arc::clone(&self.pieces_infos.sha1_pieces[index]),
+                            addr: self.my_addr.clone(),
+                            piece_index,
+                        })
+                        .unwrap();
+                }
+
+                let peer = match self.peers.get_mut(&id) {
+                    Some(peer) => peer,
+                    None => return,
+                };
+
+                let tasks_nbytes = peer.tasks_nbytes;
+
+                if peer.shared.nbytes_on_tasks.load(Acquire) < tasks_nbytes / 2 {
+                    let available = peer.queue_tasks.available().saturating_sub(1);
+
+                    if let Some((nbytes, tasks)) = self.piece_picker.pick_piece(
+                        id,
+                        tasks_nbytes,
+                        available,
+                        &peer.bitfield,
+                        &self.collector,
+                    ) {
+                        info!("[{}] Adding {} tasks {:?}", id, tasks.len(), tasks);
+                        peer.shared.nbytes_on_tasks.fetch_add(nbytes, Relaxed);
+                        peer.queue_tasks.push_slice(tasks).unwrap();
+
+                        send_to_peer(&peer.addr, PeerCommand::TasksAvailables);
                     }
                 }
-                AddPeer { peer } => {
-                    if self.is_duplicate_peer(&peer.extern_id) {
-                        // We are already connected to this peer, disconnect.
-                        // This happens when we are connected to its ipv4 and ipv6 addresses
+            }
+            ValidatePiece { valid, piece_index } => {
+                self.piece_picker.set_as_downloaded(piece_index, valid);
 
-                        peer.addr.send(PeerCommand::Die).await.ok();
-                    } else {
-                        self.peers.insert(
-                            peer.id,
-                            PeerState {
-                                bitfield: BitField::new(self.pieces_infos.num_pieces),
-                                queue_tasks: peer.queue,
-                                addr: peer.addr,
-                                socket: peer.socket,
-                                extern_id: peer.extern_id,
-                                shared: peer.shared,
-                                tasks_nbytes: self.pieces_infos.piece_length,
-                            },
-                        );
-                    }
+                debug!("Piece checked from the pool: {}", valid);
+            }
+            PeerDiscovered { addrs } => {
+                for addr in addrs.iter().filter(|a| !self.peers_socket.contains(a)) {
+                    self.connect_to_peers(addr);
                 }
-                AddBlock { id, block } => {
-                    let piece_index = block.piece_index;
-
-                    if let Some(piece) = self.collector.add_block(&block) {
-                        info!("[{}] Piece completed {:?}", id, piece_index);
-                        self.piece_picker.set_as_downloaded(piece_index);
-
-                        self.vfs
-                            .send(FSMessage::Write {
-                                id: self.id,
-                                piece: piece_index,
-                                data: piece,
-                            })
-                            .await
-                            .unwrap();
-                    }
-
-                    if let Some(peer) = self.peers.get_mut(&id) {
-                        let tasks_nbytes = peer.tasks_nbytes;
-
-                        if peer.shared.nbytes_on_tasks.load(Acquire) < tasks_nbytes / 2 {
-                            let available = peer.queue_tasks.available().saturating_sub(1);
-
-                            if let Some((nbytes, tasks)) = self.piece_picker.pick_piece(
-                                id,
-                                tasks_nbytes,
-                                available,
-                                &peer.bitfield,
-                                &self.collector,
-                            ) {
-                                info!("[{}] Adding {} tasks {:?}", id, tasks.len(), tasks);
-                                peer.shared.nbytes_on_tasks.fetch_add(nbytes, Relaxed);
-                                peer.queue_tasks.push_slice(tasks).unwrap();
-
-                                peer.addr.send(PeerCommand::TasksAvailables).await.ok();
-                            }
-                        }
-                    }
-                }
-                ResultChecksum { id: _, valid } => {
-                    // if self.pending_pieces.contains(id) {
-                    //     let _piece = self.pending_pieces.remove(id);
-                    // };
-                    debug!("Piece checked from the pool: {}", valid);
-                }
-                PeerDiscovered { addrs } => {
-                    for addr in &*addrs {
-                        let mut peers = self.peers.values();
-                        if !peers.any(|p| &p.socket == addr) {
-                            self.connect_to_peers(addr);
-                        } else {
-                            warn!("Already connected to {:?}, ignoring", addr);
-                        }
-                    }
-                }
-                PieceFromVFS { piece: _, data: _ } => {}
             }
         }
     }
@@ -410,9 +421,23 @@ impl TorrentSupervisor {
     }
 }
 
+fn send_to_peer(peer: &Sender<PeerCommand>, cmd: PeerCommand) {
+    if let Err(TrySendError::Full(msg)) = peer.try_send(cmd) {
+        let peer = peer.clone();
+        tokio::spawn(async move { peer.send(msg).await });
+    }
+}
+
+fn send_to_fs(fs: &Sender<FSMessage>, msg: FSMessage) {
+    if let Err(TrySendError::Full(msg)) = fs.try_send(msg) {
+        let fs = fs.clone();
+        tokio::spawn(async move { fs.send(msg).await });
+    }
+}
+
 impl Drop for TorrentSupervisor {
     fn drop(&mut self) {
-        self.vfs
+        self.fs
             .try_send(FSMessage::RemoveTorrent { id: self.id })
             .unwrap();
     }

@@ -13,7 +13,7 @@ pub struct Pieces {
     /// Number of pieces
     pub num_pieces: usize,
     /// SHA1 of each piece
-    pub sha1_pieces: Arc<Vec<Arc<[u8; 20]>>>,
+    pub sha1_pieces: Arc<[Arc<[u8; 20]>]>,
     /// Pieces other peers have
     /// peers_pieces[0] is the number of peers having the piece 0
     //    peers_pieces: Vec<u8>,
@@ -53,7 +53,7 @@ impl Debug for Pieces {
 
 impl From<&Torrent> for Pieces {
     fn from(torrent: &Torrent) -> Pieces {
-        let sha1_pieces = Arc::new(torrent.sha_pieces());
+        let sha1_pieces = torrent.sha_pieces();
 
         let files_size = torrent.files_total_size();
         let piece_length = torrent.meta.info.piece_length as usize;
@@ -327,7 +327,7 @@ mod tests {
         let pieces_info = Arc::new(Pieces {
             info_hash: Arc::new([]),
             num_pieces: 9,
-            sha1_pieces: Arc::new(Vec::new()),
+            sha1_pieces: Arc::new([]),
             block_size: 100,
             last_block_size: 50,
             nblocks_piece: 13,
@@ -653,7 +653,7 @@ mod tests {
         let pieces_info = Pieces {
             info_hash: Arc::new([]),
             num_pieces: 9,
-            sha1_pieces: Arc::new(Vec::new()),
+            sha1_pieces: Arc::new([]),
             block_size: 100,
             last_block_size: 50,
             nblocks_piece: 13,
@@ -677,7 +677,7 @@ mod tests {
         let pieces_info = Pieces {
             info_hash: Arc::new([]),
             num_pieces: 9,
-            sha1_pieces: Arc::new(Vec::new()),
+            sha1_pieces: Arc::new([]),
             block_size: 100,
             last_block_size: 100,
             nblocks_piece: 13,
@@ -702,7 +702,7 @@ mod tests {
         let pieces_info = Pieces {
             info_hash: Arc::new([]),
             num_pieces: 9,
-            sha1_pieces: Arc::new(Vec::new()),
+            sha1_pieces: Arc::new([]),
             block_size: 100,
             last_block_size: 100,
             nblocks_piece: 13,
@@ -721,7 +721,7 @@ mod tests {
         let pieces_info = Pieces {
             info_hash: Arc::new([]),
             num_pieces: 9,
-            sha1_pieces: Arc::new(Vec::new()),
+            sha1_pieces: Arc::new([]),
             block_size: 100,
             last_block_size: 50,
             nblocks_piece: 13,
@@ -740,7 +740,7 @@ mod tests {
         let pieces_info = Pieces {
             info_hash: Arc::new([]),
             num_pieces: 9,
-            sha1_pieces: Arc::new(Vec::new()),
+            sha1_pieces: Arc::new([]),
             block_size: 100,
             last_block_size: 50,
             nblocks_piece: 13,
@@ -763,7 +763,7 @@ mod tests {
         let pieces_info = Pieces {
             info_hash: Arc::new([]),
             num_pieces: 9,
-            sha1_pieces: Arc::new(Vec::new()),
+            sha1_pieces: Arc::new([]),
             block_size: 100,
             last_block_size: 50,
             nblocks_piece: 13,
