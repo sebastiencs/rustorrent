@@ -22,6 +22,7 @@ use crate::{
     pieces::{BlockToDownload, IterTaskDownload, Pieces, TaskDownload},
     spsc::{Consumer, Producer},
     supervisors::torrent::{NewPeer, Result, Shared, TorrentId, TorrentNotification},
+    utils::send_to,
 };
 
 static PEER_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -234,8 +235,9 @@ impl Peer {
 
         let extern_id = self.do_handshake().await?;
 
-        self.supervisor
-            .send(TorrentNotification::AddPeer {
+        send_to(
+            &self.supervisor,
+            TorrentNotification::AddPeer {
                 peer: Box::new(NewPeer {
                     id: self.id,
                     queue: producer,
@@ -243,9 +245,8 @@ impl Peer {
                     extern_id,
                     shared: Arc::clone(&self.shared),
                 }),
-            })
-            .await
-            .unwrap();
+            },
+        );
 
         let mut recv = self.cmd_recv.clone().fuse();
 
@@ -307,10 +308,10 @@ impl Peer {
             }
             _ => {
                 if !self.increase_requested {
-                    self.supervisor
-                        .send(TorrentNotification::IncreaseTasksPeer { id: self.id })
-                        .await
-                        .unwrap();
+                    send_to(
+                        &self.supervisor,
+                        TorrentNotification::IncreaseTasksPeer { id: self.id },
+                    );
 
                     self.increase_requested = true;
 
@@ -388,13 +389,13 @@ impl Peer {
                 info!("[{}] Not interested", self.id);
             }
             Have { piece_index } => {
-                self.supervisor
-                    .send(TorrentNotification::UpdateBitfield {
+                send_to(
+                    &self.supervisor,
+                    TorrentNotification::UpdateBitfield {
                         id: self.id,
                         update: Box::new(piece_index.into()),
-                    })
-                    .await
-                    .unwrap();
+                    },
+                );
 
                 info!("[{}] Have {:?}", self.id, piece_index);
             }
@@ -405,13 +406,13 @@ impl Peer {
                 let num_pieces = self.pieces_infos.num_pieces;
 
                 if let Ok(bitfield) = BitField::try_from((bitfield, num_pieces)) {
-                    self.supervisor
-                        .send(TorrentNotification::UpdateBitfield {
+                    send_to(
+                        &self.supervisor,
+                        TorrentNotification::UpdateBitfield {
                             id: self.id,
                             update: Box::new(bitfield.into()),
-                        })
-                        .await
-                        .unwrap();
+                        },
+                    );
                 }
 
                 info!("[{}] Bitfield", self.id);
@@ -434,16 +435,16 @@ impl Peer {
                     return Ok(());
                 }
 
-                self.fs
-                    .send(FSMessage::Read {
+                send_to(
+                    &self.fs,
+                    FSMessage::Read {
                         id: self.torrent_id,
                         piece,
                         block,
                         length,
                         peer: self.cmd_sender.clone(),
-                    })
-                    .await
-                    .unwrap();
+                    },
+                );
 
                 self.requested_by_peer.insert(requested);
 
@@ -467,13 +468,13 @@ impl Peer {
                     .nbytes_on_tasks
                     .fetch_sub(data.len(), Ordering::Release);
 
-                self.supervisor
-                    .send(TorrentNotification::AddBlock {
+                send_to(
+                    &self.supervisor,
+                    TorrentNotification::AddBlock {
                         id: self.id,
                         block: Block::from((piece, block, data)),
-                    })
-                    .await
-                    .unwrap();
+                    },
+                );
 
                 self.maybe_request_block("block_received").await?;
             }
@@ -509,12 +510,13 @@ impl Peer {
                     if let Ok(addrs) = crate::bencode::de::from_bytes::<PEXMessage>(buffer) {
                         let addrs: Vec<SocketAddr> = addrs.into();
                         info!("[{}] new peers from pex {:?}", self.id, addrs);
-                        self.supervisor
-                            .send(TorrentNotification::PeerDiscovered {
+
+                        send_to(
+                            &self.supervisor,
+                            TorrentNotification::PeerDiscovered {
                                 addrs: addrs.into_boxed_slice(),
-                            })
-                            .await
-                            .unwrap();
+                            },
+                        );
                     };
                 }
             }

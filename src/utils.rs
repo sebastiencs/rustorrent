@@ -1,3 +1,4 @@
+use async_channel::{Sender, TrySendError};
 use async_trait::async_trait;
 use byteorder::{BigEndian, ReadBytesExt};
 use std::net::SocketAddr;
@@ -57,6 +58,16 @@ pub type Map<K, V> = std::collections::HashMap<K, V, NoHash>;
 
 /// A set, without hashing
 pub type Set<V> = std::collections::HashSet<V, NoHash>;
+
+pub(crate) fn send_to<T>(sender: &Sender<T>, msg: T)
+where
+    T: Send + 'static,
+{
+    if let Err(TrySendError::Full(msg)) = sender.try_send(msg) {
+        let sender = sender.clone();
+        tokio::spawn(async move { sender.send(msg).await });
+    }
+}
 
 pub fn ipv4_from_slice(slice: &[u8], output: &mut Vec<SocketAddr>) {
     for chunk in slice.chunks_exact(6) {

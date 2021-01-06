@@ -1,4 +1,4 @@
-use async_channel::{bounded, Receiver, Sender, TrySendError};
+use async_channel::{bounded, Receiver, Sender};
 use crossbeam_channel::Sender as SyncSender;
 use hashbrown::HashSet;
 use std::sync::{
@@ -27,7 +27,7 @@ use crate::{
     pieces::{Pieces, TaskDownload},
     spsc::{self, Producer},
     supervisors::tracker::TrackerSupervisor,
-    utils::Map,
+    utils::{send_to, Map},
 };
 
 static TORRENT_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -301,7 +301,7 @@ impl TorrentSupervisor {
                     warn!("[{}] Tasks not found", id);
                 }
 
-                send_to_peer(&peer.addr, PeerCommand::TasksAvailables);
+                send_to(&peer.addr, PeerCommand::TasksAvailables);
             }
             RemovePeer { id } => {
                 let peer = match self.peers.get_mut(&id) {
@@ -326,7 +326,7 @@ impl TorrentSupervisor {
                     info!("[{}] Multiply tasks {:?}", id, peer.tasks_nbytes * 3);
 
                     peer.tasks_nbytes = peer.tasks_nbytes.saturating_mul(3);
-                    send_to_peer(&peer.addr, PeerCommand::TasksIncreased);
+                    send_to(&peer.addr, PeerCommand::TasksIncreased);
                 } else {
                     info!("[{}] No more piece available for this peer", id);
                 }
@@ -336,7 +336,7 @@ impl TorrentSupervisor {
                     // We are already connected to this peer, disconnect.
                     // This happens when we are connected to its ipv4 and ipv6 addresses
 
-                    send_to_peer(&peer.addr, PeerCommand::Die);
+                    send_to(&peer.addr, PeerCommand::Die);
                 } else {
                     self.peers_socket.insert(peer.shared.socket);
                     self.peers.insert(
@@ -394,7 +394,7 @@ impl TorrentSupervisor {
                         peer.shared.nbytes_on_tasks.fetch_add(nbytes, Relaxed);
                         peer.queue_tasks.push_slice(tasks).unwrap();
 
-                        send_to_peer(&peer.addr, PeerCommand::TasksAvailables);
+                        send_to(&peer.addr, PeerCommand::TasksAvailables);
                     }
                 }
             }
@@ -414,20 +414,6 @@ impl TorrentSupervisor {
     /// Check if the peer extern id is already in our state
     fn is_duplicate_peer(&self, id: &PeerExternId) -> bool {
         self.peers.values().any(|p| &*p.extern_id == id)
-    }
-}
-
-fn send_to_peer(peer: &Sender<PeerCommand>, cmd: PeerCommand) {
-    if let Err(TrySendError::Full(msg)) = peer.try_send(cmd) {
-        let peer = peer.clone();
-        tokio::spawn(async move { peer.send(msg).await });
-    }
-}
-
-fn send_to_fs(fs: &Sender<FSMessage>, msg: FSMessage) {
-    if let Err(TrySendError::Full(msg)) = fs.try_send(msg) {
-        let fs = fs.clone();
-        tokio::spawn(async move { fs.send(msg).await });
     }
 }
 
