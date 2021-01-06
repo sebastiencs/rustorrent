@@ -14,6 +14,7 @@ pub mod fs;
 pub mod io_uring;
 pub mod logger;
 pub mod metadata;
+pub mod peer;
 pub mod piece_collector;
 pub mod piece_picker;
 pub mod pieces;

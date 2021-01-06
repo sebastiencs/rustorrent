@@ -351,7 +351,7 @@ impl PiecePicker {
         peer_id: PeerId,
         tasks_nbytes: usize,
         available: usize,
-        bitfield: &BitField,
+        peer_bitfield: &BitField,
         collector: &PieceCollector,
     ) -> Option<(usize, &[TaskDownload])> {
         let mut nbytes = 0;
@@ -363,7 +363,7 @@ impl PiecePicker {
             return None;
         }
 
-        self.pick_piece_inner(peer_id, bitfield, collector, |picker, piece_index| {
+        self.pick_piece_inner(peer_id, peer_bitfield, collector, |picker, piece_index| {
             match piece_index {
                 Picked::Full(piece_index) => {
                     picker.states[usize::from(piece_index)]
@@ -494,7 +494,7 @@ impl PiecePicker {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{convert::TryFrom, sync::Arc};
 
     use crate::{
         actors::peer::PeerId,
@@ -641,7 +641,7 @@ mod tests {
         picker.update(&BitFieldUpdate::Piece(7.into()));
         picker.update(&BitFieldUpdate::Piece(8.into()));
 
-        let bitfield = BitField::from(&[0b11111111, 0b11111111], 9).unwrap();
+        let bitfield = BitField::try_from((&[0b11111111, 0b11111111][..], 9)).unwrap();
 
         let peer1 = PeerId::new(1);
         let to_download = picker.pick_piece(peer1, piece_length * 4, 1, &bitfield, &collector);
@@ -774,7 +774,7 @@ mod tests {
             block: vec![0; 10].into_boxed_slice(),
         });
 
-        let bitfield = BitField::from(&[0b11111111, 0b11111111], 9).unwrap();
+        let bitfield = BitField::try_from((&[0b11111111, 0b11111111][..], 9)).unwrap();
 
         let peer1 = PeerId::new(1);
         let to_download = picker.pick_piece(peer1, piece_length * 4, 1, &bitfield, &collector);
@@ -816,7 +816,7 @@ mod tests {
         picker.update(&BitFieldUpdate::Piece(7.into()));
         picker.update(&BitFieldUpdate::Piece(8.into()));
 
-        let bitfield = BitField::from(&[0b11111111, 0b11111111], 9).unwrap();
+        let bitfield = BitField::try_from((&[0b11111111, 0b11111111][..], 9)).unwrap();
 
         let peer1 = PeerId::new(1);
         let to_download = picker.pick_piece(peer1, piece_length * 6, 1, &bitfield, &collector);
@@ -853,10 +853,10 @@ mod tests {
         let mut collector = PieceCollector::new(&pieces_info);
 
         picker.update(&BitFieldUpdate::BitField(
-            BitField::from(&[0xFF], 7).unwrap(),
+            BitField::try_from((&[0xFF][..], 7)).unwrap(),
         ));
 
-        let bitfield = BitField::from(&[0b11111111, 0b11111111], 9).unwrap();
+        let bitfield = BitField::try_from((&[0b11111111, 0b11111111][..], 9)).unwrap();
 
         collector.add_block(&Block {
             piece_index: 0.into(),
@@ -957,7 +957,7 @@ mod tests {
             ],
         );
 
-        let bitfield = BitField::from(&[0b11111111, 0b11111111], 9).unwrap();
+        let bitfield = BitField::try_from((&[0b11111111, 0b11111111][..], 9)).unwrap();
 
         let peer1 = PeerId::new(1);
         let to_download = picker.pick_piece(peer1, piece_length * 2, 10, &bitfield, &collector);
@@ -1144,7 +1144,7 @@ mod tests {
             ],
         );
 
-        let mut bitfield2 = BitField::from(&[0, 0], 9).unwrap();
+        let mut bitfield2 = BitField::try_from((&[0, 0][..], 9)).unwrap();
         bitfield2.set_bit(0usize);
         bitfield2.set_bit(7usize);
         bitfield2.set_bit(8usize);
@@ -1216,7 +1216,7 @@ mod tests {
             ],
         );
 
-        let bitfield3 = BitField::from(&[0, 0], 9).unwrap();
+        let bitfield3 = BitField::try_from((&[0, 0][..], 9)).unwrap();
 
         let to_download = picker.pick_piece(
             PeerId::new(9191),

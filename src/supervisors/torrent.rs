@@ -50,24 +50,19 @@ impl TorrentId {
 
 pub struct Shared {
     pub nbytes_on_tasks: AtomicUsize,
+    pub socket: SocketAddr,
 }
 
 impl Shared {
-    pub fn new() -> Self {
+    pub fn new(socket: SocketAddr) -> Self {
         Shared {
+            socket,
             nbytes_on_tasks: AtomicUsize::new(0),
         }
     }
 }
 
-impl Default for Shared {
-    fn default() -> Self {
-        Shared::new()
-    }
-}
-
 struct PeerState {
-    socket: SocketAddr,
     bitfield: BitField,
     queue_tasks: Producer<TaskDownload>,
     addr: Sender<PeerCommand>,
@@ -80,7 +75,6 @@ pub struct NewPeer {
     pub id: PeerId,
     pub queue: Producer<TaskDownload>,
     pub addr: Sender<PeerCommand>,
-    pub socket: SocketAddr,
     pub extern_id: Arc<PeerExternId>,
     pub shared: Arc<Shared>,
 }
@@ -248,17 +242,20 @@ impl TorrentSupervisor {
         let my_addr = self.my_addr.clone();
         let pieces_infos = self.pieces_infos.clone();
         let extern_id = self.extern_id.clone();
+        let fs = self.fs.clone();
+        let id = self.id;
 
         tokio::spawn(async move {
             let (producer, consumer) = spsc::bounded(256);
 
-            let mut peer = match Peer::new(addr, pieces_infos, my_addr, extern_id, consumer).await {
-                Ok(peer) => peer,
-                Err(e) => {
-                    warn!("Peer error {:?}", e, { addr: addr.to_string() });
-                    return;
-                }
-            };
+            let mut peer =
+                match Peer::new(id, addr, pieces_infos, my_addr, extern_id, consumer, fs).await {
+                    Ok(peer) => peer,
+                    Err(e) => {
+                        warn!("Peer error {:?}", e, { addr: addr.to_string() });
+                        return;
+                    }
+                };
             let result = peer.start(producer).await;
             warn!("[{}] Peer terminated: {:?}", peer.internal_id(), result, { addr: addr.to_string() });
         });
@@ -312,7 +309,7 @@ impl TorrentSupervisor {
                     None => return,
                 };
 
-                self.peers_socket.remove(&peer.socket);
+                self.peers_socket.remove(&peer.shared.socket);
                 self.peers.remove(&id);
                 self.piece_picker.remove_peer(id);
             }
@@ -341,14 +338,13 @@ impl TorrentSupervisor {
 
                     send_to_peer(&peer.addr, PeerCommand::Die);
                 } else {
-                    self.peers_socket.insert(peer.socket);
+                    self.peers_socket.insert(peer.shared.socket);
                     self.peers.insert(
                         peer.id,
                         PeerState {
                             bitfield: BitField::new(self.pieces_infos.num_pieces),
                             queue_tasks: peer.queue,
                             addr: peer.addr,
-                            socket: peer.socket,
                             extern_id: peer.extern_id,
                             shared: peer.shared,
                             tasks_nbytes: self.pieces_infos.piece_length,

@@ -140,7 +140,7 @@ impl Sha1Workers {
         runtime: Arc<Runtime>,
         fs: Sender<FSMessage>,
     ) -> Vec<thread::JoinHandle<()>> {
-        let num_cpus = num_cpus::get().max(1);
+        let num_cpus = num_cpus::get().max(1).min(2);
         let mut handles = Vec::with_capacity(num_cpus);
         let mut task = Some(task);
 

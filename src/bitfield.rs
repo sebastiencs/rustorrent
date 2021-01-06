@@ -1,6 +1,6 @@
-use crate::{
-    errors::TorrentError, piece_picker::PieceIndex, supervisors::torrent::Result, utils::FromSlice,
-};
+use std::convert::TryFrom;
+
+use crate::{errors::TorrentError, piece_picker::PieceIndex, utils::FromSlice};
 
 pub enum BitFieldUpdate {
     BitField(BitField),
@@ -25,15 +25,10 @@ pub struct BitField {
     nbits: usize,
 }
 
-impl BitField {
-    pub fn new(nbits: usize) -> BitField {
-        BitField {
-            inner: vec![0; (nbits / 8) + 1].into_boxed_slice(),
-            nbits,
-        }
-    }
+impl<'a> TryFrom<(&'a [u8], usize)> for BitField {
+    type Error = TorrentError;
 
-    pub fn from(bitfield: &[u8], nbits: usize) -> Result<BitField> {
+    fn try_from((bitfield, nbits): (&'a [u8], usize)) -> std::result::Result<Self, Self::Error> {
         if nbits <= bitfield.len() * 8 {
             Ok(BitField {
                 inner: Vec::from_slice(bitfield).into_boxed_slice(),
@@ -41,6 +36,15 @@ impl BitField {
             })
         } else {
             Err(TorrentError::InvalidInput)
+        }
+    }
+}
+
+impl BitField {
+    pub fn new(nbits: usize) -> BitField {
+        BitField {
+            inner: vec![0; (nbits / 8) + 1].into_boxed_slice(),
+            nbits,
         }
     }
 

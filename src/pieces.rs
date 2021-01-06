@@ -1,6 +1,6 @@
 use crate::{
-    actors::peer::MessagePeer,
     metadata::Torrent,
+    peer::message::MessagePeer,
     piece_picker::{BlockIndex, PieceIndex},
 };
 
@@ -309,8 +309,8 @@ impl BlockToDownload {
 impl<'a> From<BlockToDownload> for MessagePeer<'a> {
     fn from(block: BlockToDownload) -> Self {
         MessagePeer::Request {
-            index: block.piece,
-            begin: block.start,
+            piece: block.piece,
+            block: block.start,
             length: block.length,
         }
     }
