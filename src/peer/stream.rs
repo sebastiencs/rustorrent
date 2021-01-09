@@ -1,4 +1,7 @@
-use std::convert::TryFrom;
+use std::{
+    convert::TryFrom,
+    task::{Context, Poll},
+};
 
 use crate::actors::peer::PeerExternId;
 
@@ -25,23 +28,66 @@ impl StreamBuffers {
         }
     }
 
-    pub async fn write_message<'m, M>(&mut self, msg: M) -> Result<()>
-    where
-        M: Into<MessagePeer<'m>>,
-    {
-        use tokio::io::AsyncWriteExt;
+    fn write_to_socket(&mut self) -> Result<()> {
+        let writer = self.reader.as_writer();
 
-        self.buffer_writer.write_msg(msg.into());
-
-        let mut writer = self.reader.as_writer();
-        writer.write_all(self.buffer_writer.as_ref()).await?;
-        writer.flush().await?;
+        while !self.buffer_writer.is_empty() {
+            match writer.try_write(self.buffer_writer.get_buffer()) {
+                Ok(nbytes) => {
+                    self.buffer_writer.consume(nbytes);
+                }
+                Err(e) => {
+                    if let std::io::ErrorKind::WouldBlock = e.kind() {
+                        return Ok(());
+                    }
+                    return Err(e.into());
+                }
+            }
+        }
 
         Ok(())
     }
 
+    pub fn write_message<'a, M>(&mut self, msg: M) -> Result<()>
+    where
+        M: Into<MessagePeer<'a>>,
+    {
+        self.buffer_writer.write_msg(msg);
+        self.write_to_socket()
+    }
+
     pub async fn read_message(&mut self) -> Result<()> {
-        self.reader.read_message().await
+        enum State {
+            Write(Result<()>),
+            Read(Result<()>),
+        }
+
+        loop {
+            if self.buffer_writer.is_empty() {
+                return self.reader.read_message().await;
+            }
+
+            let mut fun = |cx: &mut Context<'_>| {
+                if let std::task::Poll::Ready(v) = self.reader.poll_next_message(cx) {
+                    return Poll::Ready(State::Read(v));
+                };
+
+                let writer = self.reader.as_writer();
+                if let std::task::Poll::Ready(v) = writer.poll_writable(cx) {
+                    return Poll::Ready(State::Write(v.map_err(|e| e.into())));
+                }
+
+                Poll::Pending
+            };
+
+            match futures::future::poll_fn(|cx| fun(cx)).await {
+                State::Read(v) => return v,
+                State::Write(v) => {
+                    v?;
+                    self.write_to_socket()?;
+                }
+            }
+        }
     }
 
     pub async fn read_handshake(&mut self) -> Result<PeerExternId> {

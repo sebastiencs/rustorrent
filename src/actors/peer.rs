@@ -1,7 +1,6 @@
 use async_channel::{bounded, Receiver, Sender};
-use coarsetime::Instant;
 use futures::StreamExt;
-use kv_log_macro::{error, info};
+use kv_log_macro::{error, info, warn};
 use tokio::net::TcpStream;
 
 use std::{
@@ -21,8 +20,11 @@ use crate::{
     piece_picker::{BlockIndex, PieceIndex},
     pieces::{BlockToDownload, IterTaskDownload, Pieces, TaskDownload},
     spsc::{Consumer, Producer},
-    supervisors::torrent::{NewPeer, Result, Shared, TorrentId, TorrentNotification},
-    utils::send_to,
+    supervisors::torrent::{
+        NewPeer, Result, Shared, TorrentId,
+        TorrentNotification::{self, *},
+    },
+    utils::{send_to, SaturatingDuration},
 };
 
 static PEER_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -132,13 +134,6 @@ impl PartialEq for PeerExternId {
 
 impl Eq for PeerExternId {}
 
-#[derive(Hash, PartialEq, Eq)]
-struct Requested {
-    piece: PieceIndex,
-    block: BlockIndex,
-    length: u32,
-}
-
 pub struct Peer {
     id: PeerId,
     torrent_id: TorrentId,
@@ -158,23 +153,21 @@ pub struct Peer {
 
     pieces_infos: Arc<Pieces>,
 
-    nblocks: usize,         // Downloaded
-    start: Option<Instant>, // Downloaded,
-
     peer_detail: PeerDetail,
 
     extern_id: Arc<PeerExternId>,
 
     shared: Arc<Shared>,
 
-    nrequested: usize,
+    requested_by_peer: HashSet<BlockToDownload>,
+    requested_by_us: HashSet<BlockToDownload>,
 
-    increase_requested: bool,
-
-    requested_by_peer: HashSet<Requested>,
+    last_task_timestamp: Option<coarsetime::Instant>,
 }
 
 impl Peer {
+    const MIN_REQUEST_IN_FLIGHT: usize = 10;
+
     pub async fn new(
         torrent_id: TorrentId,
         socket: SocketAddr,
@@ -187,14 +180,20 @@ impl Peer {
         // TODO [2001:df0:a280:1001::3:1]:59632
         //      [2001:df0:a280:1001::3:1]:59632
 
-        // if addr != "[2001:df0:a280:1001::3:1]:59632".parse::<SocketAddr>().unwrap() {
-        //     return Err(TorrentError::InvalidInput);
+        let id = PEER_COUNTER.fetch_add(1, Ordering::SeqCst);
+
+        // if id > 0 {
+        //     return Err(crate::errors::TorrentError::InvalidInput);
         // }
+
+        // if socket == "[2001:df0:a280:1001::3:1]:59632".parse::<SocketAddr>().unwrap() {
+        //     return Err(crate::errors::TorrentError::InvalidInput);
+        // }
+
+        // let socket = "[2001:df0:a280:1001::3:1]:59632".parse::<SocketAddr>().unwrap();
 
         let stream = TcpStream::connect(&socket).await?;
         let piece_length = pieces_infos.piece_length;
-
-        let id = PEER_COUNTER.fetch_add(1, Ordering::SeqCst);
 
         let shared = Arc::new(Shared::new(socket));
 
@@ -214,14 +213,12 @@ impl Peer {
             local_tasks: None,
             fs,
             pieces_infos,
-            nblocks: 0,
-            start: None,
             peer_detail: Default::default(),
             extern_id,
             shared,
-            nrequested: 0,
-            increase_requested: false,
             requested_by_peer: HashSet::default(),
+            requested_by_us: HashSet::default(),
+            last_task_timestamp: None,
         })
     }
 
@@ -237,7 +234,7 @@ impl Peer {
 
         send_to(
             &self.supervisor,
-            TorrentNotification::AddPeer {
+            AddPeer {
                 peer: Box::new(NewPeer {
                     id: self.id,
                     queue: producer,
@@ -255,7 +252,7 @@ impl Peer {
                 msg = self.stream.read_message() => {
                     msg?;
 
-                    self.dispatch().await?;
+                    self.dispatch()?;
                     self.stream.consume_read();
                 }
                 cmd = recv.select_next_some() => {
@@ -263,21 +260,36 @@ impl Peer {
 
                     match cmd {
                         TasksAvailables => {
-                            self.maybe_request_block("task_available").await?;
+                            self.handle_new_tasks()?;
                         }
-                        TasksIncreased => {
-                            self.increase_requested = false;
-                        }
+                        TasksIncreased => {}
                         Die => {
                             return Ok(());
                         }
                         BlockData { piece, block, data } => {
-                            self.send_block(piece, block, data).await?;
+                            self.send_block(piece, block, data)?;
                         }
                     }
                 }
             }
         }
+    }
+
+    fn handle_new_tasks(&mut self) -> Result<()> {
+        let now = coarsetime::Instant::now();
+
+        let increase_requests = self
+            .last_task_timestamp
+            .map(|i| now.saturating_duration_since(i).as_millis() < 3000)
+            .unwrap_or(true);
+
+        self.last_task_timestamp.replace(now);
+
+        if increase_requests || self.requested_by_us.is_empty() {
+            self.maybe_request_block("task_available")?;
+        }
+
+        Ok(())
     }
 
     fn pop_task(&mut self) -> Option<BlockToDownload> {
@@ -292,54 +304,44 @@ impl Peer {
         }
     }
 
-    async fn maybe_request_block(&mut self, caller: &'static str) -> Result<()> {
+    fn is_empty_task(&self) -> bool {
+        let local_empty = self
+            .local_tasks
+            .as_ref()
+            .map(IterTaskDownload::is_empty)
+            .unwrap_or(true);
+        local_empty && self.tasks.is_empty()
+    }
+
+    fn maybe_request_block(&mut self, _caller: &'static str) -> Result<()> {
         if self.am_choked() {
             info!("[{}] Send interested", self.id);
-            return self.stream.write_message(MessagePeer::Interested).await;
+            return self.stream.write_message(MessagePeer::Interested);
+        }
+
+        while let Some(task) = self.pop_task() {
+            self.stream.write_message(task.clone())?;
+            self.requested_by_us.insert(task);
+
+            if self.is_empty_task() {
+                send_to(&self.supervisor, IncreaseTasksPeer { id: self.id });
+                break;
+            }
+
+            if self.requested_by_us.len() >= Self::MIN_REQUEST_IN_FLIGHT {
+                break;
+            }
         }
 
         // TODO [2001:df0:a280:1001::3:1]:59632
 
-        // while self.nrequested < 5 {
-        match self.pop_task() {
-            Some(task) => {
-                self.stream.write_message(task).await?;
-                // self.send_message(task).await?;
-            }
-            _ => {
-                if !self.increase_requested {
-                    send_to(
-                        &self.supervisor,
-                        TorrentNotification::IncreaseTasksPeer { id: self.id },
-                    );
-
-                    self.increase_requested = true;
-
-                    info!(
-                        "[{}] No More Task ! {} downloaded in {:?}s caller={:?}",
-                        self.id,
-                        self.nblocks,
-                        self.start.map(|s| s.elapsed().as_secs()),
-                        caller,
-                    );
-                }
-            }
-        }
-        //     self.nrequested += 1;
-        // }
-
         Ok(())
     }
 
-    async fn send_block(
-        &mut self,
-        piece: PieceIndex,
-        block: BlockIndex,
-        data: Box<[u8]>,
-    ) -> Result<()> {
-        let requested = Requested {
+    fn send_block(&mut self, piece: PieceIndex, block: BlockIndex, data: Box<[u8]>) -> Result<()> {
+        let requested = BlockToDownload {
             piece,
-            block,
+            start: block,
             length: data.len().try_into().unwrap(),
         };
 
@@ -348,20 +350,18 @@ impl Peer {
             return Ok(());
         }
 
-        self.stream
-            .write_message(MessagePeer::Piece {
-                piece,
-                block,
-                data: &data,
-            })
-            .await
+        self.stream.write_message(MessagePeer::Piece {
+            piece,
+            block,
+            data: &data,
+        })
     }
 
     fn am_choked(&self) -> bool {
         self.choked == Choke::Choked
     }
 
-    async fn dispatch(&mut self) -> Result<()> {
+    fn dispatch(&mut self) -> Result<()> {
         use MessagePeer::*;
 
         let msg = self.stream.get_message()?;
@@ -378,7 +378,7 @@ impl Peer {
 
                 info!("[{}] Unchoke", self.id);
 
-                self.maybe_request_block("unchoke").await?;
+                self.maybe_request_block("unchoke")?;
             }
             Interested => {
                 // Unshoke this peer
@@ -391,7 +391,7 @@ impl Peer {
             Have { piece_index } => {
                 send_to(
                     &self.supervisor,
-                    TorrentNotification::UpdateBitfield {
+                    UpdateBitfield {
                         id: self.id,
                         update: Box::new(piece_index.into()),
                     },
@@ -405,15 +405,18 @@ impl Peer {
 
                 let num_pieces = self.pieces_infos.num_pieces;
 
-                if let Ok(bitfield) = BitField::try_from((bitfield, num_pieces)) {
-                    send_to(
-                        &self.supervisor,
-                        TorrentNotification::UpdateBitfield {
-                            id: self.id,
-                            update: Box::new(bitfield.into()),
-                        },
-                    );
-                }
+                let bitfield = match BitField::try_from((bitfield, num_pieces)) {
+                    Ok(bitfield) => bitfield,
+                    _ => return Ok(()),
+                };
+
+                send_to(
+                    &self.supervisor,
+                    UpdateBitfield {
+                        id: self.id,
+                        update: Box::new(bitfield.into()),
+                    },
+                );
 
                 info!("[{}] Bitfield", self.id);
             }
@@ -425,11 +428,13 @@ impl Peer {
                 // Mark this peer as interested
                 // Make sure this peer is not choked or resend a choke
 
-                let requested = Requested {
+                let requested = BlockToDownload {
                     piece,
-                    block,
+                    start: block,
                     length,
                 };
+
+                info!("[{}] Requested by Peer {:?}", self.id, requested);
 
                 if self.requested_by_peer.contains(&requested) {
                     return Ok(());
@@ -451,18 +456,17 @@ impl Peer {
                 info!("[{}] Request {:?} {:?} {}", self.id, piece, block, length);
             }
             Piece { piece, block, data } => {
-                // If we already have it, send another Request
-                // Check the sum and write to disk
-                // Send Request
-                // info!("[{}] Block index={:?} begin={:?} length{}", self.id, index, begin, block.len());
+                // info!("[{}] Receive Block index={:?} begin={:?} length{}", self.id, piece, block, data.len());
 
-                // self.nrequested -= 1;
+                let recv = BlockToDownload {
+                    piece,
+                    start: block,
+                    length: data.len().try_into().unwrap(),
+                };
 
-                if self.start.is_none() {
-                    self.start.replace(Instant::now());
+                if !self.requested_by_us.remove(&recv) {
+                    warn!("[{}] Received but not requested {:?}", self.id, recv);
                 }
-
-                self.nblocks += data.len();
 
                 self.shared
                     .nbytes_on_tasks
@@ -470,22 +474,22 @@ impl Peer {
 
                 send_to(
                     &self.supervisor,
-                    TorrentNotification::AddBlock {
+                    AddBlock {
                         id: self.id,
                         block: Block::from((piece, block, data)),
                     },
                 );
 
-                self.maybe_request_block("block_received").await?;
+                self.maybe_request_block("block_received")?;
             }
             Cancel {
                 piece,
                 block,
                 length,
             } => {
-                let requested = Requested {
+                let requested = BlockToDownload {
                     piece,
-                    block,
+                    start: block,
                     length,
                 };
 
@@ -501,7 +505,7 @@ impl Peer {
                 info!("[{}] Keep alive", self.id);
             }
             Extension(ExtendedMessage::Handshake { handshake: _ }) => {
-                self.send_extended_handshake().await?;
+                self.send_extended_handshake()?;
                 //self.maybe_send_request().await;
                 //info!("[{}] EXTENDED HANDSHAKE SENT", self.id);
             }
@@ -513,7 +517,7 @@ impl Peer {
 
                         send_to(
                             &self.supervisor,
-                            TorrentNotification::PeerDiscovered {
+                            PeerDiscovered {
                                 addrs: addrs.into_boxed_slice(),
                             },
                         );
@@ -538,7 +542,7 @@ impl Peer {
         Ok(())
     }
 
-    async fn send_extended_handshake(&mut self) -> Result<()> {
+    fn send_extended_handshake(&mut self) -> Result<()> {
         let mut extensions = HashMap::new();
         extensions.insert("ut_pex".to_string(), 1);
         let handshake = ExtendedHandshake {
@@ -551,16 +555,13 @@ impl Peer {
             .write_message(MessagePeer::Extension(ExtendedMessage::Handshake {
                 handshake: Box::new(handshake),
             }))
-            .await
     }
 
     async fn do_handshake(&mut self) -> Result<Arc<PeerExternId>> {
-        self.stream
-            .write_message(MessagePeer::Handshake {
-                info_hash: &self.pieces_infos.info_hash,
-                extern_id: &self.extern_id,
-            })
-            .await?;
+        self.stream.write_message(MessagePeer::Handshake {
+            info_hash: &self.pieces_infos.info_hash,
+            extern_id: &self.extern_id,
+        })?;
 
         let peer_id = self.stream.read_handshake().await?;
 

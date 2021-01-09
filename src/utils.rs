@@ -101,3 +101,19 @@ impl ConnectTimeout for TcpStream {
         tokio::time::timeout(timeout, async move { TcpStream::connect(addr).await }).await?
     }
 }
+
+pub trait SaturatingDuration {
+    fn saturating_duration_since(&self, earlier: coarsetime::Instant) -> coarsetime::Duration;
+}
+
+impl SaturatingDuration for coarsetime::Instant {
+    fn saturating_duration_since(&self, earlier: coarsetime::Instant) -> coarsetime::Duration {
+        // Avoid issues on platform where monotonic clock are wrong
+        // https://github.com/rust-lang/rust/issues/56612
+        let later = self.as_u64();
+        let earlier = earlier.as_u64();
+        let duration = later.saturating_sub(earlier);
+
+        coarsetime::Duration::from_u64(duration)
+    }
+}

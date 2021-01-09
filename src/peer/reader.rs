@@ -1,6 +1,9 @@
 use byteorder::{BigEndian, ReadBytesExt};
 use futures::ready;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::{
+    io::{AsyncRead, AsyncWrite, ReadBuf},
+    net::TcpStream,
+};
 
 use std::{
     io::Cursor,
@@ -10,8 +13,23 @@ use std::{
 
 use crate::{errors::TorrentError, supervisors::torrent::Result};
 
-pub trait AsyncReadWrite: AsyncRead + AsyncWrite + Send {}
-impl<T: AsyncRead + AsyncWrite + Send> AsyncReadWrite for T {}
+pub trait TryWrite {
+    fn try_write(&self, _: &[u8]) -> std::io::Result<usize>;
+    fn poll_writable(&self, cx: &mut Context<'_>) -> std::task::Poll<std::io::Result<()>>;
+}
+
+impl TryWrite for TcpStream {
+    fn try_write(&self, buffer: &[u8]) -> std::io::Result<usize> {
+        tokio::net::TcpStream::try_write(self, buffer)
+    }
+
+    fn poll_writable(&self, cx: &mut Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        tokio::net::TcpStream::poll_write_ready(self, cx)
+    }
+}
+
+pub trait AsyncReadWrite: AsyncRead + AsyncWrite + TryWrite + Send + Sync {}
+impl<T: AsyncRead + AsyncWrite + TryWrite + Send + Sync> AsyncReadWrite for T {}
 
 pub struct PeerReadBuffer {
     reader: Pin<Box<dyn AsyncReadWrite>>,
@@ -81,7 +99,7 @@ impl PeerReadBuffer {
         Poll::Ready(Ok(()))
     }
 
-    fn poll_next_message(&mut self, cx: &mut Context<'_>) -> Poll<Result<()>> {
+    pub fn poll_next_message(&mut self, cx: &mut Context<'_>) -> Poll<Result<()>> {
         ready!(self.read_at_least(4, cx))?;
 
         let length = {

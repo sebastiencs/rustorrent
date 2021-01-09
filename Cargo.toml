@@ -60,6 +60,8 @@ crossbeam-channel = "0.5"
 parking_lot = "0.11"
 #bit_field = "0.10.0"
 hashbrown = { version = "0.9", features = ["serde"] }
+
+# https://lwn.net/Articles/347811/
 coarsetime = "0.1"
 num_cpus = "1"
 slab = "0.4"
@@ -86,7 +88,9 @@ fixed = { version = "1", default-features = false }
 
 crossbeam-epoch = { version = "0.9", default-features = false }
 
-tokio = { version = "0.3", features = ["full"] }
+tokio = { version = "1", features = ["full"] }
+
+# tokio = { version = "0.3", features = ["full"] }
 # async-channel = { path = "/home/sebastien/github/async-channel" }
 async-channel = "1.5"
 socket2 = "0.3"

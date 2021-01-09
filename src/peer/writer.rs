@@ -8,6 +8,7 @@ use super::message::MessagePeer;
 
 pub(crate) struct BufferWriter {
     buffer: Vec<u8>,
+    pos: usize,
 }
 
 impl AsRef<[u8]> for BufferWriter {
@@ -20,12 +21,40 @@ impl BufferWriter {
     pub fn new(capacity: usize) -> Self {
         Self {
             buffer: Vec::with_capacity(capacity),
+            pos: 0,
         }
     }
 
-    pub fn write_msg(&mut self, msg: MessagePeer<'_>) {
-        self.buffer.clear();
+    pub fn consume(&mut self, nbytes: usize) {
+        if nbytes == self.pos {
+            self.pos = 0;
+        } else {
+            self.buffer.copy_within(nbytes..self.pos, 0);
+            self.pos -= nbytes;
+        }
+    }
+
+    pub fn get_buffer(&self) -> &[u8] {
+        &self.buffer[..self.pos]
+    }
+
+    pub fn len(&self) -> usize {
+        self.pos
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pos == 0
+    }
+
+    pub fn write_msg<'a, M>(&mut self, msg: M)
+    where
+        M: Into<MessagePeer<'a>>,
+    {
+        let msg = msg.into();
+
         let mut cursor = Cursor::new(&mut self.buffer);
+
+        cursor.set_position(self.pos as u64);
 
         match msg {
             MessagePeer::Choke => {
@@ -122,5 +151,7 @@ impl BufferWriter {
             }
             MessagePeer::Unknown { .. } => unreachable!(),
         }
+
+        self.pos = cursor.position() as usize;
     }
 }

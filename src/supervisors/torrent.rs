@@ -390,7 +390,13 @@ impl TorrentSupervisor {
                         &peer.bitfield,
                         &self.collector,
                     ) {
-                        info!("[{}] Adding {} tasks {:?}", id, tasks.len(), tasks);
+                        info!(
+                            "[{}] Adding {} tasks {:?} nbytes={:?}",
+                            id,
+                            tasks.len(),
+                            tasks,
+                            tasks_nbytes
+                        );
                         peer.shared.nbytes_on_tasks.fetch_add(nbytes, Relaxed);
                         peer.queue_tasks.push_slice(tasks).unwrap();
 
@@ -401,7 +407,7 @@ impl TorrentSupervisor {
             ValidatePiece { valid, piece_index } => {
                 self.piece_picker.set_as_downloaded(piece_index, valid);
 
-                debug!("Piece checked from the pool: {}", valid);
+                // debug!("Piece checked from the pool: {}", valid);
             }
             PeerDiscovered { addrs } => {
                 for addr in addrs.iter().filter(|a| !self.peers_socket.contains(a)) {

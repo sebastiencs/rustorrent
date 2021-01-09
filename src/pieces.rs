@@ -209,6 +209,24 @@ impl TaskDownload {
     }
 }
 
+impl IterTaskDownload {
+    pub(crate) fn is_empty(&self) -> bool {
+        match self.task {
+            TaskDownload::Piece { piece_index } => {
+                let current_block: u32 = self.current_block.into();
+                self.pieces_info.piece_size_of(piece_index) == current_block
+            }
+            TaskDownload::PiecesRange { end, .. } => {
+                let piece = self.current_piece;
+                let current_block: u32 = self.current_block.into();
+
+                piece.next_piece() == end && self.pieces_info.piece_size_of(piece) == current_block
+            }
+            TaskDownload::BlockRange { end, .. } => end == self.current_block,
+        }
+    }
+}
+
 impl Iterator for IterTaskDownload {
     type Item = BlockToDownload;
 
@@ -279,7 +297,7 @@ impl Iterator for IterTaskDownload {
     }
 }
 
-#[derive(Eq, PartialEq)]
+#[derive(Eq, PartialEq, Hash, Clone)]
 pub struct BlockToDownload {
     pub piece: PieceIndex,
     pub start: BlockIndex,
