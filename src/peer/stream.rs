@@ -1,5 +1,6 @@
 use std::{
     convert::TryFrom,
+    io::Result,
     task::{Context, Poll},
 };
 
@@ -10,7 +11,6 @@ use super::{
     reader::{AsyncReadWrite, PeerReadBuffer},
     writer::BufferWriter,
 };
-use crate::supervisors::torrent::Result;
 
 pub struct StreamBuffers {
     reader: PeerReadBuffer,
@@ -32,16 +32,14 @@ impl StreamBuffers {
         let writer = self.reader.as_writer();
 
         while !self.buffer_writer.is_empty() {
-            match writer.try_write(self.buffer_writer.get_buffer()) {
+            match writer.try_write(self.buffer_writer.as_ref()) {
                 Ok(nbytes) => {
                     self.buffer_writer.consume(nbytes);
                 }
-                Err(e) => {
-                    if let std::io::ErrorKind::WouldBlock = e.kind() {
-                        return Ok(());
-                    }
-                    return Err(e.into());
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    return Ok(());
                 }
+                e => return e.map(|_| ()),
             }
         }
 
@@ -67,20 +65,15 @@ impl StreamBuffers {
                 return self.reader.read_message().await;
             }
 
-            let mut fun = |cx: &mut Context<'_>| {
-                if let std::task::Poll::Ready(v) = self.reader.poll_next_message(cx) {
+            let fun = |cx: &mut Context<'_>| {
+                if let Poll::Ready(v) = self.reader.poll_next_message(cx) {
                     return Poll::Ready(State::Read(v));
                 };
 
-                let writer = self.reader.as_writer();
-                if let std::task::Poll::Ready(v) = writer.poll_writable(cx) {
-                    return Poll::Ready(State::Write(v.map_err(|e| e.into())));
-                }
-
-                Poll::Pending
+                self.reader.as_writer().poll_writable(cx).map(State::Write)
             };
 
-            match futures::future::poll_fn(|cx| fun(cx)).await {
+            match futures::future::poll_fn(fun).await {
                 State::Read(v) => return v,
                 State::Write(v) => {
                     v?;
@@ -101,7 +94,7 @@ impl StreamBuffers {
         Ok(peer_id)
     }
 
-    pub fn get_message(&self) -> Result<MessagePeer> {
+    pub fn get_message(&self) -> crate::supervisors::torrent::Result<MessagePeer> {
         MessagePeer::try_from(self.reader.buffer())
     }
 

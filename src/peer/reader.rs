@@ -1,32 +1,14 @@
 use byteorder::{BigEndian, ReadBytesExt};
 use futures::ready;
-use tokio::{
-    io::{AsyncRead, AsyncWrite, ReadBuf},
-    net::TcpStream,
-};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use std::{
-    io::Cursor,
+    io::{Cursor, Result},
     pin::Pin,
     task::{Context, Poll},
 };
 
-use crate::{errors::TorrentError, supervisors::torrent::Result};
-
-pub trait TryWrite {
-    fn try_write(&self, _: &[u8]) -> std::io::Result<usize>;
-    fn poll_writable(&self, cx: &mut Context<'_>) -> std::task::Poll<std::io::Result<()>>;
-}
-
-impl TryWrite for TcpStream {
-    fn try_write(&self, buffer: &[u8]) -> std::io::Result<usize> {
-        tokio::net::TcpStream::try_write(self, buffer)
-    }
-
-    fn poll_writable(&self, cx: &mut Context<'_>) -> std::task::Poll<std::io::Result<()>> {
-        tokio::net::TcpStream::poll_write_ready(self, cx)
-    }
-}
+use super::writer::TryWrite;
 
 pub trait AsyncReadWrite: AsyncRead + AsyncWrite + TryWrite + Send + Sync {}
 impl<T: AsyncRead + AsyncWrite + TryWrite + Send + Sync> AsyncReadWrite for T {}
@@ -79,7 +61,7 @@ impl PeerReadBuffer {
             ready!(self.reader.as_mut().poll_read(cx, &mut buf))?;
             let filled = buf.filled().len();
             if filled == 0 {
-                return Poll::Ready(Err(TorrentError::IO(UnexpectedEof.into())));
+                return Poll::Ready(Err(UnexpectedEof.into()));
             }
             self.pos += filled;
         }

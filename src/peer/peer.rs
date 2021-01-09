@@ -316,7 +316,7 @@ impl Peer {
     fn maybe_request_block(&mut self, _caller: &'static str) -> Result<()> {
         if self.am_choked() {
             info!("[{}] Send interested", self.id);
-            return self.stream.write_message(MessagePeer::Interested);
+            return Ok(self.stream.write_message(MessagePeer::Interested)?);
         }
 
         while let Some(task) = self.pop_task() {
@@ -354,7 +354,9 @@ impl Peer {
             piece,
             block,
             data: &data,
-        })
+        })?;
+
+        Ok(())
     }
 
     fn am_choked(&self) -> bool {
@@ -554,7 +556,9 @@ impl Peer {
         self.stream
             .write_message(MessagePeer::Extension(ExtendedMessage::Handshake {
                 handshake: Box::new(handshake),
-            }))
+            }))?;
+
+        Ok(())
     }
 
     async fn do_handshake(&mut self) -> Result<Arc<PeerExternId>> {
