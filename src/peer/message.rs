@@ -3,9 +3,9 @@ use std::{convert::TryFrom, io::Cursor};
 use byteorder::{BigEndian, ReadBytesExt};
 
 use crate::{
-    actors::peer::PeerExternId,
     errors::TorrentError,
     extensions::ExtendedMessage,
+    peer::peer::PeerExternId,
     piece_picker::{BlockIndex, PieceIndex},
     supervisors::torrent::Result,
 };

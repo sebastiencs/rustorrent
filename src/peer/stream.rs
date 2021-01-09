@@ -3,7 +3,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use crate::actors::peer::PeerExternId;
+use crate::peer::peer::PeerExternId;
 
 use super::{
     message::MessagePeer,

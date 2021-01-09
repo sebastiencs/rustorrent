@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use std::net::SocketAddr;
 
 use super::{TrackerConnection, TrackerData};
-use crate::{actors::peer::PeerExternId, errors::TorrentError, supervisors::torrent::Result};
+use crate::{errors::TorrentError, peer::peer::PeerExternId, supervisors::torrent::Result};
 
 #[derive(Debug)]
 pub enum Action {

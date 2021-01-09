@@ -14,14 +14,12 @@ use kv_log_macro::{debug, info, warn};
 use std::net::SocketAddr;
 
 use crate::{
-    actors::{
-        peer::{Peer, PeerCommand, PeerExternId, PeerId},
-        sha1::Sha1Task,
-    },
+    actors::sha1::Sha1Task,
     bitfield::{BitField, BitFieldUpdate},
     errors::TorrentError,
     fs::FSMessage,
     metadata::Torrent,
+    peer::peer::{Peer, PeerCommand, PeerExternId, PeerId},
     piece_collector::{Block, PieceCollector},
     piece_picker::{PieceIndex, PiecePicker},
     pieces::{Pieces, TaskDownload},

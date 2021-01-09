@@ -6,9 +6,9 @@ use kv_log_macro::info;
 use tokio::runtime::Runtime;
 
 use crate::{
-    actors::peer::PeerCommand,
     fs::TorrentCache,
     io_uring::file::FilesUring,
+    peer::peer::PeerCommand,
     piece_picker::{BlockIndex, PieceIndex},
     supervisors::torrent::TorrentId,
     utils::{Map, NoHash},

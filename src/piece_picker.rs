@@ -5,8 +5,8 @@ use fastrand::Rng;
 //use kv_log_macro::info;
 
 use crate::{
-    actors::peer::PeerId,
     bitfield::{BitField, BitFieldUpdate},
+    peer::peer::PeerId,
     piece_collector::PieceCollector,
     pieces::{Pieces, TaskDownload},
     utils::Set,
@@ -497,8 +497,8 @@ mod tests {
     use std::{convert::TryFrom, sync::Arc};
 
     use crate::{
-        actors::peer::PeerId,
         bitfield::{BitField, BitFieldUpdate},
+        peer::peer::PeerId,
         piece_collector::{Block, PieceCollector},
         pieces::{BlockToDownload, Pieces, TaskDownload},
     };

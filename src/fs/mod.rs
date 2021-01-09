@@ -10,8 +10,8 @@ use kv_log_macro::debug;
 use tokio::runtime::Runtime;
 
 use crate::{
-    actors::peer::PeerCommand,
     metadata::{Torrent, TorrentFile},
+    peer::peer::PeerCommand,
     piece_picker::{BlockIndex, PieceIndex},
     pieces::Pieces,
     supervisors::torrent::TorrentId,
@@ -155,9 +155,9 @@ mod tests {
     use tokio::runtime::Runtime;
 
     use crate::{
-        actors::peer::PeerCommand,
         fs::FSMessage::{AddTorrent, Read, RemoveTorrent, Write},
         metadata::{InfoFile::Multiple, MetaFile, MetaInfo, MetaTorrent, Torrent},
+        peer::peer::PeerCommand,
         pieces::Pieces,
         supervisors::torrent::TorrentId,
     };

@@ -7,9 +7,7 @@ use std::{
 };
 
 use crate::{
-    actors::{peer::PeerExternId, tracker::Tracker},
-    errors::TorrentError,
-    metadata::Torrent,
+    actors::tracker::Tracker, errors::TorrentError, metadata::Torrent, peer::peer::PeerExternId,
     supervisors::torrent::TorrentNotification,
 };
 
