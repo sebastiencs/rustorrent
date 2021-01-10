@@ -1,11 +1,12 @@
 use async_channel::{bounded, Receiver, Sender};
+use byteorder::{BigEndian, ReadBytesExt};
 use futures::StreamExt;
-use kv_log_macro::{error, info, warn};
+use kv_log_macro::{debug, error, info, warn};
 use tokio::net::TcpStream;
 
 use std::{
     convert::{TryFrom, TryInto},
-    net::SocketAddr,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -65,9 +66,28 @@ pub enum PeerCommand {
 
 use hashbrown::{HashMap, HashSet};
 
-#[derive(Default)]
+#[derive(Debug)]
 struct PeerDetail {
     extension_ids: HashMap<String, i64>,
+    // Number of requests the peer supports without dropping
+    max_requests: usize,
+    client_name: Option<String>,
+    my_ip: Option<IpAddr>,
+    ipv4: Option<Ipv4Addr>,
+    ipv6: Option<Ipv6Addr>,
+}
+
+impl Default for PeerDetail {
+    fn default() -> Self {
+        Self {
+            max_requests: Peer::MAX_REQUEST_IN_FLIGHT_DEFAULT,
+            extension_ids: HashMap::default(),
+            client_name: None,
+            my_ip: None,
+            ipv4: None,
+            ipv6: None,
+        }
+    }
 }
 
 impl PeerDetail {
@@ -167,6 +187,7 @@ pub struct Peer {
 
 impl Peer {
     const MIN_REQUEST_IN_FLIGHT: usize = 10;
+    const MAX_REQUEST_IN_FLIGHT_DEFAULT: usize = 250;
 
     pub async fn new(
         torrent_id: TorrentId,
@@ -293,6 +314,10 @@ impl Peer {
     }
 
     fn pop_task(&mut self) -> Option<BlockToDownload> {
+        if self.requested_by_us.len() >= self.peer_detail.max_requests {
+            return None;
+        }
+
         loop {
             if let Some(task) = self.local_tasks.as_mut().and_then(Iterator::next) {
                 return Some(task);
@@ -506,10 +531,9 @@ impl Peer {
             KeepAlive => {
                 info!("[{}] Keep alive", self.id);
             }
-            Extension(ExtendedMessage::Handshake { handshake: _ }) => {
+            Extension(ExtendedMessage::Handshake { handshake }) => {
+                self.read_extended_handshake(&handshake);
                 self.send_extended_handshake()?;
-                //self.maybe_send_request().await;
-                //info!("[{}] EXTENDED HANDSHAKE SENT", self.id);
             }
             Extension(ExtendedMessage::Message { id, buffer }) => {
                 if id == 1 {
@@ -544,6 +568,80 @@ impl Peer {
         Ok(())
     }
 
+    fn read_extended_handshake(&mut self, handshake: &ExtendedHandshake) {
+        self.peer_detail.max_requests = handshake
+            .reqq
+            .and_then(|m| m.try_into().ok())
+            .unwrap_or(self.peer_detail.max_requests);
+        self.peer_detail.extension_ids = handshake.m.as_ref().cloned().unwrap_or_default();
+        self.peer_detail.client_name = handshake.v.clone();
+
+        self.peer_detail.my_ip = handshake
+            .yourip
+            .as_ref()
+            .map(|ip| {
+                ip.as_slice()
+                    .read_u128::<BigEndian>()
+                    .map(|ip| Ipv6Addr::from(ip).into())
+                    .or_else(|_| {
+                        ip.as_slice()
+                            .read_u32::<BigEndian>()
+                            .map(|ip| Ipv4Addr::from(ip).into())
+                    })
+                    .ok()
+            })
+            .flatten();
+
+        self.peer_detail.ipv4 = handshake
+            .ipv4
+            .as_ref()
+            .map(|ip| {
+                ip.as_slice()
+                    .read_u32::<BigEndian>()
+                    .map(Ipv4Addr::from)
+                    .ok()
+            })
+            .flatten();
+
+        self.peer_detail.ipv6 = handshake
+            .ipv6
+            .as_ref()
+            .map(|ip| {
+                ip.as_slice()
+                    .read_u128::<BigEndian>()
+                    .map(Ipv6Addr::from)
+                    .ok()
+            })
+            .flatten();
+
+        error!("[{}] {:#?}", self.id, handshake);
+        error!("[{}] {:#?}", self.id, self.peer_detail);
+    }
+
+    fn read_extended_message(&self, id: u8, buffer: &[u8]) {
+        match id {
+            1 => {
+                let addrs = match crate::bencode::de::from_bytes::<PEXMessage>(buffer) {
+                    Ok(addrs) => addrs,
+                    Err(_) => return,
+                };
+
+                let addrs: Vec<SocketAddr> = addrs.into();
+                info!("[{}] new peers from pex {:?}", self.id, addrs);
+
+                send_to(
+                    &self.supervisor,
+                    PeerDiscovered {
+                        addrs: addrs.into_boxed_slice(),
+                    },
+                );
+            }
+            id => {
+                debug!("[{}] Unsupported extended message {}", self.id, id);
+            }
+        }
+    }
+
     fn send_extended_handshake(&mut self) -> Result<()> {
         let mut extensions = HashMap::new();
         extensions.insert("ut_pex".to_string(), 1);
@@ -553,10 +651,7 @@ impl Peer {
             p: Some(6801),
             ..Default::default()
         };
-        self.stream
-            .write_message(MessagePeer::Extension(ExtendedMessage::Handshake {
-                handshake: Box::new(handshake),
-            }))?;
+        self.stream.write_message(handshake)?;
 
         Ok(())
     }

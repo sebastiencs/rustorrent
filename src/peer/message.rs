@@ -4,7 +4,7 @@ use byteorder::{BigEndian, ReadBytesExt};
 
 use crate::{
     errors::TorrentError,
-    extensions::ExtendedMessage,
+    extensions::{ExtendedHandshake, ExtendedMessage},
     peer::peer::PeerExternId,
     piece_picker::{BlockIndex, PieceIndex},
     supervisors::torrent::Result,
@@ -46,6 +46,14 @@ pub enum MessagePeer<'a> {
         id: u8,
         buffer: &'a [u8],
     },
+}
+
+impl From<ExtendedHandshake> for MessagePeer<'_> {
+    fn from(handshake: ExtendedHandshake) -> Self {
+        MessagePeer::Extension(ExtendedMessage::Handshake {
+            handshake: Box::new(handshake),
+        })
+    }
 }
 
 impl<'a> TryFrom<&'a [u8]> for MessagePeer<'a> {
