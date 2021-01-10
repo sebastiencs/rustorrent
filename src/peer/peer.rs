@@ -56,7 +56,6 @@ enum Choke {
 pub enum PeerCommand {
     TasksAvailables,
     Die,
-    TasksIncreased,
     BlockData {
         piece: PieceIndex,
         block: BlockIndex,
@@ -70,7 +69,7 @@ use hashbrown::{HashMap, HashSet};
 struct PeerDetail {
     extension_ids: HashMap<String, i64>,
     // Number of requests the peer supports without dropping
-    max_requests: usize,
+    max_requests: Option<usize>,
     client_name: Option<String>,
     my_ip: Option<IpAddr>,
     ipv4: Option<Ipv4Addr>,
@@ -80,21 +79,13 @@ struct PeerDetail {
 impl Default for PeerDetail {
     fn default() -> Self {
         Self {
-            max_requests: Peer::MAX_REQUEST_IN_FLIGHT_DEFAULT,
+            max_requests: None,
             extension_ids: HashMap::default(),
             client_name: None,
             my_ip: None,
             ipv4: None,
             ipv6: None,
         }
-    }
-}
-
-impl PeerDetail {
-    fn update_with_extension(&mut self, ext: ExtendedHandshake) {
-        if let Some(m) = ext.m {
-            self.extension_ids = m;
-        };
     }
 }
 
@@ -270,7 +261,7 @@ impl Peer {
 
         loop {
             tokio::select! {
-                msg = self.stream.read_message() => {
+                msg = self.stream.wait_on_socket() => {
                     msg?;
 
                     self.dispatch()?;
@@ -283,7 +274,6 @@ impl Peer {
                         TasksAvailables => {
                             self.handle_new_tasks()?;
                         }
-                        TasksIncreased => {}
                         Die => {
                             return Ok(());
                         }
@@ -314,7 +304,12 @@ impl Peer {
     }
 
     fn pop_task(&mut self) -> Option<BlockToDownload> {
-        if self.requested_by_us.len() >= self.peer_detail.max_requests {
+        let max_requests = self
+            .peer_detail
+            .max_requests
+            .unwrap_or(Self::MAX_REQUEST_IN_FLIGHT_DEFAULT);
+
+        if self.requested_by_us.len() >= max_requests {
             return None;
         }
 
@@ -569,10 +564,7 @@ impl Peer {
     }
 
     fn read_extended_handshake(&mut self, handshake: &ExtendedHandshake) {
-        self.peer_detail.max_requests = handshake
-            .reqq
-            .and_then(|m| m.try_into().ok())
-            .unwrap_or(self.peer_detail.max_requests);
+        self.peer_detail.max_requests = handshake.reqq.and_then(|m| m.try_into().ok());
         self.peer_detail.extension_ids = handshake.m.as_ref().cloned().unwrap_or_default();
         self.peer_detail.client_name = handshake.v.clone();
 

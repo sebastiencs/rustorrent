@@ -243,7 +243,7 @@ impl TorrentSupervisor {
         let fs = self.fs.clone();
         let id = self.id;
 
-        tokio::spawn(async move {
+        tokio::spawn(Box::pin(async move {
             let (producer, consumer) = spsc::bounded(256);
 
             let mut peer =
@@ -256,7 +256,7 @@ impl TorrentSupervisor {
                 };
             let result = peer.start(producer).await;
             warn!("[{}] Peer terminated: {:?}", peer.internal_id(), result, { addr: addr.to_string() });
-        });
+        }));
     }
 
     async fn process_cmds(&mut self) {
@@ -324,7 +324,6 @@ impl TorrentSupervisor {
                     info!("[{}] Multiply tasks {:?}", id, peer.tasks_nbytes * 3);
 
                     peer.tasks_nbytes = peer.tasks_nbytes.saturating_mul(3);
-                    send_to(&peer.addr, PeerCommand::TasksIncreased);
                 } else {
                     info!("[{}] No more piece available for this peer", id);
                 }

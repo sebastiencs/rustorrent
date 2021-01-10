@@ -54,7 +54,7 @@ impl StreamBuffers {
         self.write_to_socket()
     }
 
-    pub async fn read_message(&mut self) -> Result<()> {
+    pub async fn wait_on_socket(&mut self) -> Result<()> {
         enum State {
             Write(Result<()>),
             Read(Result<()>),
