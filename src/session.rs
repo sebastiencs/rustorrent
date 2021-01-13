@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     fs::{standard_fs::StandardFS, uring_fs::UringFS, FSMessage, FileSystem},
+    listener::{Listener, ListenerMessage},
     logger,
     metadata::Torrent,
 };
@@ -28,15 +29,15 @@ struct SessionInner {
     sha1_workers: SyncSender<Sha1Task>,
     fs: Sender<FSMessage>,
     runtime: Arc<Runtime>,
+    listener: Sender<ListenerMessage>,
 }
 
 impl SessionInner {
     fn start(&self) {
-        // self.runtime.enter();
-        self.runtime.block_on(async { self.start_session() })
+        self.runtime.block_on(async { self.start_session().await })
     }
 
-    fn start_session(&self) {
+    async fn start_session(&self) {
         for cmd in self.cmds.iter() {
             self.dispatch(cmd);
         }
@@ -48,9 +49,10 @@ impl SessionInner {
         match cmd {
             AddTorrent(torrent) => {
                 let sha1_workers = self.sha1_workers.clone();
-                let vfs = self.fs.clone();
+                let fs = self.fs.clone();
+                let listener = self.listener.clone();
                 tokio::spawn(async move {
-                    TorrentSupervisor::new(torrent, sha1_workers, vfs)
+                    TorrentSupervisor::new(torrent, sha1_workers, fs, listener)
                         .start()
                         .await;
                 });
@@ -86,6 +88,7 @@ impl Session {
             _ => StandardFS::new(runtime.clone()),
         };
         let sha1_workers = Sha1Workers::new_pool(runtime.clone(), fs.clone());
+        let listener = Listener::new(runtime.clone());
         let runtime_clone = runtime.clone();
 
         let handle = std::thread::spawn(move || {
@@ -95,6 +98,7 @@ impl Session {
                 sha1_workers,
                 runtime: runtime_clone,
                 fs,
+                listener,
             };
             session.start();
         });

@@ -9,7 +9,7 @@ use std::sync::{
     Arc,
 };
 // use log::info;
-use kv_log_macro::{debug, info, warn};
+use kv_log_macro::{debug, error, info, warn};
 
 use std::net::SocketAddr;
 
@@ -18,8 +18,12 @@ use crate::{
     bitfield::{BitField, BitFieldUpdate},
     errors::TorrentError,
     fs::FSMessage,
+    listener::ListenerMessage,
     metadata::Torrent,
-    peer::peer::{Peer, PeerCommand, PeerExternId, PeerId},
+    peer::{
+        peer::{Peer, PeerCommand, PeerExternId, PeerId, PeerInitialize},
+        stream::{HandshakeDetail, StreamBuffers},
+    },
     piece_collector::{Block, PieceCollector},
     piece_picker::{PieceIndex, PiecePicker},
     pieces::{Pieces, TaskDownload},
@@ -112,6 +116,11 @@ pub enum TorrentNotification {
     PeerDiscovered {
         addrs: Box<[SocketAddr]>,
     },
+    PeerAccepted {
+        buffers: StreamBuffers,
+        socket: SocketAddr,
+        handshake: Box<HandshakeDetail>,
+    },
 }
 
 impl std::fmt::Debug for TorrentNotification {
@@ -147,6 +156,10 @@ impl std::fmt::Debug for TorrentNotification {
                 .debug_struct("TorrentNotification")
                 .field("addrs", &addrs)
                 .finish(),
+            PeerAccepted { socket, .. } => f
+                .debug_struct("TorrentNotification")
+                .field("PeerAccepted", &socket)
+                .finish(),
         }
     }
 }
@@ -174,6 +187,7 @@ pub struct TorrentSupervisor {
     extern_id: Arc<PeerExternId>,
 
     fs: Sender<FSMessage>,
+    listener: Sender<ListenerMessage>,
 }
 
 pub type Result<T> = std::result::Result<T, TorrentError>;
@@ -183,6 +197,7 @@ impl TorrentSupervisor {
         torrent: Torrent,
         sha1_workers: SyncSender<Sha1Task>,
         fs: Sender<FSMessage>,
+        listener: Sender<ListenerMessage>,
     ) -> TorrentSupervisor {
         let (my_addr, receiver) = bounded(10000);
         let pieces_infos = Arc::new(Pieces::from(&torrent));
@@ -207,6 +222,7 @@ impl TorrentSupervisor {
             sha1_workers,
             extern_id,
             fs,
+            listener,
         }
     }
 
@@ -221,41 +237,65 @@ impl TorrentSupervisor {
                 .await;
         });
 
-        self.fs
-            .send(FSMessage::AddTorrent {
+        send_to(
+            &self.listener,
+            ListenerMessage::AddTorrent {
+                sender: self.my_addr.clone(),
+                info_hash: Arc::clone(&self.pieces_infos.info_hash),
+            },
+        );
+
+        send_to(
+            &self.fs,
+            FSMessage::AddTorrent {
                 id: self.id,
                 meta: Arc::clone(&self.metadata),
                 pieces_infos: Arc::clone(&self.pieces_infos),
-            })
-            .await
-            .unwrap();
+            },
+        );
 
         self.process_cmds().await;
     }
 
-    fn connect_to_peers(&self, addr: &SocketAddr) {
-        debug!("Connecting", { addr: addr.to_string() });
+    fn connect_to_peer(
+        &self,
+        socket: SocketAddr,
+        buffers: Option<StreamBuffers>,
+        handshake: Option<Box<HandshakeDetail>>,
+    ) {
+        debug!("Connecting", { addr: socket.to_string() });
 
-        let addr = *addr;
-        let my_addr = self.my_addr.clone();
+        let supervisor = self.my_addr.clone();
         let pieces_infos = self.pieces_infos.clone();
         let extern_id = self.extern_id.clone();
         let fs = self.fs.clone();
-        let id = self.id;
+        let torrent_id = self.id;
 
         tokio::spawn(Box::pin(async move {
             let (producer, consumer) = spsc::bounded(256);
 
-            let mut peer =
-                match Peer::new(id, addr, pieces_infos, my_addr, extern_id, consumer, fs).await {
-                    Ok(peer) => peer,
-                    Err(e) => {
-                        warn!("Peer error {:?}", e, { addr: addr.to_string() });
-                        return;
-                    }
-                };
-            let result = peer.start(producer).await;
-            warn!("[{}] Peer terminated: {:?}", peer.internal_id(), result, { addr: addr.to_string() });
+            let mut peer = match Peer::new(PeerInitialize {
+                torrent_id,
+                socket,
+                pieces_infos,
+                supervisor,
+                extern_id,
+                consumer,
+                fs,
+                buffers,
+            })
+            .await
+            {
+                Ok(peer) => peer,
+                Err(e) => {
+                    warn!("Peer error {:?}", e, { addr: socket.to_string() });
+                    return;
+                }
+            };
+
+            let result = peer.start(producer, handshake).await;
+
+            warn!("[{}] Peer terminated: {:?}", peer.internal_id(), result, { addr: socket.to_string() });
         }));
     }
 
@@ -408,8 +448,18 @@ impl TorrentSupervisor {
             }
             PeerDiscovered { addrs } => {
                 for addr in addrs.iter().filter(|a| !self.peers_socket.contains(a)) {
-                    self.connect_to_peers(addr);
+                    self.connect_to_peer(*addr, None, None);
                 }
+            }
+            PeerAccepted {
+                mut buffers,
+                socket,
+                handshake,
+            } => {
+                error!("[{}] Peer accepted", self.id);
+
+                buffers.set_read_buffer_capacity(self.pieces_infos.piece_length);
+                self.connect_to_peer(socket, Some(buffers), Some(handshake));
             }
         }
     }
@@ -422,9 +472,13 @@ impl TorrentSupervisor {
 
 impl Drop for TorrentSupervisor {
     fn drop(&mut self) {
-        self.fs
-            .try_send(FSMessage::RemoveTorrent { id: self.id })
-            .unwrap();
+        send_to(&self.fs, FSMessage::RemoveTorrent { id: self.id });
+        send_to(
+            &self.listener,
+            ListenerMessage::RemoveTorrent {
+                info_hash: Arc::clone(&self.pieces_infos.info_hash),
+            },
+        );
     }
 }
 

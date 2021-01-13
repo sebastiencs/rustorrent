@@ -1,6 +1,7 @@
 use std::{
     convert::TryFrom,
     io::Result,
+    sync::Arc,
     task::{Context, Poll},
 };
 
@@ -11,6 +12,11 @@ use super::{
     reader::{AsyncReadWrite, PeerReadBuffer},
     writer::BufferWriter,
 };
+
+pub struct HandshakeDetail {
+    pub info_hash: Arc<[u8]>,
+    pub extern_id: PeerExternId,
+}
 
 pub struct StreamBuffers {
     reader: PeerReadBuffer,
@@ -44,6 +50,10 @@ impl StreamBuffers {
         }
 
         Ok(())
+    }
+
+    pub fn set_read_buffer_capacity(&mut self, cap: usize) {
+        self.reader.set_buffer_capacity(cap);
     }
 
     pub fn write_message<'a, M>(&mut self, msg: M) -> Result<()>
@@ -83,15 +93,20 @@ impl StreamBuffers {
         }
     }
 
-    pub async fn read_handshake(&mut self) -> Result<PeerExternId> {
+    pub async fn read_handshake(&mut self) -> Result<HandshakeDetail> {
         self.reader.read_handshake().await?;
         let buffer = self.reader.buffer();
         let length = buffer.len();
 
-        let peer_id = PeerExternId::new(&buffer[length - 20..]);
+        let info_hash = Arc::from(&buffer[length - 40..length - 20]);
+        let extern_id = PeerExternId::new(&buffer[length - 20..]);
+
         self.reader.consume();
 
-        Ok(peer_id)
+        Ok(HandshakeDetail {
+            info_hash,
+            extern_id,
+        })
     }
 
     pub fn get_message(&self) -> crate::supervisors::torrent::Result<MessagePeer> {

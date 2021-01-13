@@ -35,6 +35,11 @@ impl PeerReadBuffer {
         }
     }
 
+    pub fn set_buffer_capacity(&mut self, cap: usize) {
+        assert!(self.pos == 0);
+        self.buffer = vec![0; cap].into_boxed_slice();
+    }
+
     pub fn as_writer(&mut self) -> Pin<&mut dyn AsyncReadWrite> {
         self.reader.as_mut()
     }

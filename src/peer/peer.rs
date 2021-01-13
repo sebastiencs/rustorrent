@@ -123,6 +123,8 @@ impl PeerExternId {
 
 use std::ops::Deref;
 
+use super::stream::HandshakeDetail;
+
 impl Deref for PeerExternId {
     type Target = [u8; 20];
 
@@ -144,6 +146,17 @@ impl PartialEq for PeerExternId {
 }
 
 impl Eq for PeerExternId {}
+
+pub struct PeerInitialize {
+    pub torrent_id: TorrentId,
+    pub socket: SocketAddr,
+    pub pieces_infos: Arc<Pieces>,
+    pub supervisor: Sender<TorrentNotification>,
+    pub extern_id: Arc<PeerExternId>,
+    pub consumer: Consumer<TaskDownload>,
+    pub fs: Sender<FSMessage>,
+    pub buffers: Option<StreamBuffers>,
+}
 
 pub struct Peer {
     id: PeerId,
@@ -180,15 +193,7 @@ impl Peer {
     const MIN_REQUEST_IN_FLIGHT: usize = 10;
     const MAX_REQUEST_IN_FLIGHT_DEFAULT: usize = 250;
 
-    pub async fn new(
-        torrent_id: TorrentId,
-        socket: SocketAddr,
-        pieces_infos: Arc<Pieces>,
-        supervisor: Sender<TorrentNotification>,
-        extern_id: Arc<PeerExternId>,
-        consumer: Consumer<TaskDownload>,
-        fs: Sender<FSMessage>,
-    ) -> Result<Peer> {
+    pub async fn new(init: PeerInitialize) -> Result<Peer> {
         // TODO [2001:df0:a280:1001::3:1]:59632
         //      [2001:df0:a280:1001::3:1]:59632
 
@@ -204,12 +209,19 @@ impl Peer {
 
         // let socket = "[2001:df0:a280:1001::3:1]:59632".parse::<SocketAddr>().unwrap();
 
-        let stream = TcpStream::connect(&socket).await?;
-        let piece_length = pieces_infos.piece_length;
+        let piece_length = init.pieces_infos.piece_length;
 
-        let shared = Arc::new(Shared::new(socket));
+        let buffers = match init.buffers {
+            Some(buffers) => buffers,
+            None => {
+                let stream = TcpStream::connect(&init.socket).await?;
+                StreamBuffers::new(stream, piece_length, 32 * 1024)
+            }
+        };
 
-        info!("[{}] Connected", id, { addr: socket.to_string(), piece_length: piece_length });
+        let shared = Arc::new(Shared::new(init.socket));
+
+        info!("[{}] Connected", id, { addr: init.socket.to_string(), piece_length: piece_length });
 
         let (cmd_sender, cmd_recv) = bounded(1000);
 
@@ -217,16 +229,16 @@ impl Peer {
             id: PeerId(id),
             cmd_sender,
             cmd_recv,
-            torrent_id,
-            supervisor,
-            stream: StreamBuffers::new(stream, piece_length, 32 * 1024),
+            torrent_id: init.torrent_id,
+            supervisor: init.supervisor,
+            stream: buffers,
             choked: Choke::Choked,
-            tasks: consumer,
+            tasks: init.consumer,
             local_tasks: None,
-            fs,
-            pieces_infos,
+            fs: init.fs,
+            pieces_infos: init.pieces_infos,
             peer_detail: Default::default(),
-            extern_id,
+            extern_id: init.extern_id,
             shared,
             requested_by_peer: HashSet::default(),
             requested_by_us: HashSet::default(),
@@ -238,11 +250,15 @@ impl Peer {
         self.id
     }
 
-    pub async fn start(&mut self, producer: Producer<TaskDownload>) -> Result<()> {
+    pub async fn start(
+        &mut self,
+        producer: Producer<TaskDownload>,
+        handshake: Option<Box<HandshakeDetail>>,
+    ) -> Result<()> {
         // let (addr, cmds) = bounded(1000);
         // let mut cmds = Box::pin(cmds);
 
-        let extern_id = self.do_handshake().await?;
+        let extern_id = self.do_handshake(handshake).await?;
 
         send_to(
             &self.supervisor,
@@ -606,8 +622,8 @@ impl Peer {
             })
             .flatten();
 
-        error!("[{}] {:#?}", self.id, handshake);
-        error!("[{}] {:#?}", self.id, self.peer_detail);
+        // error!("[{}] {:#?}", self.id, handshake);
+        // error!("[{}] {:#?}", self.id, self.peer_detail);
     }
 
     fn read_extended_message(&self, id: u8, buffer: &[u8]) {
@@ -648,18 +664,24 @@ impl Peer {
         Ok(())
     }
 
-    async fn do_handshake(&mut self) -> Result<Arc<PeerExternId>> {
+    async fn do_handshake(
+        &mut self,
+        handshake: Option<Box<HandshakeDetail>>,
+    ) -> Result<Arc<PeerExternId>> {
         self.stream.write_message(MessagePeer::Handshake {
             info_hash: &self.pieces_infos.info_hash,
             extern_id: &self.extern_id,
         })?;
 
-        let peer_id = self.stream.read_handshake().await?;
+        let handshake_detail = match handshake {
+            Some(handshake) => *handshake,
+            _ => self.stream.read_handshake().await?,
+        };
 
         // TODO: Check the info hash and send to other TorrentSupervisor if necessary
         info!("[{}] Handshake done", self.id);
 
-        Ok(Arc::new(peer_id))
+        Ok(Arc::new(handshake_detail.extern_id))
     }
 }
 
