@@ -18,10 +18,21 @@ use crate::{
 };
 
 pub mod standard_fs;
+#[cfg(target_os = "linux")]
 pub mod uring_fs;
 
 pub trait FileSystem {
     fn init(runtime: Arc<Runtime>) -> Option<Sender<FSMessage>>;
+}
+
+#[cfg(not(target_os = "linux"))]
+pub mod uring_fs {
+    pub struct UringFS;
+    impl super::FileSystem for UringFS {
+        fn init(_: super::Arc<super::Runtime>) -> Option<super::Sender<super::FSMessage>> {
+            None
+        }
+    }
 }
 
 pub enum FSMessage {

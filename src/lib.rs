@@ -11,6 +11,7 @@ pub mod cache_line;
 pub mod errors;
 pub mod extensions;
 pub mod fs;
+#[cfg(target_os = "linux")]
 pub mod io_uring;
 pub mod listener;
 pub mod logger;
@@ -26,6 +27,7 @@ pub mod supervisors;
 pub mod time;
 pub mod udp_ext;
 pub mod utils;
+#[cfg(target_os = "linux")]
 pub mod utp;
 
 // pub mod memory_pool;
