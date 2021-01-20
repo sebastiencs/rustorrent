@@ -126,6 +126,7 @@ mod tests {
     use super::{Listener, ListenerMessage};
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Miri doesn't support epoll
     fn listener() {
         let rt = Arc::new(Runtime::new().unwrap());
         let runtime = rt.clone();
