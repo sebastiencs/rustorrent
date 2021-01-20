@@ -3,7 +3,7 @@ use std::{net::SocketAddr, sync::Arc};
 use async_channel::{Receiver, Sender};
 use futures::{future, StreamExt};
 use hashbrown::HashMap;
-use kv_log_macro::error;
+// use kv_log_macro::error;
 use tokio::{
     net::{TcpListener, TcpStream},
     runtime::Runtime,
@@ -15,7 +15,7 @@ use crate::{
     utils::send_to,
 };
 
-#[derive(Debug)]
+// #[derive(Debug)]
 pub enum ListenerMessage {
     AddTorrent {
         sender: Sender<TorrentNotification>,
@@ -61,11 +61,11 @@ impl Listener {
         loop {
             tokio::select! {
                 Ok((stream, socket)) = self.tcp.accept() => {
-                    error!("New connection from {:?}", socket);
+                    // error!("New connection from {:?}", socket);
                     self.handle_new_peer(stream, socket).await.ok();
                 }
                 Ok((stream, socket)) = self.tcp6.accept() => {
-                    error!("New connection from {:?}", socket);
+                    // error!("New connection from {:?}", socket);
                     self.handle_new_peer(stream, socket).await.ok();
                 }
                 msg = recv.next() => {
@@ -83,10 +83,9 @@ impl Listener {
     async fn handle_new_peer(&mut self, stream: TcpStream, socket: SocketAddr) -> Result<()> {
         let mut buffers = StreamBuffers::new(stream, 512, 0);
 
-        let handshake = buffers.read_handshake().await?;
+        let handshake = buffers.read_handshake().await.unwrap();
 
         if let Some(torrent) = self.torrents.get(&handshake.info_hash) {
-            error!("Found torrent {:?}", handshake.info_hash);
             send_to(
                 torrent,
                 TorrentNotification::PeerAccepted {
@@ -109,5 +108,127 @@ impl Listener {
                 self.torrents.remove(&info_hash);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{iter::repeat_with, sync::Arc, time::Duration};
+
+    use async_channel::bounded;
+    use tokio::runtime::Runtime;
+
+    use crate::{
+        peer::{message::MessagePeer, peer::PeerExternId, stream::StreamBuffers},
+        supervisors::torrent::TorrentNotification,
+    };
+
+    use super::{Listener, ListenerMessage};
+
+    #[test]
+    fn listener() {
+        let rt = Arc::new(Runtime::new().unwrap());
+        let runtime = rt.clone();
+
+        let hash: Vec<u8> = repeat_with(|| fastrand::u8(..)).take(20).collect();
+        let hash_arc = hash.clone();
+
+        println!("OK");
+
+        rt.block_on(async move {
+            let listener = Listener::new(runtime);
+
+            let (sender, recv) = bounded(2);
+
+            listener
+                .send(ListenerMessage::AddTorrent {
+                    sender,
+                    info_hash: hash_arc.into_boxed_slice().into(),
+                })
+                .await
+                .unwrap();
+
+            let tcp = tokio::net::TcpStream::connect("localhost:6801")
+                .await
+                .unwrap();
+            let mut stream = StreamBuffers::new(tcp, 1024, 1024);
+
+            let id: Vec<u8> = repeat_with(|| fastrand::u8(..)).take(20).collect();
+
+            let extern_id = PeerExternId::new(&id);
+
+            stream
+                .write_message(MessagePeer::Handshake {
+                    info_hash: &hash,
+                    extern_id: &extern_id,
+                })
+                .unwrap();
+
+            tokio::time::sleep(Duration::from_millis(10)).await;
+
+            match recv.try_recv().unwrap() {
+                TorrentNotification::PeerAccepted { handshake, .. } => {
+                    assert_eq!(&*handshake.info_hash, hash.as_slice());
+                    assert_eq!(&handshake.extern_id, &extern_id);
+                }
+                _ => panic!(),
+            }
+
+            let tcp = tokio::net::TcpStream::connect("localhost:6801")
+                .await
+                .unwrap();
+            let mut stream = StreamBuffers::new(tcp, 1024, 1024);
+
+            let id: Vec<u8> = repeat_with(|| fastrand::u8(..)).take(20).collect();
+
+            let extern_id = PeerExternId::new(&id);
+
+            stream
+                .write_message(MessagePeer::Handshake {
+                    info_hash: &hash,
+                    extern_id: &extern_id,
+                })
+                .unwrap();
+
+            tokio::time::sleep(Duration::from_millis(10)).await;
+
+            match recv.try_recv().unwrap() {
+                TorrentNotification::PeerAccepted { handshake, .. } => {
+                    assert_eq!(&*handshake.info_hash, hash.as_slice());
+                    assert_eq!(&handshake.extern_id, &extern_id);
+                }
+                _ => panic!(),
+            }
+
+            let tcp = tokio::net::TcpStream::connect("[::1]:6801").await.unwrap();
+            let mut stream = StreamBuffers::new(tcp, 1024, 1024);
+
+            let id: Vec<u8> = repeat_with(|| fastrand::u8(..)).take(20).collect();
+
+            let extern_id = PeerExternId::new(&id);
+
+            stream
+                .write_message(MessagePeer::Handshake {
+                    info_hash: &hash,
+                    extern_id: &extern_id,
+                })
+                .unwrap();
+
+            tokio::time::sleep(Duration::from_millis(10)).await;
+
+            match recv.try_recv().unwrap() {
+                TorrentNotification::PeerAccepted { handshake, .. } => {
+                    assert_eq!(&*handshake.info_hash, hash.as_slice());
+                    assert_eq!(&handshake.extern_id, &extern_id);
+                }
+                _ => panic!(),
+            }
+
+            let msg = ListenerMessage::RemoveTorrent {
+                info_hash: hash.into_boxed_slice().into(),
+            };
+
+            listener.send(msg).await.unwrap();
+        });
     }
 }
