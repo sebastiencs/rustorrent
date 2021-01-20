@@ -163,9 +163,8 @@ impl AckedBitfield {
     #[cfg(test)]
     fn ack_numbers(&self) -> Vec<usize> {
         let first = self.first.unwrap().0 as usize;
-        let mut vec = Vec::new();
+        let mut vec = vec![first];
 
-        vec.push(first);
         for (index, byte) in self.bitfield[..5].iter().enumerate() {
             for bit in 0..8 {
                 if byte & (1 << bit) != 0 {

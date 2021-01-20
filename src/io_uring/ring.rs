@@ -690,8 +690,7 @@ mod tests {
             return;
         }
 
-        let mut files = Vec::new();
-        files.push(fd.as_raw_fd());
+        let files = vec![fd.as_raw_fd()];
 
         iou.push_entry(Operation::RegisterFiles {
             id: 101.into(),
