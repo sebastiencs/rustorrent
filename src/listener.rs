@@ -27,8 +27,8 @@ pub enum ListenerMessage {
 }
 
 pub struct Listener {
-    tcp: TcpListener,
-    tcp6: TcpListener,
+    tcp: Option<TcpListener>,
+    tcp6: Option<TcpListener>,
     torrents: HashMap<Arc<[u8]>, Sender<TorrentNotification>>,
 }
 
@@ -44,8 +44,8 @@ impl Listener {
             let (tcp, tcp6) = future::join(tcp, tcp6).await;
 
             Self {
-                tcp: tcp.unwrap(),
-                tcp6: tcp6.unwrap(),
+                tcp: tcp.ok(),
+                tcp6: tcp6.ok(),
                 torrents: HashMap::default(),
             }
             .start(recv)
@@ -58,14 +58,17 @@ impl Listener {
     pub async fn start(mut self, recv: Receiver<ListenerMessage>) {
         let mut recv = recv.fuse();
 
+        let accept_v4 = self.tcp.is_some();
+        let accept_v6 = self.tcp6.is_some();
+
         loop {
             tokio::select! {
-                Ok((stream, socket)) = self.tcp.accept() => {
-                    // error!("New connection from {:?}", socket);
+                Ok((stream, socket)) = self.tcp.as_ref().unwrap().accept(), if accept_v4 => {
+                    // info!("New connection from {:?}", socket);
                     self.handle_new_peer(stream, socket).await.ok();
                 }
-                Ok((stream, socket)) = self.tcp6.accept() => {
-                    // error!("New connection from {:?}", socket);
+                Ok((stream, socket)) = self.tcp6.as_ref().unwrap().accept(), if accept_v6 => {
+                    // info!("New connection from {:?}", socket);
                     self.handle_new_peer(stream, socket).await.ok();
                 }
                 msg = recv.next() => {
@@ -134,8 +137,6 @@ mod tests {
         let hash: Vec<u8> = repeat_with(|| fastrand::u8(..)).take(20).collect();
         let hash_arc = hash.clone();
 
-        println!("OK");
-
         rt.block_on(async move {
             let listener = Listener::new(runtime);
 
@@ -149,7 +150,7 @@ mod tests {
                 .await
                 .unwrap();
 
-            let tcp = tokio::net::TcpStream::connect("localhost:6801")
+            let tcp = tokio::net::TcpStream::connect("127.0.0.1:6801")
                 .await
                 .unwrap();
             let mut stream = StreamBuffers::new(tcp, 1024, 1024);
