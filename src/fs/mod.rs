@@ -14,7 +14,7 @@ use crate::{
     peer::peer::PeerCommand,
     piece_picker::{BlockIndex, PieceIndex},
     pieces::Pieces,
-    supervisors::torrent::TorrentId,
+    torrent::TorrentId,
 };
 
 pub mod standard_fs;
@@ -170,7 +170,7 @@ mod tests {
         metadata::{InfoFile::Multiple, MetaFile, MetaInfo, MetaTorrent, Torrent},
         peer::peer::PeerCommand,
         pieces::Pieces,
-        supervisors::torrent::TorrentId,
+        torrent::TorrentId,
     };
 
     use super::{standard_fs::StandardFS, uring_fs::UringFS, FSMessage, FileSystem};

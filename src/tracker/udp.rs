@@ -8,8 +8,7 @@ use std::{
 use async_trait::async_trait;
 use std::net::SocketAddr;
 
-use super::{TrackerConnection, TrackerData};
-use crate::{errors::TorrentError, peer::peer::PeerExternId, supervisors::torrent::Result};
+use crate::{errors::TorrentError, peer::peer::PeerExternId, torrent::Result};
 
 #[derive(Debug)]
 pub enum Action {
@@ -282,6 +281,8 @@ use tokio::net::UdpSocket;
 
 use crate::udp_ext::WithTimeout;
 use tokio::io::ErrorKind;
+
+use super::{connection::TrackerConnection, supervisor::TrackerData};
 
 impl UdpConnection {
     #[allow(clippy::new_ret_no_self)]

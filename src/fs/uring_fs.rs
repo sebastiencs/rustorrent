@@ -10,7 +10,7 @@ use crate::{
     io_uring::file::FilesUring,
     peer::peer::PeerCommand,
     piece_picker::{BlockIndex, PieceIndex},
-    supervisors::torrent::TorrentId,
+    torrent::TorrentId,
     utils::{Map, NoHash},
 };
 

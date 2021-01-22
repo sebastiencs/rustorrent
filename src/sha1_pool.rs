@@ -8,7 +8,7 @@ use std::{ptr::read_unaligned, sync::Arc};
 use crate::{
     fs::FSMessage,
     piece_picker::PieceIndex,
-    supervisors::torrent::{TorrentId, TorrentNotification},
+    torrent::{TorrentId, TorrentNotification},
 };
 
 pub enum Sha1Task {
@@ -28,21 +28,16 @@ use std::thread;
 #[allow(clippy::cast_ptr_alignment)]
 #[inline(never)]
 pub fn compare_20_bytes(sum1: &[u8], sum2: &[u8]) -> bool {
-    if sum1.len() == 20 && sum2.len() == 20 {
-        unsafe {
-            let first1 = read_unaligned(sum1.as_ptr().offset(0) as *const u64);
-            let first2 = read_unaligned(sum2.as_ptr().offset(0) as *const u64);
+    assert!(sum1.len() == 20 && sum2.len() == 20, "Sums have 20 bytes");
 
-            let second1 = read_unaligned(sum1.as_ptr().offset(8) as *const u64);
-            let second2 = read_unaligned(sum2.as_ptr().offset(8) as *const u64);
+    unsafe {
+        let oword1 = read_unaligned(sum1.as_ptr().offset(0) as *const u128);
+        let oword2 = read_unaligned(sum2.as_ptr().offset(0) as *const u128);
 
-            let third1 = read_unaligned(sum1.as_ptr().offset(16) as *const u32);
-            let third2 = read_unaligned(sum2.as_ptr().offset(16) as *const u32);
+        let dword1 = read_unaligned(sum1.as_ptr().offset(16) as *const u32);
+        let dword2 = read_unaligned(sum2.as_ptr().offset(16) as *const u32);
 
-            first1 == first2 && second1 == second2 && third1 == third2
-        }
-    } else {
-        panic!("Sums have 20 bytes")
+        oword1 == oword2 && dword1 == dword2
     }
 }
 

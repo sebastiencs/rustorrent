@@ -7,7 +7,7 @@ use crate::{
     extensions::{ExtendedHandshake, ExtendedMessage},
     peer::peer::PeerExternId,
     piece_picker::{BlockIndex, PieceIndex},
-    supervisors::torrent::Result,
+    torrent::Result,
 };
 
 #[derive(Debug)]

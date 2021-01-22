@@ -10,8 +10,7 @@ use url::Url;
 
 use std::sync::Arc;
 
-use super::{TrackerConnection, TrackerData};
-use crate::{errors::TorrentError, supervisors::torrent::Result};
+use crate::{errors::TorrentError, torrent::Result};
 
 async fn peers_from_dict(peers: &[Peer], addrs: &mut Vec<SocketAddr>) {
     for peer in peers {
@@ -250,6 +249,8 @@ async fn send<T: DeserializeOwned, Q: ToQuery>(
 
 use memchr::memchr;
 use tokio::io::BufReader;
+
+use super::{connection::TrackerConnection, supervisor::TrackerData};
 
 async fn read_response(stream: TcpStream) -> Result<Vec<u8>> {
     let mut reader = BufReader::with_capacity(4 * 1024, stream);

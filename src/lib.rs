@@ -4,7 +4,6 @@
     // clippy::single_match,
 )]
 
-pub mod actors;
 pub mod bencode;
 pub mod bitfield;
 pub mod cache_line;
@@ -22,9 +21,11 @@ pub mod piece_picker;
 pub mod pieces;
 pub mod session;
 pub mod sha1;
+pub mod sha1_pool;
 pub mod spsc;
-pub mod supervisors;
 pub mod time;
+pub mod torrent;
+pub mod tracker;
 pub mod udp_ext;
 pub mod utils;
 #[cfg(target_os = "linux")]

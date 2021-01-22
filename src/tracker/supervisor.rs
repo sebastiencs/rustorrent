@@ -7,8 +7,7 @@ use std::{
 };
 
 use crate::{
-    actors::tracker::Tracker, errors::TorrentError, metadata::Torrent, peer::peer::PeerExternId,
-    supervisors::torrent::TorrentNotification,
+    errors::TorrentError, metadata::Torrent, peer::peer::PeerExternId, torrent::TorrentNotification,
 };
 
 #[derive(Debug)]
@@ -55,6 +54,8 @@ use crate::{
     metadata::{TrackerUrl, UrlHash},
     utils::Map,
 };
+
+use super::connection::Tracker;
 
 #[derive(Debug)]
 pub struct TrackerSupervisor {

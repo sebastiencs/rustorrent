@@ -9,7 +9,7 @@ use crate::{
     fs::{FSMessage, TorrentCache},
     peer::peer::PeerCommand,
     piece_picker::{BlockIndex, PieceIndex},
-    supervisors::torrent::TorrentId,
+    torrent::TorrentId,
     utils::Map,
 };
 

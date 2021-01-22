@@ -1,6 +1,3 @@
-pub mod http;
-mod udp;
-
 use async_channel::Sender;
 use async_trait::async_trait;
 use kv_log_macro::{error, info, warn};
@@ -14,10 +11,8 @@ use std::{
 use crate::{
     errors::TorrentError,
     metadata::UrlHash,
-    supervisors::{
-        torrent::{Result, TorrentNotification},
-        tracker::{TrackerData, TrackerStatus},
-    },
+    torrent::{Result, TorrentNotification},
+    tracker::supervisor::{TrackerData, TrackerStatus},
 };
 
 #[async_trait]
@@ -137,8 +132,8 @@ impl Tracker {
         addr: Vec<Arc<SocketAddr>>,
     ) -> Box<dyn TrackerConnection + Send + Sync> {
         match data.url.scheme() {
-            "http" => http::HttpConnection::new(data, addr),
-            "udp" => udp::UdpConnection::new(data, addr),
+            "http" => super::http::HttpConnection::new(data, addr),
+            "udp" => super::udp::UdpConnection::new(data, addr),
             scheme => {
                 panic!("Unhandled scheme {:?}", scheme);
             }

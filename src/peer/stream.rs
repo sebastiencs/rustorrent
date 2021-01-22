@@ -109,7 +109,7 @@ impl StreamBuffers {
         })
     }
 
-    pub fn get_message(&self) -> crate::supervisors::torrent::Result<MessagePeer> {
+    pub fn get_message(&self) -> crate::torrent::Result<MessagePeer> {
         MessagePeer::try_from(self.reader.buffer())
     }
 

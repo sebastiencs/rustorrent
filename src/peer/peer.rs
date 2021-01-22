@@ -21,7 +21,7 @@ use crate::{
     piece_picker::{BlockIndex, PieceIndex},
     pieces::{BlockToDownload, IterTaskDownload, Pieces, TaskDownload},
     spsc::{Consumer, Producer},
-    supervisors::torrent::{
+    torrent::{
         NewPeer, Result, Shared, TorrentId,
         TorrentNotification::{self, *},
     },
@@ -141,7 +141,7 @@ impl std::fmt::Debug for PeerExternId {
 
 impl PartialEq for PeerExternId {
     fn eq(&self, other: &PeerExternId) -> bool {
-        crate::actors::sha1::compare_20_bytes(&self.0, &other.0)
+        crate::sha1_pool::compare_20_bytes(&self.0, &other.0)
     }
 }
 

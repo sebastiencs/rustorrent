@@ -14,7 +14,6 @@ use kv_log_macro::{debug, error, info, warn};
 use std::net::SocketAddr;
 
 use crate::{
-    actors::sha1::Sha1Task,
     bitfield::{BitField, BitFieldUpdate},
     errors::TorrentError,
     fs::FSMessage,
@@ -27,8 +26,9 @@ use crate::{
     piece_collector::{Block, PieceCollector},
     piece_picker::{PieceIndex, PiecePicker},
     pieces::{Pieces, TaskDownload},
+    sha1_pool::Sha1Task,
     spsc::{self, Producer},
-    supervisors::tracker::TrackerSupervisor,
+    tracker::supervisor::TrackerSupervisor,
     utils::{send_to, Map},
 };
 

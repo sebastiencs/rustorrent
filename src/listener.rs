@@ -11,7 +11,7 @@ use tokio::{
 
 use crate::{
     peer::stream::StreamBuffers,
-    supervisors::torrent::{Result, TorrentNotification},
+    torrent::{Result, TorrentNotification},
     utils::send_to,
 };
 
@@ -123,7 +123,7 @@ mod tests {
 
     use crate::{
         peer::{message::MessagePeer, peer::PeerExternId, stream::StreamBuffers},
-        supervisors::torrent::TorrentNotification,
+        torrent::TorrentNotification,
     };
 
     use super::{Listener, ListenerMessage};
@@ -149,6 +149,8 @@ mod tests {
                 })
                 .await
                 .unwrap();
+
+            tokio::time::sleep(Duration::from_millis(5)).await;
 
             let tcp = tokio::net::TcpStream::connect("127.0.0.1:6801")
                 .await
