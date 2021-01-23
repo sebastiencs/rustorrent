@@ -1,9 +1,10 @@
 use async_trait::async_trait;
+use futures::Future;
 use kv_log_macro::{debug, info};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::net::SocketAddr;
 use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt},
+    io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::TcpStream,
 };
 use url::Url;
@@ -22,7 +23,7 @@ async fn peers_from_dict(peers: &[Peer], addrs: &mut Vec<SocketAddr>) {
     }
 }
 
-async fn get_peers_addrs(response: &AnnounceResponse) -> Vec<SocketAddr> {
+pub(super) async fn get_peers_addrs(response: &AnnounceResponse) -> Vec<SocketAddr> {
     let mut addrs = Vec::new();
 
     match response.peers6 {
@@ -163,13 +164,14 @@ pub trait ToQuery {
 impl<'a> ToQuery for AnnounceQuery<'a> {
     fn to_query(&self) -> String {
         format!(
-            "info_hash={}&peer_id={}&port={}&uploaded={}&downloaded={}&event={}&compact={}",
+            "info_hash={}&peer_id={}&port={}&uploaded={}&downloaded={}&event={}&left={}&compact={}",
             self.info_hash.escape(),
             self.peer_id.escape(),
             self.port,
             self.uploaded,
             self.downloaded,
             self.event,
+            0, // left
             self.compact,
         )
     }
@@ -199,10 +201,9 @@ pub fn escape_str<T: AsRef<[u8]>>(s: T) -> String {
     String::from_utf8(result).unwrap()
 }
 
-const DEFAULT_HEADERS: &str =
-    "User-Agent: rustorrent/0.1\r\nAccept-Encoding: gzip\r\nConnection: close";
+const DEFAULT_HEADERS: &str = "User-Agent: rustorrent/0.1\r\nConnection: close";
 
-fn format_host(url: &Url) -> String {
+pub(super) fn format_host(url: &Url) -> String {
     if let Some(port) = url.port() {
         format!("Host: {}:{}", url.host_str().unwrap(), port)
     } else {
@@ -210,7 +211,7 @@ fn format_host(url: &Url) -> String {
     }
 }
 
-fn format_request<T: ToQuery>(url: &Url, query: &T) -> String {
+pub(super) fn format_request<T: ToQuery>(url: &Url, query: &T) -> String {
     format!(
         "GET {}?{} HTTP/1.1\r\n{}\r\n{}\r\n\r\n",
         url.path(),
@@ -220,17 +221,15 @@ fn format_request<T: ToQuery>(url: &Url, query: &T) -> String {
     )
 }
 
-use std::time::Duration;
-//use std::convert::TryInto;
 use crate::utils::ConnectTimeout;
+use std::time::Duration;
 
-async fn send<T: DeserializeOwned, Q: ToQuery>(
-    url: &Url,
-    query: &Q,
-    addr: &SocketAddr,
-) -> Result<T> {
-    let mut stream = TcpStream::connect_timeout(addr, Duration::from_secs(5)).await?;
-
+pub(super) async fn send_recv<T, S, Q>(mut stream: S, url: &Url, query: &Q) -> Result<T>
+where
+    T: DeserializeOwned,
+    S: AsyncRead + AsyncWrite + Unpin,
+    Q: ToQuery,
+{
     let req = format_request(url, query);
 
     debug!("[http tracker] ", { request: req });
@@ -252,7 +251,10 @@ use tokio::io::BufReader;
 
 use super::{connection::TrackerConnection, supervisor::TrackerData};
 
-async fn read_response(stream: TcpStream) -> Result<Vec<u8>> {
+pub(super) async fn read_response<T>(stream: T) -> Result<Vec<u8>>
+where
+    T: AsyncRead + AsyncWrite + Unpin,
+{
     let mut reader = BufReader::with_capacity(4 * 1024, stream);
 
     let mut content_length = None;
@@ -311,7 +313,37 @@ where
         }
     );
 
-    send(url, query, addr).await
+    let stream = TcpStream::connect_timeout(addr, Duration::from_secs(5)).await?;
+
+    send_recv(stream, url, query).await
+}
+
+pub(super) async fn announce_http<'a, 'b, F, O>(
+    addrs: &'a [Arc<SocketAddr>],
+    connected_addr: &'b mut usize,
+    fun_get: F,
+) -> Result<Vec<SocketAddr>>
+where
+    F: Fn(&'a SocketAddr) -> O,
+    O: Future<Output = Result<AnnounceResponse>> + Sized,
+{
+    let mut last_err = None;
+    for (index, addr) in addrs.iter().enumerate() {
+        let response = match fun_get(addr).await {
+            Ok(resp) => resp,
+            Err(e) => {
+                last_err = Some(e);
+                continue;
+            }
+        };
+        *connected_addr = index;
+        let peers = get_peers_addrs(&response).await;
+        return Ok(peers);
+    }
+    match last_err {
+        Some(e) => Err(e),
+        _ => Err(TorrentError::Unresponsive),
+    }
 }
 
 pub struct HttpConnection {
@@ -323,23 +355,11 @@ pub struct HttpConnection {
 impl TrackerConnection for HttpConnection {
     async fn announce(&mut self, connected_addr: &mut usize) -> Result<Vec<SocketAddr>> {
         let query = AnnounceQuery::from(self.data.as_ref());
-        let mut last_err = None;
-        for (index, addr) in self.addr.iter().enumerate() {
-            let response = match http_get(&self.data.url, &query, addr).await {
-                Ok(resp) => resp,
-                Err(e) => {
-                    last_err = Some(e);
-                    continue;
-                }
-            };
-            *connected_addr = index;
-            let peers = get_peers_addrs(&response).await;
-            return Ok(peers);
-        }
-        match last_err {
-            Some(e) => Err(e),
-            _ => Err(TorrentError::Unresponsive),
-        }
+
+        announce_http(&self.addr, connected_addr, |addr| {
+            http_get(&self.data.url, &query, addr)
+        })
+        .await
     }
 
     async fn scrape(&mut self) -> Result<()> {

@@ -134,6 +134,7 @@ impl Tracker {
         match data.url.scheme() {
             "http" => super::http::HttpConnection::new(data, addr),
             "udp" => super::udp::UdpConnection::new(data, addr),
+            "https" => super::https::HttpsConnection::new(data, addr),
             scheme => {
                 panic!("Unhandled scheme {:?}", scheme);
             }

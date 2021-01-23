@@ -89,6 +89,9 @@ fixed = { version = "1", default-features = false }
 crossbeam-epoch = { version = "0.9", default-features = false }
 
 tokio = { version = "1", features = ["full"] }
+tokio-rustls = "0.22"
+webpki-roots = "0.21"
+webpki = "0.21"
 
 # tokio = { version = "0.3", features = ["full"] }
 # async-channel = { path = "/home/sebastien/github/async-channel" }
