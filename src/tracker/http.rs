@@ -224,17 +224,13 @@ pub(super) fn format_request<T: ToQuery>(url: &Url, query: &T) -> String {
 use crate::utils::ConnectTimeout;
 use std::time::Duration;
 
-pub(super) async fn send_recv<T, S, Q>(mut stream: S, url: &Url, query: &Q) -> Result<T>
+pub(super) async fn send_recv<T, S, R>(mut stream: S, req: R) -> Result<T>
 where
     T: DeserializeOwned,
     S: AsyncRead + AsyncWrite + Unpin,
-    Q: ToQuery,
+    R: AsRef<[u8]>,
 {
-    let req = format_request(url, query);
-
-    debug!("[http tracker] ", { request: req });
-
-    stream.write(req.as_bytes()).await?;
+    stream.write(req.as_ref()).await?;
     stream.flush().await?;
 
     let response = read_response(stream).await?;
@@ -314,8 +310,11 @@ where
     );
 
     let stream = TcpStream::connect_timeout(addr, Duration::from_secs(5)).await?;
+    let req = format_request(url, query);
 
-    send_recv(stream, url, query).await
+    debug!("[http tracker] ", { request: req });
+
+    send_recv(stream, &req).await
 }
 
 pub(super) async fn announce_http<'a, 'b, F, O>(

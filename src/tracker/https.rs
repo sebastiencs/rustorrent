@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use kv_log_macro::info;
+use kv_log_macro::{debug, info};
 use serde::de::DeserializeOwned;
 use std::{net::SocketAddr, time::Duration};
 use tokio::net::TcpStream;
@@ -14,7 +14,7 @@ use webpki::DNSNameRef;
 
 use super::{
     connection::TrackerConnection,
-    http::{send_recv, AnnounceQuery, ToQuery},
+    http::{format_request, send_recv, AnnounceQuery, ToQuery},
     supervisor::TrackerData,
 };
 
@@ -40,7 +40,11 @@ where
     let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).await?;
     let stream = tls.connect(dnsname, stream).await?;
 
-    send_recv(stream, url, query).await
+    let req = format_request(url, query);
+
+    debug!("[https tracker] ", { request: req });
+
+    send_recv(stream, &req).await
 }
 
 pub struct HttpsConnection {
