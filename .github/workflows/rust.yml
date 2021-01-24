@@ -240,9 +240,14 @@ jobs:
           # 32 bits pointers
           - i686-unknown-linux-gnu
           # For big endian
-          - mips64-unknown-linux-gnuabi64
+          # - mips64-unknown-linux-gnuabi64
     steps:
       - uses: actions/checkout@v2
+
+      - name: Install 32 bits libs
+        run: |
+            sudo apt-get update
+            sudo apt install -y gcc-multilib
 
       - name: Install toolchain
         uses: actions-rs/toolchain@v1
