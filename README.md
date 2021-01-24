@@ -52,5 +52,5 @@ It is in active development and is not usable yet. The API might change any time
 
 As noted, the library is not usable yet, though you might try it with:
 ```
-$ cargo run some_file.torrent
+$ cargo run scripts/Fedora-Workstation-Live-x86_64-33.torrent
 ```
